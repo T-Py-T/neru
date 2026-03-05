@@ -184,14 +184,19 @@ func (m *Manager) HandleInput(key string) (image.Point, bool, bool) {
 		zap.Int("center_x", center.X),
 		zap.Int("center_y", center.Y))
 
+	// If complete, call the completion callback and skip the overlay update
+	// because SelectCell returns early without changing bounds/depth.
+	if isComplete {
+		if m.onComplete != nil {
+			m.onComplete(center)
+		}
+
+		return center, isComplete, false
+	}
+
 	// Trigger update for visual feedback
 	if m.onUpdate != nil {
 		m.onUpdate()
-	}
-
-	// If complete, call the completion callback
-	if isComplete && m.onComplete != nil {
-		m.onComplete(center)
 	}
 
 	return center, isComplete, false
@@ -218,7 +223,7 @@ func (m *Manager) CurrentDepth() int {
 	return m.grid.CurrentDepth()
 }
 
-// IsComplete returns true if the minimum size has been reached.
+// IsComplete returns true if the grid cannot be divided further (min size or max depth).
 func (m *Manager) IsComplete() bool {
 	return m.grid.IsComplete()
 }
