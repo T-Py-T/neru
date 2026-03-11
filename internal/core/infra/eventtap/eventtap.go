@@ -109,6 +109,81 @@ func (et *EventTap) SetHotkeys(hotkeys []string) {
 	et.logger.Debug("Event tap hotkeys set")
 }
 
+// SetModifierPassthrough configures whether unbound modifier shortcuts should
+// pass through to macOS and which shortcuts remain blacklisted.
+func (et *EventTap) SetModifierPassthrough(enabled bool, blacklist []string) {
+	et.logger.Debug(
+		"Setting event tap modifier passthrough",
+		zap.Bool("enabled", enabled),
+		zap.Int("blacklist_count", len(blacklist)),
+	)
+
+	if et.handle == nil {
+		et.logger.Warn("Cannot set modifier passthrough on nil event tap")
+
+		return
+	}
+
+	cKeys := make([]*C.char, len(blacklist))
+	for index, key := range blacklist {
+		if key != "" {
+			cKeys[index] = C.CString(key)
+
+			defer C.free(unsafe.Pointer(cKeys[index])) //nolint:nlreturn
+
+			et.logger.Debug("Adding modifier passthrough blacklist key", zap.String("key", key))
+		} else {
+			cKeys[index] = nil
+		}
+	}
+
+	cKeysPtr := (**C.char)(nil)
+	if len(cKeys) > 0 {
+		cKeysPtr = &cKeys[0]
+	}
+
+	enabledValue := 0
+	if enabled {
+		enabledValue = 1
+	}
+
+	C.setEventTapModifierPassthrough(et.handle, C.int(enabledValue), cKeysPtr, C.int(len(cKeys)))
+	et.logger.Debug("Event tap modifier passthrough set")
+}
+
+// SetInterceptedModifierKeys configures modifier shortcuts that the active mode
+// still wants Neru to consume.
+func (et *EventTap) SetInterceptedModifierKeys(keys []string) {
+	et.logger.Debug("Setting intercepted modifier keys", zap.Int("count", len(keys)))
+
+	if et.handle == nil {
+		et.logger.Warn("Cannot set intercepted modifier keys on nil event tap")
+
+		return
+	}
+
+	cKeys := make([]*C.char, len(keys))
+	for index, key := range keys {
+		if key != "" {
+			cKeys[index] = C.CString(key)
+
+			defer C.free(unsafe.Pointer(cKeys[index])) //nolint:nlreturn
+
+			et.logger.Debug("Adding intercepted modifier key", zap.String("key", key))
+		} else {
+			cKeys[index] = nil
+		}
+	}
+
+	cKeysPtr := (**C.char)(nil)
+	if len(cKeys) > 0 {
+		cKeysPtr = &cKeys[0]
+	}
+
+	C.setEventTapInterceptedModifierKeys(et.handle, cKeysPtr, C.int(len(cKeys)))
+	et.logger.Debug("Intercepted modifier keys set")
+}
+
 // SetKeyboardLayout configures the reference keyboard layout used by key translation.
 // Returns false when an explicit layout ID is provided but cannot be resolved.
 func (et *EventTap) SetKeyboardLayout(layoutID string) bool {

@@ -20,10 +20,6 @@ func (h *Handler) StartInteractiveScroll() {
 
 	h.exitModeLocked()
 
-	if h.enableEventTap != nil {
-		h.enableEventTap()
-	}
-
 	h.scroll.Context.SetIsActive(true)
 
 	h.overlayManager.ResizeToActiveScreen()

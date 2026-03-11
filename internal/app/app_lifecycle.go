@@ -35,3 +35,19 @@ func (a *App) disableEventTap() {
 		}
 	}
 }
+
+// setEventTapModifierPassthrough configures whether unbound modifier shortcuts
+// should pass through to macOS and which ones remain blacklisted.
+func (a *App) setEventTapModifierPassthrough(enabled bool, blacklist []string) {
+	if a.eventTap != nil {
+		a.eventTap.SetModifierPassthrough(enabled, blacklist)
+	}
+}
+
+// setEventTapInterceptedModifierKeys updates the modifier shortcuts the active
+// mode still wants Neru to consume.
+func (a *App) setEventTapInterceptedModifierKeys(keys []string) {
+	if a.eventTap != nil {
+		a.eventTap.SetInterceptedModifierKeys(keys)
+	}
+}

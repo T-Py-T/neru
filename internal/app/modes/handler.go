@@ -71,10 +71,12 @@ type Handler struct {
 	// Screen bounds for coordinate conversion (grid and hints)
 	screenBounds image.Rectangle
 
-	enableEventTap    func()
-	disableEventTap   func()
-	refreshHotkeys    func()
-	refreshHintsTimer *time.Timer
+	enableEventTap             func()
+	disableEventTap            func()
+	setModifierPassthrough     func(enabled bool, blacklist []string)
+	setInterceptedModifierKeys func(keys []string)
+	refreshHotkeys             func()
+	refreshHintsTimer          *time.Timer
 
 	// Scroll mode polling
 	scrollTicker *time.Ticker
@@ -101,6 +103,8 @@ func NewHandler(
 	recursiveGridComponent *components.RecursiveGridComponent,
 	enableEventTap func(),
 	disableEventTap func(),
+	setModifierPassthrough func(enabled bool, blacklist []string),
+	setInterceptedModifierKeys func(keys []string),
 	refreshHotkeys func(),
 	themeProvider configpkg.ThemeProvider,
 ) *Handler {
@@ -108,26 +112,28 @@ func NewHandler(
 	screenBounds := bridge.ActiveScreenBounds()
 
 	handler := &Handler{
-		config:               config,
-		logger:               logger,
-		appState:             appState,
-		cursorState:          cursorState,
-		overlayManager:       overlayManager,
-		renderer:             renderer,
-		hintService:          hintService,
-		gridService:          gridService,
-		actionService:        actionService,
-		scrollService:        scrollService,
-		modeIndicatorService: modeIndicatorService,
-		hints:                hintsComponent,
-		grid:                 grid,
-		scroll:               scroll,
-		recursiveGrid:        recursiveGridComponent,
-		screenBounds:         screenBounds,
-		enableEventTap:       enableEventTap,
-		disableEventTap:      disableEventTap,
-		refreshHotkeys:       refreshHotkeys,
-		themeProvider:        themeProvider,
+		config:                     config,
+		logger:                     logger,
+		appState:                   appState,
+		cursorState:                cursorState,
+		overlayManager:             overlayManager,
+		renderer:                   renderer,
+		hintService:                hintService,
+		gridService:                gridService,
+		actionService:              actionService,
+		scrollService:              scrollService,
+		modeIndicatorService:       modeIndicatorService,
+		hints:                      hintsComponent,
+		grid:                       grid,
+		scroll:                     scroll,
+		recursiveGrid:              recursiveGridComponent,
+		screenBounds:               screenBounds,
+		enableEventTap:             enableEventTap,
+		disableEventTap:            disableEventTap,
+		setModifierPassthrough:     setModifierPassthrough,
+		setInterceptedModifierKeys: setInterceptedModifierKeys,
+		refreshHotkeys:             refreshHotkeys,
+		themeProvider:              themeProvider,
 	}
 
 	// Initialize mode implementations
@@ -379,4 +385,6 @@ func (h *Handler) UpdateConfig(config *configpkg.Config) {
 			recursivegrid.BuildStyle(config.RecursiveGrid, h.themeProvider),
 		)
 	}
+
+	h.syncModifierPassthrough(h.appState.CurrentMode())
 }

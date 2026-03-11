@@ -73,6 +73,24 @@ func (a *Adapter) SetHotkeys(hotkeys []string) {
 	a.tap.SetHotkeys(hotkeys)
 }
 
+// SetModifierPassthrough configures whether unbound modifier shortcuts should
+// pass through to macOS and which shortcuts remain blacklisted.
+func (a *Adapter) SetModifierPassthrough(enabled bool, blacklist []string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.tap.SetModifierPassthrough(enabled, blacklist)
+}
+
+// SetInterceptedModifierKeys configures modifier shortcuts the active mode
+// still wants Neru to consume.
+func (a *Adapter) SetInterceptedModifierKeys(keys []string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.tap.SetInterceptedModifierKeys(keys)
+}
+
 // SetKeyboardLayout configures the reference keyboard layout used by key translation.
 func (a *Adapter) SetKeyboardLayout(layoutID string) bool {
 	return a.tap.SetKeyboardLayout(layoutID)

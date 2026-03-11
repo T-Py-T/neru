@@ -280,13 +280,15 @@ const (
 func DefaultConfig() *Config {
 	return &Config{
 		General: GeneralConfig{
-			ExcludedApps:              []string{},
-			AccessibilityCheckOnStart: true,
-			RestoreCursorPosition:     false,
-			CenterCursorPosition:      false,
-			ModeExitKeys:              []string{"Escape"},
-			HideOverlayInScreenShare:  false,
-			KBLayoutToUse:             "",
+			ExcludedApps:                      []string{},
+			AccessibilityCheckOnStart:         true,
+			RestoreCursorPosition:             false,
+			CenterCursorPosition:              false,
+			ModeExitKeys:                      []string{"Escape"},
+			PassthroughUnboundedKeys:          false,
+			PassthroughUnboundedKeysBlacklist: []string{},
+			HideOverlayInScreenShare:          false,
+			KBLayoutToUse:                     "",
 		},
 		Hotkeys: HotkeysConfig{
 			Bindings: map[string]string{

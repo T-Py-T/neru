@@ -20,20 +20,21 @@ const (
 // Key name constants for normalization.
 // These are the canonical lowercase forms used throughout the codebase.
 const (
-	KeyNameEscape    = "escape"
-	KeyNameReturn    = "return"
-	KeyNameTab       = "tab"
-	KeyNameSpace     = "space"
-	KeyNameBackspace = "backspace"
-	KeyNameDelete    = "delete"
-	KeyNameHome      = "home"
-	KeyNameEnd       = "end"
-	KeyNamePageUp    = "pageup"
-	KeyNamePageDown  = "pagedown"
-	KeyNameUp        = "up"
-	KeyNameDown      = "down"
-	KeyNameLeft      = "left"
-	KeyNameRight     = "right"
+	minimumModifierParts = 2
+	KeyNameEscape        = "escape"
+	KeyNameReturn        = "return"
+	KeyNameTab           = "tab"
+	KeyNameSpace         = "space"
+	KeyNameBackspace     = "backspace"
+	KeyNameDelete        = "delete"
+	KeyNameHome          = "home"
+	KeyNameEnd           = "end"
+	KeyNamePageUp        = "pageup"
+	KeyNamePageDown      = "pagedown"
+	KeyNameUp            = "up"
+	KeyNameDown          = "down"
+	KeyNameLeft          = "left"
+	KeyNameRight         = "right"
 )
 
 // validNamedKeys is the canonical set of all named keys the system supports.
@@ -155,6 +156,25 @@ func NormalizeKeyForComparison(key string) string {
 	return key
 }
 
+// HasPassthroughModifier reports whether the key contains a modifier that can
+// be allowed through to macOS while a mode is active. Shift-only combos are
+// excluded because they are commonly used inside modes.
+func HasPassthroughModifier(key string) bool {
+	parts := strings.Split(NormalizeKeyForComparison(key), "+")
+	if len(parts) < minimumModifierParts {
+		return false
+	}
+
+	for _, part := range parts[:len(parts)-1] {
+		switch strings.TrimSpace(part) {
+		case "cmd", "ctrl", "alt", "option":
+			return true
+		}
+	}
+
+	return false
+}
+
 // normalizeFullwidthChars converts fullwidth CJK characters (U+FF01-U+FF5E)
 // to their halfwidth ASCII equivalents (U+0021-U+007E).
 // This ensures keys work correctly when using CJK input methods.
@@ -261,13 +281,15 @@ type Config struct {
 
 // GeneralConfig defines general application-wide settings.
 type GeneralConfig struct {
-	ExcludedApps              []string `json:"excludedApps"              toml:"excluded_apps"`
-	AccessibilityCheckOnStart bool     `json:"accessibilityCheckOnStart" toml:"accessibility_check_on_start"`
-	RestoreCursorPosition     bool     `json:"restoreCursorPosition"     toml:"restore_cursor_position"`
-	CenterCursorPosition      bool     `json:"centerCursorPosition"      toml:"center_cursor_position"`
-	ModeExitKeys              []string `json:"modeExitKeys"              toml:"mode_exit_keys"`
-	HideOverlayInScreenShare  bool     `json:"hideOverlayInScreenShare"  toml:"hide_overlay_in_screen_share"`
-	KBLayoutToUse             string   `json:"kbLayoutToUse"             toml:"kb_layout_to_use"`
+	ExcludedApps                      []string `json:"excludedApps"                      toml:"excluded_apps"`
+	AccessibilityCheckOnStart         bool     `json:"accessibilityCheckOnStart"         toml:"accessibility_check_on_start"`
+	RestoreCursorPosition             bool     `json:"restoreCursorPosition"             toml:"restore_cursor_position"`
+	CenterCursorPosition              bool     `json:"centerCursorPosition"              toml:"center_cursor_position"`
+	ModeExitKeys                      []string `json:"modeExitKeys"                      toml:"mode_exit_keys"`
+	PassthroughUnboundedKeys          bool     `json:"passthroughUnboundedKeys"          toml:"passthrough_unbounded_keys"`
+	PassthroughUnboundedKeysBlacklist []string `json:"passthroughUnboundedKeysBlacklist" toml:"passthrough_unbounded_keys_blacklist"`
+	HideOverlayInScreenShare          bool     `json:"hideOverlayInScreenShare"          toml:"hide_overlay_in_screen_share"`
+	KBLayoutToUse                     string   `json:"kbLayoutToUse"                     toml:"kb_layout_to_use"`
 }
 
 // ModeIndicatorUI defines the visual/appearance settings for the mode indicator.
@@ -623,6 +645,24 @@ func (c *Config) ValidateGeneral() error {
 			derrors.CodeInvalidConfig,
 			"general.kb_layout_to_use cannot be whitespace-only",
 		)
+	}
+
+	for index, key := range c.General.PassthroughUnboundedKeysBlacklist {
+		fieldName := fmt.Sprintf("general.passthrough_unbounded_keys_blacklist[%d]", index)
+
+		err := ValidateHotkey(key, fieldName)
+		if err != nil {
+			return err
+		}
+
+		if !HasPassthroughModifier(key) {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"%s must include Cmd, Ctrl, Alt, or Option: %s",
+				fieldName,
+				key,
+			)
+		}
 	}
 
 	return nil
