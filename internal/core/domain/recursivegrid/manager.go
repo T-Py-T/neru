@@ -15,9 +15,10 @@ type Manager struct {
 	domain.BaseManager
 
 	grid         *RecursiveGrid
-	keys         string            // Key mapping (e.g., "uijk")
-	gridCols     int               // Number of grid columns
-	gridRows     int               // Number of grid rows
+	keys         string            // Default key mapping (e.g., "uijk")
+	depthKeys    map[int]string    // Per-depth key overrides (sparse)
+	gridCols     int               // Default number of grid columns
+	gridRows     int               // Default number of grid rows
 	onUpdate     func()            // Callback for overlay updates
 	onComplete   func(image.Point) // Callback when selection is complete
 	resetKey     string
@@ -25,7 +26,8 @@ type Manager struct {
 	exitKeys     []string
 }
 
-// NewManager creates a recursive-grid manager with the specified configuration.
+// NewManager creates a recursive-grid manager with default dimensions (2×2)
+// and default size/depth limits. Used primarily in tests.
 func NewManager(
 	screenBounds image.Rectangle,
 	keys string,
@@ -36,7 +38,7 @@ func NewManager(
 	onComplete func(image.Point),
 	logger *zap.Logger,
 ) *Manager {
-	return NewManagerWithConfig(
+	return NewManagerWithLayers(
 		screenBounds,
 		keys,
 		resetKey,
@@ -47,20 +49,25 @@ func NewManager(
 		10, //nolint:mnd
 		MinGridDimension,
 		MinGridDimension,
+		nil, nil,
 		onUpdate,
 		onComplete,
 		logger,
 	)
 }
 
-// NewManagerWithConfig creates a manager with custom minSizeWidth, minSizeHeight, maxDepth, gridCols, and gridRows.
-func NewManagerWithConfig(
+// NewManagerWithLayers creates a manager with custom dimensions and optional
+// per-depth layout and key overrides. Pass nil for depthLayouts/depthKeys
+// to use default dimensions at all depths.
+func NewManagerWithLayers(
 	screenBounds image.Rectangle,
 	keys string,
 	resetKey string,
 	backspaceKey string,
 	exitKeys []string,
 	minSizeWidth, minSizeHeight, maxDepth, gridCols, gridRows int,
+	depthLayouts map[int]DepthLayout,
+	depthKeys map[int]string,
 	onUpdate func(),
 	onComplete func(image.Point),
 	logger *zap.Logger,
@@ -92,19 +99,74 @@ func NewManagerWithConfig(
 		gridRows = MinGridDimension
 	}
 
+	if depthKeys == nil {
+		depthKeys = make(map[int]string)
+	}
+
+	if depthLayouts == nil {
+		depthLayouts = make(map[int]DepthLayout)
+	}
+
+	// Validate consistency: every depth that appears in one map must appear
+	// in the other, and the key count must match the layout dimensions.
+	// Mismatched entries are dropped with a warning to prevent keyToCell
+	// returning cell indices outside the range of Divide().
+	for depth := range depthLayouts {
+		depthKey, hasKeys := depthKeys[depth]
+		if !hasKeys {
+			logger.Warn(
+				"depthLayouts has depth with no matching depthKeys entry; dropping override",
+				zap.Int("depth", depth),
+			)
+			delete(depthLayouts, depth)
+
+			continue
+		}
+
+		expected := depthLayouts[depth].GridCols * depthLayouts[depth].GridRows
+		if utf8.RuneCountInString(depthKey) != expected {
+			logger.Warn(
+				"depthKeys length does not match depthLayouts dimensions; dropping override",
+				zap.Int("depth", depth),
+				zap.Int("expected_keys", expected),
+				zap.Int("actual_keys", utf8.RuneCountInString(depthKey)),
+			)
+			delete(depthLayouts, depth)
+			delete(depthKeys, depth)
+		}
+	}
+
+	for depth := range depthKeys {
+		if _, hasLayout := depthLayouts[depth]; !hasLayout {
+			logger.Warn(
+				"depthKeys has depth with no matching depthLayouts entry; dropping override",
+				zap.Int("depth", depth),
+			)
+			delete(depthKeys, depth)
+		}
+	}
+
+	// Normalize all depth keys to lowercase
+	normalizedDepthKeys := make(map[int]string, len(depthKeys))
+	for depth, dk := range depthKeys {
+		normalizedDepthKeys[depth] = strings.ToLower(dk)
+	}
+
 	return &Manager{
 		BaseManager: domain.BaseManager{
 			Logger: logger,
 		},
-		grid: NewRecursiveGridWithDimensions(
+		grid: NewRecursiveGridWithLayers(
 			screenBounds,
 			minSizeWidth,
 			minSizeHeight,
 			maxDepth,
 			gridCols,
 			gridRows,
+			depthLayouts,
 		),
 		keys:         strings.ToLower(keys),
+		depthKeys:    normalizedDepthKeys,
 		gridCols:     gridCols,
 		gridRows:     gridRows,
 		onUpdate:     onUpdate,
@@ -253,22 +315,31 @@ func (m *Manager) CellBounds(q Cell) image.Rectangle {
 	return m.grid.CellBounds(q)
 }
 
-// Keys returns the current key mapping.
+// Keys returns the key mapping for the current depth.
 func (m *Manager) Keys() string {
+	return m.KeysForDepth(m.grid.CurrentDepth())
+}
+
+// KeysForDepth returns the key mapping for the given depth.
+func (m *Manager) KeysForDepth(depth int) string {
+	if dk, ok := m.depthKeys[depth]; ok {
+		return dk
+	}
+
 	return m.keys
 }
 
-// GridCols returns the number of grid columns.
+// GridCols returns the number of grid columns for the current depth.
 func (m *Manager) GridCols() int {
-	return m.gridCols
+	return m.grid.GridCols()
 }
 
-// GridRows returns the number of grid rows.
+// GridRows returns the number of grid rows for the current depth.
 func (m *Manager) GridRows() int {
-	return m.gridRows
+	return m.grid.GridRows()
 }
 
-// UpdateKeys updates the key mapping.
+// UpdateKeys updates the default key mapping.
 func (m *Manager) UpdateKeys(keys string) {
 	expectedKeyCount := m.gridCols * m.gridRows
 	if utf8.RuneCountInString(keys) == expectedKeyCount {
@@ -287,11 +358,13 @@ func (m *Manager) HasHistory() bool {
 	return m.grid.HasHistory()
 }
 
-// keyToCell maps an input key to a cell index.
+// keyToCell maps an input key to a cell index using the current depth's key mapping.
 // Returns -1 if the key is not mapped.
 func (m *Manager) keyToCell(key string) Cell {
+	currentKeys := m.Keys()
 	idx := 0
-	for _, k := range m.keys {
+
+	for _, k := range currentKeys {
 		if string(k) == key {
 			return Cell(idx)
 		}
