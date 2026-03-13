@@ -2029,6 +2029,13 @@ func (c *Config) ValidateRecursiveGrid() error {
 		return err
 	}
 
+	if c.RecursiveGrid.UI.SubKeyPreviewAutohideMultiplier < 0 {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"recursive_grid.ui.sub_key_preview_autohide_multiplier must be >= 0",
+		)
+	}
+
 	err = validateMinValue(
 		c.RecursiveGrid.UI.LabelBackgroundPaddingY,
 		-1,

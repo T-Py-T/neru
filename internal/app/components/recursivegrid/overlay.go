@@ -339,6 +339,7 @@ func (o *Overlay) DrawRecursiveGrid(
 		subKeyGridRows:              C.int(nextGridRows),
 		drawSubKeyPreview:           C.int(boolToInt(style.SubKeyPreview() && nextKeys != "")),
 		subKeyFontSize:              C.int(style.SubKeyPreviewFontSize()),
+		subKeyAutohideMultiplier:    C.float(style.SubKeyPreviewAutohideMultiplier()),
 		subKeyTextColor:             (*C.char)(cachedStyle.SubKeyTextColor),
 		subKeyKeys:                  o.getOrCacheLabel(subKeyKeysUpper),
 	}
@@ -433,21 +434,22 @@ func boolToInt(v bool) int {
 
 // Style represents the visual style for recursive_grid.
 type Style struct {
-	lineColor                   string
-	lineWidth                   int
-	highlightColor              string
-	textColor                   string
-	fontSize                    int
-	fontFamily                  string
-	labelBackground             bool
-	labelBackgroundColor        string
-	labelBackgroundPaddingX     int
-	labelBackgroundPaddingY     int
-	labelBackgroundBorderRadius int
-	labelBackgroundBorderWidth  int
-	subKeyPreview               bool
-	subKeyPreviewFontSize       int
-	subKeyPreviewTextColor      string
+	lineColor                       string
+	lineWidth                       int
+	highlightColor                  string
+	textColor                       string
+	fontSize                        int
+	fontFamily                      string
+	labelBackground                 bool
+	labelBackgroundColor            string
+	labelBackgroundPaddingX         int
+	labelBackgroundPaddingY         int
+	labelBackgroundBorderRadius     int
+	labelBackgroundBorderWidth      int
+	subKeyPreview                   bool
+	subKeyPreviewFontSize           int
+	subKeyPreviewAutohideMultiplier float64
+	subKeyPreviewTextColor          string
 }
 
 // LineColor returns the line color.
@@ -520,6 +522,11 @@ func (s Style) SubKeyPreviewFontSize() int {
 	return s.subKeyPreviewFontSize
 }
 
+// SubKeyPreviewAutohideMultiplier returns the minimum cell size multiplier for sub-key preview autohide.
+func (s Style) SubKeyPreviewAutohideMultiplier() float64 {
+	return s.subKeyPreviewAutohideMultiplier
+}
+
 // SubKeyPreviewTextColor returns the text color for sub-key preview labels.
 func (s Style) SubKeyPreviewTextColor() string {
 	return s.subKeyPreviewTextColor
@@ -562,12 +569,13 @@ func BuildStyle(cfg config.RecursiveGridConfig, theme config.ThemeProvider) Styl
 			config.RecursiveGridLabelBackgroundColorLight,
 			config.RecursiveGridLabelBackgroundColorDark,
 		),
-		labelBackgroundPaddingX:     cfg.UI.LabelBackgroundPaddingX,
-		labelBackgroundPaddingY:     cfg.UI.LabelBackgroundPaddingY,
-		labelBackgroundBorderRadius: cfg.UI.LabelBackgroundBorderRadius,
-		labelBackgroundBorderWidth:  cfg.UI.LabelBackgroundBorderWidth,
-		subKeyPreview:               cfg.UI.SubKeyPreview,
-		subKeyPreviewFontSize:       cfg.UI.SubKeyPreviewFontSize,
+		labelBackgroundPaddingX:         cfg.UI.LabelBackgroundPaddingX,
+		labelBackgroundPaddingY:         cfg.UI.LabelBackgroundPaddingY,
+		labelBackgroundBorderRadius:     cfg.UI.LabelBackgroundBorderRadius,
+		labelBackgroundBorderWidth:      cfg.UI.LabelBackgroundBorderWidth,
+		subKeyPreview:                   cfg.UI.SubKeyPreview,
+		subKeyPreviewFontSize:           cfg.UI.SubKeyPreviewFontSize,
+		subKeyPreviewAutohideMultiplier: cfg.UI.SubKeyPreviewAutohideMultiplier,
 		subKeyPreviewTextColor: config.ResolveColor(
 			cfg.UI.SubKeyPreviewTextColorLight,
 			cfg.UI.SubKeyPreviewTextColorDark,
