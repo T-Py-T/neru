@@ -34,6 +34,17 @@ var validModifiers = map[string]bool{
 	"Alt":    true,
 	"Shift":  true,
 	"Option": true,
+	// Right/Left-prefixed modifiers (commonly used by remappers like Karabiner)
+	"RightCmd":    true,
+	"RightCtrl":   true,
+	"RightAlt":    true,
+	"RightOption": true,
+	"RightShift":  true,
+	"LeftCmd":     true,
+	"LeftCtrl":    true,
+	"LeftAlt":     true,
+	"LeftOption":  true,
+	"LeftShift":   true,
 }
 
 func isValidModifier(mod string) bool {
@@ -796,7 +807,7 @@ func ValidateActionKeyBinding(keybinding, fieldName string) error {
 		if !isValidModifier(modifier) {
 			return derrors.Newf(
 				derrors.CodeInvalidConfig,
-				"%s has invalid modifier '%s' in: %s (valid: Cmd, Ctrl, Alt, Shift, Option)",
+				"%s has invalid modifier '%s' in: %s (valid: Cmd, Ctrl, Alt, Shift, Option, and Right*/Left* variants e.g. RightCmd, LeftShift)",
 				fieldName,
 				modifier,
 				keybinding,
@@ -897,7 +908,7 @@ func ValidateHotkey(hotkey, fieldName string) error {
 		if !isValidModifier(modifier) {
 			return derrors.Newf(
 				derrors.CodeInvalidConfig,
-				"%s has invalid modifier '%s' in: %s (valid: Cmd, Ctrl, Alt, Shift, Option)",
+				"%s has invalid modifier '%s' in: %s (valid: Cmd, Ctrl, Alt, Shift, Option, and Right*/Left* variants e.g. RightCmd, LeftShift)",
 				fieldName,
 				modifier,
 				hotkey,
@@ -1441,7 +1452,7 @@ func validateModifierCombo(key string, fieldName string) error {
 		if !isValidModifier(modifier) {
 			return derrors.Newf(
 				derrors.CodeInvalidConfig,
-				"%s has invalid modifier '%s' in '%s' (valid: Cmd, Ctrl, Alt, Shift, Option)",
+				"%s has invalid modifier '%s' in '%s' (valid: Cmd, Ctrl, Alt, Shift, Option, and Right*/Left* variants e.g. RightCmd, LeftShift)",
 				fieldName,
 				modifier,
 				key,

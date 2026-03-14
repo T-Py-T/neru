@@ -152,6 +152,10 @@ func NormalizeKeyForComparison(key string) string {
 		return KeyNameDelete
 	}
 
+	// Strip Right/Left modifier prefixes so that e.g. "rightcmd+l" normalizes to "cmd+l",
+	// matching the unprefixed modifier names the event tap always produces at runtime.
+	key = StripModifierPrefixes(key)
+
 	// All other keys (named keys, plain characters, modifier combos) are already
 	// lowercased by strings.ToLower above and pass through as-is.
 	return key
@@ -167,13 +171,37 @@ func HasPassthroughModifier(key string) bool {
 	}
 
 	for _, part := range parts[:len(parts)-1] {
-		switch strings.TrimSpace(part) {
+		trimmed := strings.TrimSpace(part)
+		switch trimmed {
 		case "cmd", "ctrl", "alt", "option":
 			return true
 		}
 	}
 
 	return false
+}
+
+var modifierPrefixReplacer = strings.NewReplacer(
+	"rightcmd+", "cmd+",
+	"leftcmd+", "cmd+",
+	"rightctrl+", "ctrl+",
+	"leftctrl+", "ctrl+",
+	"rightalt+", "alt+",
+	"leftalt+", "alt+",
+	"rightoption+", "option+",
+	"leftoption+", "option+",
+	"rightshift+", "shift+",
+	"leftshift+", "shift+",
+)
+
+// StripModifierPrefixes removes Right/Left prefixes from modifier names in a
+// lowercased key string. This is a no-op when the key contains no such prefix.
+func StripModifierPrefixes(key string) string {
+	if !strings.Contains(key, "+") {
+		return key
+	}
+
+	return modifierPrefixReplacer.Replace(key)
 }
 
 // normalizeFullwidthChars converts fullwidth CJK characters (U+FF01-U+FF5E)
@@ -1126,7 +1154,7 @@ func validateScrollKey(key, fieldName string) error {
 			if !isValidModifier(modifier) {
 				return derrors.Newf(
 					derrors.CodeInvalidConfig,
-					"%s has invalid modifier '%s' in '%s' (valid: Cmd, Ctrl, Alt, Shift, Option)",
+					"%s has invalid modifier '%s' in '%s' (valid: Cmd, Ctrl, Alt, Shift, Option, and Right*/Left* variants e.g. RightCmd, LeftShift)",
 					fieldName,
 					modifier,
 					key,
