@@ -61,6 +61,8 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 		hasX, hasY     bool
 		hasDX, hasDY   bool
 		hasCenter      bool
+		monitorName    string
+		hasMonitor     bool
 	)
 
 	parseErr := false
@@ -112,6 +114,9 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 			hasDY = true
 		case arg == "--center":
 			hasCenter = true
+		case strings.HasPrefix(arg, "--monitor="):
+			monitorName = strings.TrimPrefix(arg, "--monitor=")
+			hasMonitor = monitorName != ""
 		}
 	}
 
@@ -131,8 +136,10 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 	// 2. Reject --x/--y mixed with --dx/--dy (always invalid).
 	// 3. Reject --center mixed with --dx/--dy (center uses --x/--y as offsets, not deltas).
 	// 4. Reject --center on non-move_mouse actions.
-	// 5. Require --x AND --y when --center is absent for move_mouse.
+	// 5. Reject --monitor without --center (monitor targeting requires center mode).
+	// 6. Require --x AND --y when --center is absent for move_mouse.
 	// Note: --center with --x/--y is intentionally allowed — x/y act as offsets from center.
+	// Note: --monitor on non-move_mouse is caught by step 4 (if --center present) or step 5 (if absent).
 
 	if !isMoveMouse && !isMoveMouseRelative && (hasX || hasY || hasDX || hasDY) {
 		return ipc.Response{
@@ -166,6 +173,14 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 		}
 	}
 
+	if hasMonitor && !hasCenter {
+		return ipc.Response{
+			Success: false,
+			Message: "--monitor requires --center",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
 	if isMoveMouse && !hasCenter && (!hasX || !hasY) {
 		return ipc.Response{
 			Success: false,
@@ -176,6 +191,31 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 
 	if isMoveMouse && hasCenter {
 		offsetX, offsetY := xVal, yVal
+
+		if hasMonitor {
+			h.logger.Info("Moving mouse to center of monitor via IPC",
+				zap.String("monitor", monitorName),
+				zap.Int("offsetX", offsetX),
+				zap.Int("offsetY", offsetY),
+			)
+
+			err := h.actionService.MoveMouseToCenterOfMonitor(ctx, monitorName, offsetX, offsetY)
+			if err != nil {
+				h.logger.Error("Failed to move mouse to center of monitor", zap.Error(err))
+
+				return ipc.Response{
+					Success: false,
+					Message: "failed to perform action: " + err.Error(),
+					Code:    ipc.CodeActionFailed,
+				}
+			}
+
+			return ipc.Response{
+				Success: true,
+				Message: actionName + " performed",
+				Code:    ipc.CodeOK,
+			}
+		}
 
 		h.logger.Info("Moving mouse to center via IPC",
 			zap.Int("offsetX", offsetX),
