@@ -156,6 +156,12 @@ func NormalizeKeyForComparison(key string) string {
 	// matching the unprefixed modifier names the event tap always produces at runtime.
 	key = StripModifierPrefixes(key)
 
+	// Normalize key aliases inside modifier combos.
+	// The switch above only handles bare "enter" / "backspace" etc., but users may
+	// write "Shift+Enter" which lowercases to "shift+enter". The event tap always
+	// produces the canonical form "shift+return", so we must resolve the alias here.
+	key = normalizeKeyAliasesInCombo(key)
+
 	// All other keys (named keys, plain characters, modifier combos) are already
 	// lowercased by strings.ToLower above and pass through as-is.
 	return key
@@ -202,6 +208,34 @@ func StripModifierPrefixes(key string) string {
 	}
 
 	return modifierPrefixReplacer.Replace(key)
+}
+
+// comboKeyAliases maps alias key names to their canonical forms.
+// Used by normalizeKeyAliasesInCombo to resolve the final segment of compound keys.
+var comboKeyAliases = map[string]string{
+	"enter":     "return",
+	"backspace": "delete",
+	"esc":       "escape",
+}
+
+// normalizeKeyAliasesInCombo resolves key name aliases inside modifier combos.
+// e.g. "shift+enter" → "shift+return", "cmd+backspace" → "cmd+delete".
+// Only applies to compound keys (containing "+"); bare keys are handled by the
+// switch in NormalizeKeyForComparison.
+// Splits on the last "+" and only normalizes the final segment to avoid mangling
+// modifier names or canonical forms that share a prefix (e.g. "escape" vs "esc").
+func normalizeKeyAliasesInCombo(key string) string {
+	idx := strings.LastIndex(key, "+")
+	if idx < 0 {
+		return key
+	}
+
+	prefix, suffix := key[:idx+1], key[idx+1:]
+	if canonical, ok := comboKeyAliases[suffix]; ok {
+		return prefix + canonical
+	}
+
+	return key
 }
 
 // normalizeFullwidthChars converts fullwidth CJK characters (U+FF01-U+FF5E)
