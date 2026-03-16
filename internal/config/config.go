@@ -418,8 +418,9 @@ type StickyModifiersUI struct {
 
 // StickyModifiersConfig defines settings for the sticky modifiers feature.
 type StickyModifiersConfig struct {
-	Enabled bool              `json:"enabled" toml:"enabled"`
-	UI      StickyModifiersUI `json:"ui"      toml:"ui"`
+	Enabled        bool              `json:"enabled"        toml:"enabled"`
+	TapMaxDuration int               `json:"tapMaxDuration" toml:"tap_max_duration"`
+	UI             StickyModifiersUI `json:"ui"             toml:"ui"`
 }
 
 // AppConfig defines application-specific settings for role customization.
@@ -746,6 +747,12 @@ func (c *Config) Validate() error {
 	// At runtime, exit keys are checked before action keys (in key_dispatch.go),
 	// so a conflict means the action will never fire.
 	err = c.checkPerModeExitKeysActionKeyConflicts()
+	if err != nil {
+		return err
+	}
+
+	// Validate sticky modifiers settings
+	err = c.ValidateStickyModifiers()
 	if err != nil {
 		return err
 	}
