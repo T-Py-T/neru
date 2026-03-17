@@ -11,3 +11,8 @@ import (
 func NewSystemPort() (ports.SystemPort, error) {
 	return windows.NewSystemAdapter(), nil
 }
+
+// ShowConfigOnboardingAlert is a stub on Windows.
+func ShowConfigOnboardingAlert(_ string) int {
+	return ConfigOnboardingDefaults
+}

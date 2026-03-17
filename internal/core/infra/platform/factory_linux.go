@@ -11,3 +11,8 @@ import (
 func NewSystemPort() (ports.SystemPort, error) {
 	return linux.NewSystemAdapter(), nil
 }
+
+// ShowConfigOnboardingAlert is a stub on Linux.
+func ShowConfigOnboardingAlert(_ string) int {
+	return ConfigOnboardingDefaults
+}

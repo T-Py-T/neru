@@ -11,6 +11,7 @@
 #pragma mark - Internal Function Declaration
 
 static int showAlertOnMainThread(const char *errorMessage, const char *configPath);
+static int showOnboardingAlertOnMainThread(const char *configPath);
 
 #pragma mark - Alert Functions
 
@@ -71,14 +72,12 @@ static int showAlertOnMainThread(const char *errorMessage, const char *configPat
 	// Activate the app to ensure the alert is visible and focused
 	[NSApp activateIgnoringOtherApps:YES];
 
-	// Schedule switch back to Accessory policy to hide Dock icon
-	// We use a small delay to ensure the focus is grabbed first
-	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-		[NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
-	});
-
 	// Run modal
 	NSModalResponse response = [alert runModal];
+
+	// Revert to Accessory policy after the modal is dismissed so the
+	// alert stays in the foreground for the entire user interaction.
+	[NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
 
 	// Check which button was clicked
 	if (response == NSAlertFirstButtonReturn) {
@@ -90,6 +89,69 @@ static int showAlertOnMainThread(const char *errorMessage, const char *configPat
 		[pasteboard clearContents];
 		[pasteboard setString:path forType:NSPasteboardTypeString];
 		return 2;
+	}
+
+	return 0;
+}
+
+/// Show a config onboarding alert for new users
+/// @param configPath The default config path that will be created
+/// @return 1 if user clicked Create Config, 2 if user clicked Use Defaults, 3 if user clicked Quit
+int showConfigOnboardingAlert(const char *configPath) {
+	@autoreleasepool {
+		__block int result = 0;
+
+		if ([NSThread isMainThread]) {
+			result = showOnboardingAlertOnMainThread(configPath);
+		} else {
+			dispatch_sync(dispatch_get_main_queue(), ^{
+				result = showOnboardingAlertOnMainThread(configPath);
+			});
+		}
+
+		return result;
+	}
+}
+
+/// Internal function to show onboarding alert on main thread
+/// @param configPath The default config path that will be created
+/// @return 1 if user clicked Create Config, 2 if user clicked Use Defaults, 3 if user clicked Quit
+static int showOnboardingAlertOnMainThread(const char *configPath) {
+	NSString *path = configPath ? [NSString stringWithUTF8String:configPath] : @"~/.config/neru/config.toml";
+
+	NSAlert *alert = [[NSAlert alloc] init];
+	alert.messageText = @"👋 Welcome to Neru!";
+	alert.informativeText =
+	    [NSString stringWithFormat:@"No configuration file found.\n\nA default config will be created at:\n%@\n\nYou "
+	                               @"can run 'neru config init' later to recreate it.",
+	                               path];
+	alert.alertStyle = NSAlertStyleInformational;
+
+	[alert addButtonWithTitle:@"Create Config"];
+	[alert addButtonWithTitle:@"Use Defaults (No Config)"];
+	[alert addButtonWithTitle:@"Quit"];
+
+	[[alert window] setLevel:NSFloatingWindowLevel];
+
+	[NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+
+	[[alert window] center];
+	[[alert window] makeKeyAndOrderFront:nil];
+
+	[NSApp activateIgnoringOtherApps:YES];
+
+	NSModalResponse response = [alert runModal];
+
+	// Revert to Accessory policy after the modal is dismissed so the
+	// alert stays in the foreground for the entire user interaction.
+	[NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+
+	if (response == NSAlertFirstButtonReturn) {
+		return 1;
+	} else if (response == NSAlertSecondButtonReturn) {
+		return 2;
+	} else if (response == NSAlertThirdButtonReturn) {
+		return 3;
 	}
 
 	return 0;

@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/app"
+	"github.com/y3owk1n/neru/internal/cli"
 	"github.com/y3owk1n/neru/internal/config"
 	"github.com/y3owk1n/neru/internal/core/infra/platform"
 	"github.com/y3owk1n/neru/internal/core/infra/systray"
@@ -71,11 +72,11 @@ func LaunchDaemon(configPath string) {
 	if configResult.ValidationError != nil {
 		fmt.Fprintf(
 			os.Stderr,
-			"⚠️  Configuration validation failed: %v\\n",
+			"⚠️  Configuration validation failed: %v\n",
 			configResult.ValidationError,
 		)
-		fmt.Fprintf(os.Stderr, "Config file: %s\\n", configResult.ConfigPath)
-		fmt.Fprintf(os.Stderr, "Continuing with default configuration...\\n\\n")
+		fmt.Fprintf(os.Stderr, "Config file: %s\n", configResult.ConfigPath)
+		fmt.Fprintf(os.Stderr, "Continuing with default configuration...\n\n")
 
 		// Show native macOS alert dialog asynchronously
 		// We use a goroutine and delay to ensure the main run loop has started
@@ -86,19 +87,23 @@ func LaunchDaemon(configPath string) {
 		}()
 	}
 
+	if configResult.ConfigPath == "" && configPath == "" {
+		configResult = handleConfigOnboarding(service, configResult)
+	}
+
 	app, appErr := app.New(
 		app.WithConfig(configResult.Config),
 		app.WithConfigPath(configResult.ConfigPath),
 	)
 	if appErr != nil {
-		fmt.Fprintf(os.Stderr, "Error creating app: %v\\n", appErr)
+		fmt.Fprintf(os.Stderr, "Error creating app: %v\n", appErr)
 		os.Exit(1)
 	}
 
 	go func() {
 		err := app.Run()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error running app: %v\\n", err)
+			fmt.Fprintf(os.Stderr, "Error running app: %v\n", err)
 		}
 	}()
 
@@ -117,4 +122,59 @@ func LaunchDaemon(configPath string) {
 func showConfigErrorAlert(errorMessage, configPath string) {
 	provider := newAlertProvider()
 	_ = provider.ShowAlert(context.Background(), errorMessage, configPath)
+}
+
+func handleConfigOnboarding(
+	service *config.Service,
+	configResult *config.LoadResult,
+) *config.LoadResult {
+	defaultPath, err := config.DefaultConfigPath()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to determine default config path: %v\n", err)
+
+		return configResult
+	}
+
+	if !promptConfigInit(defaultPath) {
+		return configResult
+	}
+
+	err = config.WriteDefaultConfig(defaultPath, false)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create config file: %v\n", err)
+
+		return configResult
+	}
+
+	return service.LoadWithValidation(defaultPath)
+}
+
+func promptConfigInit(configPath string) bool {
+	if cli.IsRunningFromAppBundle() {
+		absPath, _ := filepath.Abs(configPath)
+
+		choice := platform.ShowConfigOnboardingAlert(absPath)
+		switch choice {
+		case platform.ConfigOnboardingCreate:
+			return true
+		case platform.ConfigOnboardingQuit:
+			os.Exit(0)
+		case platform.ConfigOnboardingDefaults:
+			return false
+		default:
+			fmt.Fprintf(
+				os.Stderr,
+				"Unexpected onboarding alert response (%d), continuing with defaults\n",
+				choice,
+			)
+
+			return false
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "No config file found. Create one with: neru config init\n")
+
+	os.Exit(1)
+
+	return false
 }
