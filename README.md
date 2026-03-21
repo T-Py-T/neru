@@ -68,6 +68,10 @@ Works in native macOS apps, Electron apps (VS Code, Slack, Obsidian), all major 
 
 ## Installation
 
+> [!INFO]
+> The homebrew tap is maintained in another repo: [y3owk1n/homebrew-tap](https://github.com/y3owk1n/homebrew-tap)
+> If there's a problem with the tap, please open an issue in that repo or even better, a PR.
+
 ```bash
 # Homebrew (recommended — gets you auto-updates)
 brew tap y3owk1n/tap

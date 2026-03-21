@@ -14,6 +14,10 @@ This guide covers all installation methods for Neru on macOS.
 
 ## Method 1: Homebrew (Recommended)
 
+> [!INFO]
+> The homebrew tap is maintained in another repo: [y3owk1n/homebrew-tap](https://github.com/y3owk1n/homebrew-tap)
+> If there's a problem with the tap, please open an issue in that repo or even better, a PR.
+
 ```bash
 brew tap y3owk1n/tap
 brew install --cask y3owk1n/tap/neru
