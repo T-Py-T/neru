@@ -8,6 +8,8 @@
 #import "alert.h"
 
 #import <Cocoa/Cocoa.h>
+#import <CommonCrypto/CommonDigest.h>
+#import <UserNotifications/UserNotifications.h>
 
 #pragma mark - Internal Function Declaration
 
@@ -145,39 +147,156 @@ static int showOnboardingAlertOnMainThread(const char *configPath) {
 	return 0;
 }
 
+#pragma mark - Notification Delegate
+
+/// Delegate that allows notifications to be displayed even when the app is in the foreground.
+/// Without this, UNUserNotificationCenter silently suppresses foreground notifications.
+@interface NeruNotificationDelegate : NSObject <UNUserNotificationCenterDelegate>
+@end
+
+@implementation NeruNotificationDelegate
+
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center
+       willPresentNotification:(UNNotification *)notification
+         withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
+	completionHandler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionSound);
+}
+
+@end
+
 #pragma mark - Notification Functions
 
-/// Show a macOS notification with a title and message
-/// Uses osascript to display a native macOS notification (works for CLI tools)
-/// @param title The notification title
-/// @param message The notification message
+static void showNotificationWithUNUserNotificationCenter(NSString *title, NSString *message);
+
+/// Guards all mutable notification state below. Every read/write of
+/// _pendingCompletions, _notificationAuthorized, and _notificationSetupDone
+/// MUST happen on this serial queue — do NOT access them from any other context.
+static dispatch_queue_t _notificationSetupQueue;
+/// Completions queued before the first authorization response is known.
+/// Protected by _notificationSetupQueue.
+static NSMutableArray<void (^)(BOOL)> *_pendingCompletions;
+/// Cached authorization result. Protected by _notificationSetupQueue.
+static BOOL _notificationAuthorized = NO;
+/// Set to YES once requestAuthorizationWithOptions has resolved.
+/// Protected by _notificationSetupQueue.
+static BOOL _notificationSetupDone = NO;
+
+/// Lazily initializes the notification delegate and requests authorization once.
+/// Completions arriving before the first authorization response are queued and
+/// drained once the result is known. Subsequent calls dispatch immediately.
+static void ensureNotificationSetup(void (^completion)(BOOL authorized)) {
+	// Static to ensure the delegate lives for the program's lifetime —
+	// UNUserNotificationCenter.delegate is weak and would silently nil out otherwise.
+	static NeruNotificationDelegate *delegate = nil;
+	static dispatch_once_t onceToken;
+
+	dispatch_once(&onceToken, ^{
+		@autoreleasepool {
+			_notificationSetupQueue = dispatch_queue_create("com.neru.notification.setup", DISPATCH_QUEUE_SERIAL);
+			_pendingCompletions = [NSMutableArray array];
+
+			delegate = [[NeruNotificationDelegate alloc] init];
+
+			UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
+			center.delegate = delegate;
+
+			[center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound |
+			                                         UNAuthorizationOptionBadge)
+			                      completionHandler:^(BOOL granted, NSError *_Nullable error) {
+				                      if (error) {
+					                      NSLog(@"Neru: Notification authorization error: %@", error);
+				                      }
+
+				                      if (!granted) {
+					                      NSLog(@"Neru: Notification authorization denied");
+				                      }
+
+				                      // Safe to dispatch_sync here: this completion handler runs on a
+				                      // system queue (not _notificationSetupQueue), so no deadlock.
+				                      // The pending blocks only call addNotificationRequest (async)
+				                      // and do not re-enter _notificationSetupQueue.
+				                      dispatch_sync(_notificationSetupQueue, ^{
+					                      _notificationAuthorized = granted;
+					                      _notificationSetupDone = YES;
+
+					                      for (void (^pending)(BOOL) in _pendingCompletions) {
+						                      pending(granted);
+					                      }
+
+					                      [_pendingCompletions removeAllObjects];
+				                      });
+			                      }];
+		}
+	});
+
+	dispatch_async(_notificationSetupQueue, ^{
+		if (_notificationSetupDone) {
+			if (completion) {
+				completion(_notificationAuthorized);
+			}
+		} else {
+			if (completion) {
+				[_pendingCompletions addObject:completion];
+			}
+		}
+	});
+}
+
+/// Fire-and-forget: the UNUserNotificationCenter path is fully asynchronous.
+/// This function returns before the notification is actually delivered.
 void showNotification(const char *title, const char *message) {
 	@autoreleasepool {
 		NSString *nsTitle = title ? [NSString stringWithUTF8String:title] : @"Neru";
 		NSString *nsMessage = message ? [NSString stringWithUTF8String:message] : @"";
 
-		// Escape backslashes and double quotes for AppleScript string interpolation
-		nsTitle = [nsTitle stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
-		nsTitle = [nsTitle stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
-		nsMessage = [nsMessage stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
-		nsMessage = [nsMessage stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+		NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
 
-		// Launch osascript to post the notification
-		NSTask *task = [[NSTask alloc] init];
-		task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/osascript"];
-		task.arguments = @[
-			@"-e", [NSString stringWithFormat:@"display notification \"%@\" with title \"%@\"", nsMessage, nsTitle]
-		];
-
-		NSError *error = nil;
-		if (![task launchAndReturnError:&error]) {
-			NSLog(@"Neru: Failed to show notification: %@", error);
-			return;
-		}
-
-		[task waitUntilExit];
-		if (task.terminationStatus != 0) {
-			NSLog(@"Neru: osascript failed with status %d", task.terminationStatus);
+		if (bundleId != nil) {
+			showNotificationWithUNUserNotificationCenter(nsTitle, nsMessage);
+		} else {
+			NSLog(@"Neru: [%@] %@", nsTitle, nsMessage);
 		}
 	}
+}
+
+/// Generates a deterministic identifier for notification coalescing.
+/// Notifications with the same title AND message will replace each other instead
+/// of stacking, while distinct messages (even under the same title) are shown separately.
+/// Uses a SHA-256 hash to avoid ambiguous separator collisions between different
+/// title/message pairs (e.g. title="a.b" + message="c" vs title="a" + message="b.c").
+static NSString *notificationIdentifierForContent(NSString *title, NSString *message) {
+	NSString *combined = [NSString stringWithFormat:@"%@\x1F%@", title, message];
+	NSData *data = [combined dataUsingEncoding:NSUTF8StringEncoding];
+	unsigned char hash[CC_SHA256_DIGEST_LENGTH];
+	CC_SHA256(data.bytes, (CC_LONG)data.length, hash);
+	NSMutableString *hex = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
+	for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
+		[hex appendFormat:@"%02x", hash[i]];
+	}
+	return [NSString stringWithFormat:@"neru.notification.%@", hex];
+}
+
+static void showNotificationWithUNUserNotificationCenter(NSString *title, NSString *message) {
+	ensureNotificationSetup(^(BOOL authorized) {
+		if (!authorized) {
+			return;
+		}
+		UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
+		content.title = title;
+		content.body = message;
+		content.sound = [UNNotificationSound defaultSound];
+		// Use a deterministic identifier so repeated notifications with the same
+		// title and message (e.g. secure input warnings) replace each other instead of stacking.
+		NSString *identifier = notificationIdentifierForContent(title, message);
+		UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:identifier
+		                                                                      content:content
+		                                                                      trigger:nil];
+		[[UNUserNotificationCenter currentNotificationCenter]
+		    addNotificationRequest:request
+		     withCompletionHandler:^(NSError *_Nullable addError) {
+			     if (addError) {
+				     NSLog(@"Neru: Failed to add notification request: %@", addError);
+			     }
+		     }];
+	});
 }
