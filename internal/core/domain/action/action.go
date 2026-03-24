@@ -134,11 +134,31 @@ const (
 	// NameScroll represents the scroll action.
 	NameScroll Name = "scroll"
 
+	// NameScrollUp represents the scroll-up action.
+	NameScrollUp Name = "scroll_up"
+	// NameScrollDown represents the scroll-down action.
+	NameScrollDown Name = "scroll_down"
+	// NameScrollLeft represents the scroll-left action.
+	NameScrollLeft Name = "scroll_left"
+	// NameScrollRight represents the scroll-right action.
+	NameScrollRight Name = "scroll_right"
+	// NameGoTop represents the go-to-top action.
+	NameGoTop Name = "go_top"
+	// NameGoBottom represents the go-to-bottom action.
+	NameGoBottom Name = "go_bottom"
+	// NamePageUp represents the page-up action.
+	NamePageUp Name = "page_up"
+	// NamePageDown represents the page-down action.
+	NamePageDown Name = "page_down"
+
 	// PrefixExec is the prefix for shell command actions.
 	PrefixExec = "exec"
 )
 
-// knownNames is the cached slice of all supported action names to avoid heap allocation.
+// knownNames lists the action names that can be used as pending mode actions
+// (e.g. --action flag on hints/grid commands). Scroll sub-actions (scroll_up,
+// page_down, etc.) are intentionally excluded — they are IPC/CLI-only and are
+// recognized separately by IsScrollSubAction and IsKnownName.
 var knownNames = []Name{
 	NameLeftClick,
 	NameRightClick,
@@ -162,7 +182,7 @@ var directKeyBindingNames = []Name{
 	NameMoveMouseRelative,
 }
 
-// KnownNames returns a slice containing all supported action names.
+// KnownNames returns the mode-compatible action names (excludes scroll sub-actions).
 func KnownNames() []Name {
 	result := make([]Name, len(knownNames))
 	copy(result, knownNames)
@@ -170,7 +190,7 @@ func KnownNames() []Name {
 	return result
 }
 
-// SupportedNamesString returns a comma-separated string of supported actions for user messages.
+// SupportedNamesString returns a comma-separated string of mode-compatible action names for user messages.
 func SupportedNamesString() string {
 	names := KnownNames()
 
@@ -213,14 +233,19 @@ func IsDirectKeyBindingName(name Name) bool {
 		NameMouseUp,
 		NameMoveMouseRelative:
 		return true
-	case NameMoveMouse, NameScroll:
+	case NameMoveMouse, NameScroll,
+		NameScrollUp, NameScrollDown, NameScrollLeft, NameScrollRight,
+		NameGoTop, NameGoBottom, NamePageUp, NamePageDown:
 		return false
 	default:
 		return false
 	}
 }
 
-// IsKnownName determines whether the specified action name is supported.
+// IsKnownName determines whether the specified action name is recognized by the
+// application. This is a superset of the names in knownNames — it also includes
+// scroll sub-actions (scroll_up, page_down, etc.) which are IPC/CLI-only.
+// Use IsScrollSubAction to distinguish scroll sub-actions from mode-compatible names.
 func IsKnownName(name Name) bool {
 	switch name {
 	case NameLeftClick,
@@ -230,8 +255,26 @@ func IsKnownName(name Name) bool {
 		NameMouseUp,
 		NameMoveMouse,
 		NameMoveMouseRelative,
-		NameScroll:
+		NameScroll,
+		NameScrollUp, NameScrollDown, NameScrollLeft, NameScrollRight,
+		NameGoTop, NameGoBottom, NamePageUp, NamePageDown:
 		return true
+	default:
+		return false
+	}
+}
+
+// IsScrollSubAction reports whether the given name is a scroll sub-action
+// (scroll_up, scroll_down, etc.) that can be dispatched via the action CLI.
+func IsScrollSubAction(name string) bool {
+	switch Name(name) {
+	case NameScrollUp, NameScrollDown, NameScrollLeft, NameScrollRight,
+		NameGoTop, NameGoBottom, NamePageUp, NamePageDown:
+		return true
+	case NameLeftClick, NameRightClick, NameMiddleClick,
+		NameMouseDown, NameMouseUp,
+		NameMoveMouse, NameMoveMouseRelative, NameScroll:
+		return false
 	default:
 		return false
 	}
@@ -278,7 +321,12 @@ func (n Name) ToType() (Type, error) {
 		return TypeMoveMouse, nil
 	case NameMoveMouseRelative:
 		return TypeMoveMouseRelative, nil
-	case NameScroll:
+	// NOTE: scroll sub-actions map to the generic TypeScroll, which loses
+	// directional information. In practice these names are intercepted by
+	// IsScrollSubAction in the IPC handler before ToType is called.
+	case NameScroll,
+		NameScrollUp, NameScrollDown, NameScrollLeft, NameScrollRight,
+		NameGoTop, NameGoBottom, NamePageUp, NamePageDown:
 		return TypeScroll, nil
 	default:
 		return 0, derrors.Newf(derrors.CodeInvalidInput, "unknown action name: %s", n)
