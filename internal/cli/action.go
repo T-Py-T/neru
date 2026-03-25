@@ -68,6 +68,46 @@ var ActionMoveMouseCmd = BuildMoveMouseCommand()
 // ActionMoveMouseRelativeCmd is the move mouse relative action command.
 var ActionMoveMouseRelativeCmd = BuildMoveMouseRelativeCommand()
 
+// ActionResetCmd resets current mode state.
+var ActionResetCmd = BuildActionCommand(
+	"reset",
+	"Reset current mode input state",
+	`Reset the active mode state (grid input, recursive-grid depth, etc.) without exiting.`,
+	[]string{"reset"},
+)
+
+// ActionBackspaceCmd performs mode-aware backspace.
+var ActionBackspaceCmd = BuildActionCommand(
+	"backspace",
+	"Apply backspace in current mode",
+	`Apply mode-specific backspace behavior (hints input, grid input/subgrid, recursive-grid backtrack).`,
+	[]string{"backspace"},
+)
+
+// ActionWaitForModeExitCmd blocks until the current mode exits.
+var ActionWaitForModeExitCmd = BuildActionCommand(
+	"wait_for_mode_exit",
+	"Wait until mode exits",
+	`Block until the current mode exits and Neru returns to idle.`,
+	[]string{"wait_for_mode_exit"},
+)
+
+// ActionSaveCursorPosCmd saves cursor position for later restoration.
+var ActionSaveCursorPosCmd = BuildActionCommand(
+	"save_cursor_pos",
+	"Save current cursor position",
+	`Save the current cursor position so it can be restored later with restore_cursor.`,
+	[]string{"save_cursor_pos"},
+)
+
+// ActionRestoreCursorCmd restores previously saved cursor position.
+var ActionRestoreCursorCmd = BuildActionCommand(
+	"restore_cursor",
+	"Restore saved cursor position",
+	`Restore cursor position previously saved by save_cursor_pos.`,
+	[]string{"restore_cursor"},
+)
+
 // ActionScrollUpCmd scrolls up at the current cursor position.
 var ActionScrollUpCmd = BuildScrollActionCommand(
 	"scroll_up",
@@ -132,6 +172,11 @@ func init() {
 	ActionCmd.AddCommand(ActionMiddleClickCmd)
 	ActionCmd.AddCommand(ActionMoveMouseCmd)
 	ActionCmd.AddCommand(ActionMoveMouseRelativeCmd)
+	ActionCmd.AddCommand(ActionResetCmd)
+	ActionCmd.AddCommand(ActionBackspaceCmd)
+	ActionCmd.AddCommand(ActionWaitForModeExitCmd)
+	ActionCmd.AddCommand(ActionSaveCursorPosCmd)
+	ActionCmd.AddCommand(ActionRestoreCursorCmd)
 	ActionCmd.AddCommand(ActionScrollUpCmd)
 	ActionCmd.AddCommand(ActionScrollDownCmd)
 	ActionCmd.AddCommand(ActionScrollLeftCmd)

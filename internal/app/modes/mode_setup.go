@@ -1,92 +1,18 @@
 package modes
 
 import (
-	"context"
-	"image"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/core/domain"
 	"github.com/y3owk1n/neru/internal/core/domain/action"
-	derrors "github.com/y3owk1n/neru/internal/core/errors"
 	"github.com/y3owk1n/neru/internal/ui/overlay"
 )
 
 // CurrModeString returns the current mode as a string.
 func (h *Handler) CurrModeString() string {
 	return domain.ModeString(h.appState.CurrentMode())
-}
-
-// CaptureInitialCursorPosition captures the initial cursor position and screen bounds.
-func (h *Handler) CaptureInitialCursorPosition() {
-	if h.config == nil {
-		return
-	}
-
-	if !h.config.General.RestoreCursorPosition && !h.config.General.CenterCursorPosition {
-		return
-	}
-
-	if h.cursorState.IsCaptured() {
-		return
-	}
-
-	ctx := context.Background()
-
-	pos, posErr := h.actionService.CursorPosition(ctx)
-	if posErr != nil {
-		h.logger.Error("Failed to get cursor position", zap.Error(posErr))
-
-		return
-	}
-
-	var screenBounds image.Rectangle
-
-	if h.system != nil {
-		b, err := h.system.ScreenBounds(context.Background())
-		if err == nil {
-			screenBounds = b
-		} else if !derrors.IsNotSupported(err) {
-			h.logger.Warn("Failed to get screen bounds for cursor capture", zap.Error(err))
-		}
-	}
-
-	h.cursorState.Capture(pos, screenBounds)
-}
-
-// shouldRestoreCursorOnExit determines if the cursor should be restored on mode exit.
-func (h *Handler) shouldRestoreCursorOnExit() bool {
-	if h.config == nil {
-		return false
-	}
-
-	if !h.config.General.RestoreCursorPosition {
-		return false
-	}
-
-	if h.scroll != nil && h.scroll.Context != nil && h.scroll.Context.IsActive() {
-		return false
-	}
-
-	return h.cursorState.ShouldMoveCursor()
-}
-
-// shouldCenterCursorOnExit determines if the cursor should be centered on mode exit.
-func (h *Handler) shouldCenterCursorOnExit() bool {
-	if h.config == nil {
-		return false
-	}
-
-	if !h.config.General.CenterCursorPosition {
-		return false
-	}
-
-	if h.scroll != nil && h.scroll.Context != nil && h.scroll.Context.IsActive() {
-		return false
-	}
-
-	return h.cursorState.ShouldMoveCursor()
 }
 
 // overlaySwitch switches the overlay mode.
@@ -186,7 +112,7 @@ func (h *Handler) activateModeBase(
 		return action.TypeMoveMouse, false
 	}
 
-	// Prepare for mode activation (reset scroll, capture cursor)
+	// Prepare for mode activation (reset transient mode state)
 	h.prepareForModeActivation()
 
 	actionString := domain.ActionString(actionEnum)

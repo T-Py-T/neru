@@ -17,14 +17,8 @@ type Router struct {
 
 // KeyResult captures the results of key routing decisions in grid mode.
 type KeyResult struct {
-	exit        bool        // Exit key pressed -> exit mode
 	targetPoint image.Point // Complete coordinate entered
 	complete    bool        // Coordinate selection complete
-}
-
-// Exit returns whether to exit grid mode.
-func (kr *KeyResult) Exit() bool {
-	return kr.exit
 }
 
 // TargetPoint returns the target point for the complete coordinate.
@@ -45,24 +39,9 @@ func NewRouter(m *Manager, logger *zap.Logger) *Router {
 	}
 }
 
-// NewRouterWithExitKeys initializes a new grid router with custom exit keys.
-func NewRouterWithExitKeys(m *Manager, logger *zap.Logger, exitKeys []string) *Router {
-	return &Router{
-		Router:  domain.NewRouterWithExitKeys(logger, exitKeys),
-		manager: m,
-	}
-}
-
 // RouteKey processes a keypress and determines the appropriate action in grid mode.
 func (r *Router) RouteKey(key string) KeyResult {
 	var routeKeyResult KeyResult
-
-	// Check if key matches any configured exit keys
-	if r.IsExitKey(key) {
-		routeKeyResult.exit = true
-
-		return routeKeyResult
-	}
 
 	// Delegate coordinate input to the grid manager
 	if point, complete := r.manager.HandleInput(key); complete {

@@ -93,7 +93,7 @@ neru config dump         # Print active config as JSON (daemon required)
 neru doctor              # Run system diagnostics
 ```
 
-**Configure hotkeys:** See [CONFIGURATION.md — Hotkeys](CONFIGURATION.md#hotkeys)
+**Configure hotkeys:** See [CONFIGURATION.md](CONFIGURATION.md)
 
 ---
 
@@ -144,7 +144,7 @@ neru toggle-screen-share     # Toggle overlay visibility
 | 15.4+         | Limited (ScreenCaptureKit-based apps) |
 
 > [!NOTE]
-> To set the default visibility state on launch, use `hide_overlay_in_screen_share` in your config file. See [CONFIGURATION.md — General Settings](CONFIGURATION.md#hide_overlay_in_screen_share).
+> To set the default visibility state on launch, use `hide_overlay_in_screen_share` in your config file. See [CONFIGURATION.md](CONFIGURATION.md).
 
 ---
 
@@ -187,7 +187,7 @@ Neru provides four navigation modes. Each can be activated via CLI or a configur
 
 ### Using the `--action` flag
 
-All navigation modes accept an `--action` (or `-a`) flag to perform a click automatically when a position is selected:
+All navigation modes accept an `--action` (or `-a`) flag to perform an action automatically when a position is selected:
 
 ```
 neru hints --action left_click           # Left-click via hints
@@ -197,8 +197,12 @@ neru grid --action left_click            # Left-click via grid
 neru recursive_grid --action left_click  # Left-click via recursive-grid
 ```
 
+Supported `--action` values: `left_click`, `right_click`, `middle_click`, `mouse_down`, `mouse_up`, `move_mouse`, `move_mouse_relative`, `scroll`.
+
+Not allowed for mode `--action`: `reset`, `backspace`, `wait_for_mode_exit`, `save_cursor_pos`, `restore_cursor`, and scroll sub-actions (for example `scroll_up`, `page_down`, `go_top`).
+
 > [!TIP]
-> The `--action` flag is most useful in hints mode, where it mirrors a Vimium-style workflow: select a label and the action fires immediately. In grid and recursive-grid modes, the action triggers only after the final cell selection, which is less ergonomic. For those modes, consider using `auto_exit_actions` in your config file instead.
+> The `--action` flag is most useful in hints mode, where it mirrors a Vimium-style workflow: select a label and the action fires immediately. In grid and recursive-grid modes, the action triggers only after the final cell selection, which is less ergonomic. For those modes, prefer composing behavior in per-mode `custom_hotkeys` (for example: `["action left_click", "idle"]`).
 
 ### Using the `--repeat` flag
 
@@ -224,7 +228,7 @@ neru hints
 # Type the hint label (e.g. "as") to select an element
 ```
 
-See [CONFIGURATION.md — Hint Mode](CONFIGURATION.md#hint-mode) for customisation options.
+See [CONFIGURATION.md](CONFIGURATION.md) for customisation options.
 
 ---
 
@@ -237,7 +241,7 @@ neru grid
 # Type row+column labels (e.g. "ab") to select a position
 ```
 
-See [CONFIGURATION.md — Grid Mode](CONFIGURATION.md#grid-mode) for customisation options.
+See [CONFIGURATION.md](CONFIGURATION.md) for customisation options.
 
 ---
 
@@ -257,30 +261,29 @@ Recursive grid divides the screen into cells. Each keypress narrows the active a
 
 **All default keys:**
 
-| Key                    | Action                         |
-| ---------------------- | ------------------------------ |
-| `u`                    | Upper-left cell                |
-| `i`                    | Upper-right cell               |
-| `j`                    | Lower-left cell                |
-| `k`                    | Lower-right cell               |
-| `Backspace` / `Delete` | Go up one level                |
-| `Space`                | Reset to initial screen center |
-| `Esc`                  | Exit mode                      |
+| Key         | Action           |
+| ----------- | ---------------- |
+| `u`         | Upper-left cell  |
+| `i`         | Upper-right cell |
+| `j`         | Lower-left cell  |
+| `k`         | Lower-right cell |
+| `Space`     | Reset to center  |
+| `Backspace` | Go up one level  |
+| `Esc`       | Exit mode        |
 
 ```
 neru recursive_grid
 # Press u/i/j/k to narrow the selection
 # Press Backspace to go up one level
-# Press Space to reset to the initial center
 ```
 
-See [CONFIGURATION.md — Recursive Grid Mode](CONFIGURATION.md#recursive-grid-mode) for customisation options.
+See [CONFIGURATION.md](CONFIGURATION.md) for customisation options.
 
 ---
 
 ### Scroll Mode
 
-Vim-style scrolling at the current cursor position. Keys are fully configurable. Action key bindings (left click, mouse movement, etc.) are also available in scroll mode.
+Vim-style scrolling at the current cursor position. Keys are fully configurable through `scroll.custom_hotkeys`.
 
 **Default scroll keys:**
 
@@ -293,7 +296,7 @@ Vim-style scrolling at the current cursor position. Keys are fully configurable.
 | `Shift+G` | Jump to bottom      |
 | `Esc`     | Exit scroll mode    |
 
-Action keys (e.g. `Shift+L` for left click, arrow keys for mouse movement) work in scroll mode just like in hints and grid modes.
+Action hotkeys (for example `Shift+L` for click and arrow-key mouse movement) can be defined in `scroll.custom_hotkeys`, just like other modes.
 
 ```
 neru scroll
@@ -301,13 +304,15 @@ neru scroll
 # Use arrow keys to nudge cursor, Shift+L to click
 ```
 
-See [CONFIGURATION.md — Scroll Mode](CONFIGURATION.md#scroll-mode) for configuring step sizes and custom key bindings.
+See [CONFIGURATION.md](CONFIGURATION.md) for configuring step sizes and mode custom hotkeys.
 
 ---
 
 ## Action Commands
 
-Perform mouse actions at the current cursor position. These work as immediate one-shot commands — no navigation mode required.
+### Stateless Actions
+
+These actions do not depend on any active mode and can be used as one-shot commands.
 
 ```
 neru action left_click          # Left click
@@ -315,6 +320,26 @@ neru action right_click         # Right click
 neru action middle_click        # Middle click
 neru action mouse_down          # Hold mouse button
 neru action mouse_up            # Release mouse button
+neru action save_cursor_pos     # Save current cursor position
+neru action restore_cursor      # Restore saved cursor position
+neru action scroll_up           # Scroll up at cursor
+neru action scroll_down         # Scroll down at cursor
+neru action scroll_left         # Scroll left at cursor
+neru action scroll_right        # Scroll right at cursor
+neru action page_up             # Half-page up at cursor
+neru action page_down           # Half-page down at cursor
+neru action go_top              # Jump to top at cursor
+neru action go_bottom           # Jump to bottom at cursor
+```
+
+### Mode-Aware Actions
+
+These actions depend on the current mode and are primarily useful inside `custom_hotkeys` arrays.
+
+```
+neru action reset               # Reset state in current mode
+neru action backspace           # Mode-aware backspace
+neru action wait_for_mode_exit  # Block until mode exits to idle
 ```
 
 ### Modifier keys

@@ -2,13 +2,19 @@ package app
 
 import (
 	"context"
+	"image"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
+	"github.com/y3owk1n/neru/internal/app/modes"
 	"github.com/y3owk1n/neru/internal/app/services"
+	"github.com/y3owk1n/neru/internal/core/domain"
 	"github.com/y3owk1n/neru/internal/core/domain/action"
+	"github.com/y3owk1n/neru/internal/core/domain/state"
 	"github.com/y3owk1n/neru/internal/core/infra/ipc"
 )
 
@@ -16,18 +22,36 @@ import (
 type IPCControllerActions struct {
 	actionService *services.ActionService
 	scrollService *services.ScrollService
+	modesHandler  *modes.Handler
+	appState      *state.AppState
 	logger        *zap.Logger
+
+	savedCursorMu      sync.RWMutex
+	savedCursorPos     image.Point
+	savedCursorPresent bool
 }
+
+const modeExitPollInterval = 10 * time.Millisecond
+
+// modeExitTimeout is the maximum time wait_for_mode_exit will block before
+// giving up. This prevents goroutine leaks when the mode never exits (e.g.
+// the user abandons the workflow). 5 minutes is generous for any interactive
+// mode session.
+const modeExitTimeout = 5 * time.Minute
 
 // NewIPCControllerActions creates a new action command handler.
 func NewIPCControllerActions(
 	actionService *services.ActionService,
 	scrollService *services.ScrollService,
+	modesHandler *modes.Handler,
+	appState *state.AppState,
 	logger *zap.Logger,
 ) *IPCControllerActions {
 	return &IPCControllerActions{
 		actionService: actionService,
 		scrollService: scrollService,
+		modesHandler:  modesHandler,
+		appState:      appState,
 		logger:        logger,
 	}
 }
@@ -204,6 +228,26 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 		return h.handleScrollAction(ctx, actionName, parsed)
 	}
 
+	if action.IsResetAction(actionName) {
+		return h.handleResetAction()
+	}
+
+	if action.IsBackspaceAction(actionName) {
+		return h.handleBackspaceAction()
+	}
+
+	if action.IsWaitForModeExitAction(actionName) {
+		return h.handleWaitForModeExitAction(ctx, parsed)
+	}
+
+	if action.IsSaveCursorPosAction(actionName) {
+		return h.handleSaveCursorPosAction(ctx, parsed)
+	}
+
+	if action.IsRestoreCursorAction(actionName) {
+		return h.handleRestoreCursorAction(ctx, parsed)
+	}
+
 	if h.actionService == nil {
 		return ipc.Response{
 			Success: false,
@@ -369,7 +413,7 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 			zap.Int("dy", parsed.deltaY),
 		)
 
-		err := h.actionService.MoveMouseRelative(ctx, parsed.deltaX, parsed.deltaY, false)
+		err := h.actionService.MoveMouseRelative(ctx, parsed.deltaX, parsed.deltaY, true)
 		if err != nil {
 			h.logger.Error("Failed to move mouse relative", zap.Error(err))
 
@@ -427,6 +471,167 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 		Message: actionName + " performed",
 		Code:    ipc.CodeOK,
 	}
+}
+
+func (h *IPCControllerActions) handleResetAction() ipc.Response {
+	if h.modesHandler == nil {
+		return ipc.Response{
+			Success: false,
+			Message: "modes handler not available",
+			Code:    ipc.CodeActionFailed,
+		}
+	}
+
+	h.modesHandler.ResetCurrentMode()
+
+	return ipc.Response{Success: true, Message: "mode reset", Code: ipc.CodeOK}
+}
+
+func (h *IPCControllerActions) handleBackspaceAction() ipc.Response {
+	if h.modesHandler == nil {
+		return ipc.Response{
+			Success: false,
+			Message: "modes handler not available",
+			Code:    ipc.CodeActionFailed,
+		}
+	}
+
+	h.modesHandler.BackspaceCurrentMode()
+
+	return ipc.Response{Success: true, Message: "mode backspace", Code: ipc.CodeOK}
+}
+
+func hasUnsupportedFlags(parsed parsedActionArgs) bool {
+	return parsed.hasX || parsed.hasY || parsed.hasDX || parsed.hasDY ||
+		parsed.hasCenter || parsed.hasMonitor || parsed.modifierStr != ""
+}
+
+func (h *IPCControllerActions) handleWaitForModeExitAction(
+	ctx context.Context,
+	parsed parsedActionArgs,
+) ipc.Response {
+	if hasUnsupportedFlags(parsed) {
+		return ipc.Response{
+			Success: false,
+			Message: "wait_for_mode_exit does not support action flags",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
+	if h.appState == nil {
+		return ipc.Response{
+			Success: false,
+			Message: "app state not available",
+			Code:    ipc.CodeActionFailed,
+		}
+	}
+
+	deadline := time.After(modeExitTimeout)
+
+	ticker := time.NewTicker(modeExitPollInterval)
+	defer ticker.Stop()
+
+	for h.appState.CurrentMode() != domain.ModeIdle {
+		select {
+		case <-ctx.Done():
+			return ipc.Response{
+				Success: false,
+				Message: "wait_for_mode_exit canceled: " + ctx.Err().Error(),
+				Code:    ipc.CodeActionFailed,
+			}
+		case <-deadline:
+			return ipc.Response{
+				Success: false,
+				Message: "wait_for_mode_exit timed out after " + modeExitTimeout.String(),
+				Code:    ipc.CodeActionFailed,
+			}
+		case <-ticker.C:
+		}
+	}
+
+	return ipc.Response{Success: true, Message: "mode exited", Code: ipc.CodeOK}
+}
+
+func (h *IPCControllerActions) handleSaveCursorPosAction(
+	ctx context.Context,
+	parsed parsedActionArgs,
+) ipc.Response {
+	if hasUnsupportedFlags(parsed) {
+		return ipc.Response{
+			Success: false,
+			Message: "save_cursor_pos does not support action flags",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
+	if h.actionService == nil {
+		return ipc.Response{
+			Success: false,
+			Message: "action service not available",
+			Code:    ipc.CodeActionFailed,
+		}
+	}
+
+	pos, posErr := h.actionService.CursorPosition(ctx)
+	if posErr != nil {
+		return ipc.Response{
+			Success: false,
+			Message: "failed to capture cursor position: " + posErr.Error(),
+			Code:    ipc.CodeActionFailed,
+		}
+	}
+
+	h.savedCursorMu.Lock()
+	h.savedCursorPos = pos
+	h.savedCursorPresent = true
+	h.savedCursorMu.Unlock()
+
+	return ipc.Response{Success: true, Message: "cursor position saved", Code: ipc.CodeOK}
+}
+
+func (h *IPCControllerActions) handleRestoreCursorAction(
+	ctx context.Context,
+	parsed parsedActionArgs,
+) ipc.Response {
+	if hasUnsupportedFlags(parsed) {
+		return ipc.Response{
+			Success: false,
+			Message: "restore_cursor does not support action flags",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
+	if h.actionService == nil {
+		return ipc.Response{
+			Success: false,
+			Message: "action service not available",
+			Code:    ipc.CodeActionFailed,
+		}
+	}
+
+	h.savedCursorMu.RLock()
+	initialPos := h.savedCursorPos
+	present := h.savedCursorPresent
+	h.savedCursorMu.RUnlock()
+
+	if !present {
+		return ipc.Response{Success: true, Message: "no saved cursor position", Code: ipc.CodeOK}
+	}
+
+	moveErr := h.actionService.MoveCursorToPoint(ctx, initialPos)
+	if moveErr != nil {
+		return ipc.Response{
+			Success: false,
+			Message: "failed to restore cursor position: " + moveErr.Error(),
+			Code:    ipc.CodeActionFailed,
+		}
+	}
+
+	h.savedCursorMu.Lock()
+	h.savedCursorPresent = false
+	h.savedCursorMu.Unlock()
+
+	return ipc.Response{Success: true, Message: "cursor restored", Code: ipc.CodeOK}
 }
 
 // handleScrollAction dispatches a scroll sub-action (scroll_up, page_down, etc.)

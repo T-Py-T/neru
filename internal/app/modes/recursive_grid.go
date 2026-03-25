@@ -113,8 +113,6 @@ func (h *Handler) activateRecursiveGridModeWithAction(actionStr *string, repeat 
 
 // initializeRecursiveGridManager initializes the recursive-grid manager.
 func (h *Handler) initializeRecursiveGridManager(screenBounds image.Rectangle) {
-	exitKeys := h.config.ResolvedExitKeys("recursive_grid")
-
 	// Ensure recursiveGrid component is initialized
 	if h.recursiveGrid == nil {
 		h.recursiveGrid = &components.RecursiveGridComponent{
@@ -137,9 +135,6 @@ func (h *Handler) initializeRecursiveGridManager(screenBounds image.Rectangle) {
 	h.recursiveGrid.Manager = recursivegrid.NewManagerWithLayers(
 		screenBounds,
 		h.config.RecursiveGrid.Keys,
-		h.config.RecursiveGrid.ResetKey,
-		h.config.RecursiveGrid.BackspaceKey,
-		exitKeys,
 		h.config.RecursiveGrid.MinSizeWidth,
 		h.config.RecursiveGrid.MinSizeHeight,
 		h.config.RecursiveGrid.MaxDepth,
@@ -165,51 +160,6 @@ func (h *Handler) initializeRecursiveGridManager(screenBounds image.Rectangle) {
 func (h *Handler) handleRecursiveGridKey(key string) {
 	ctx := context.Background()
 
-	// Handle direct action keys first
-	actionName, wasHandled, err := h.actionService.HandleDirectActionKey(
-		ctx,
-		key,
-		h.stickyModifiers(),
-	)
-	if wasHandled {
-		if err != nil {
-			h.logger.Error("Failed to handle direct action key", zap.Error(err))
-
-			return
-		}
-
-		var (
-			pendingAction *string
-			repeat        bool
-		)
-
-		if h.recursiveGrid != nil && h.recursiveGrid.Context != nil {
-			pendingAction = h.recursiveGrid.Context.PendingAction()
-			repeat = h.recursiveGrid.Context.Repeat()
-		}
-
-		if h.shouldAutoExit(h.config.RecursiveGrid.AutoExitActions, actionName) {
-			if !h.actionService.IsMoveMouseKey(key) {
-				h.cursorState.MarkActionPerformed()
-			}
-
-			h.exitModeLocked()
-
-			return
-		}
-
-		if h.repeatPendingDirectAction(
-			actionName,
-			pendingAction,
-			repeat,
-			func() { h.activateRecursiveGridModeWithAction(pendingAction, repeat) },
-		) {
-			return
-		}
-
-		return
-	}
-
 	if h.recursiveGrid == nil || h.recursiveGrid.Manager == nil {
 		h.logger.Warn("Recursive-grid manager is nil - ignoring key press")
 
@@ -217,13 +167,7 @@ func (h *Handler) handleRecursiveGridKey(key string) {
 	}
 
 	// Process the key through the manager
-	center, completed, shouldExit := h.recursiveGrid.Manager.HandleInput(key)
-
-	if shouldExit {
-		h.exitModeLocked()
-
-		return
-	}
+	center, completed := h.recursiveGrid.Manager.HandleInput(key)
 
 	if completed {
 		// Selection is complete - move cursor and execute pending action if any

@@ -114,6 +114,8 @@ func (a *App) registerHotkeys() {
 
 // executeHotkeyAction executes a hotkey action, which can be either a shell command or an IPC command.
 func (a *App) executeHotkeyAction(key, actionStr string) error {
+	actionStr = strings.TrimSpace(actionStr)
+
 	if actionStr == action.PrefixExec || strings.HasPrefix(actionStr, action.PrefixExec+" ") {
 		return a.executeShellCommand(key, actionStr)
 	}

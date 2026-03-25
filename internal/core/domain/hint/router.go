@@ -15,13 +15,7 @@ type Router struct {
 
 // RouteResult contains the result of routing a key press in hint mode.
 type RouteResult struct {
-	exit      bool       // Whether to exit hint mode
 	exactHint *Interface // The exact matched hint (domain hint)
-}
-
-// Exit returns whether to exit hint mode.
-func (rr *RouteResult) Exit() bool {
-	return rr.exit
 }
 
 // ExactHint returns the exact matched hint.
@@ -37,21 +31,8 @@ func NewRouter(manager *Manager, logger *zap.Logger) *Router {
 	}
 }
 
-// NewRouterWithExitKeys creates a new hint router with custom exit keys.
-func NewRouterWithExitKeys(manager *Manager, logger *zap.Logger, exitKeys []string) *Router {
-	return &Router{
-		Router:  domain.NewRouterWithExitKeys(logger, exitKeys),
-		manager: manager,
-	}
-}
-
 // RouteKey processes a key press and returns the routing result.
 func (r *Router) RouteKey(key string) RouteResult {
-	// Check if key matches any configured exit keys
-	if r.IsExitKey(key) {
-		return RouteResult{exit: true}
-	}
-
 	// Process input through manager
 	hint, exactMatch := r.manager.HandleInput(key)
 	if exactMatch {
@@ -61,14 +42,10 @@ func (r *Router) RouteKey(key string) RouteResult {
 		}
 
 		return RouteResult{
-			exit:      false,
 			exactHint: hint,
 		}
 	}
 
 	// No exact match, continue in hint mode
-	return RouteResult{
-		exit:      false,
-		exactHint: nil,
-	}
+	return RouteResult{}
 }
