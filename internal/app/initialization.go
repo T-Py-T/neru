@@ -10,7 +10,6 @@ import (
 	"github.com/y3owk1n/neru/internal/app/services/modeindicator"
 	"github.com/y3owk1n/neru/internal/app/services/stickyindicator"
 	"github.com/y3owk1n/neru/internal/config"
-	"github.com/y3owk1n/neru/internal/core/domain"
 	domainHint "github.com/y3owk1n/neru/internal/core/domain/hint"
 	derrors "github.com/y3owk1n/neru/internal/core/errors"
 	accessibilityAdapter "github.com/y3owk1n/neru/internal/core/infra/accessibility"
@@ -201,32 +200,19 @@ func initializeServices(
 // processHotkeyBindings processes and filters hotkey bindings from configuration.
 func processHotkeyBindings(config *config.Config, logger *zap.Logger) []string {
 	keys := make([]string, 0, len(config.Hotkeys.Bindings))
-	for key, value := range config.Hotkeys.Bindings {
-		// Skip empty keys or values
-		if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+	for key, actions := range config.Hotkeys.Bindings {
+		// Skip empty keys or empty action arrays
+		if strings.TrimSpace(key) == "" || len(actions) == 0 {
 			logger.Warn(
 				"Skipping empty hotkey binding",
 				zap.String("key", key),
-				zap.String("value", value),
+				zap.Strings("actions", actions),
 			)
 
 			continue
 		}
 
-		mode := value
-		if parts := strings.Split(value, " "); len(parts) > 0 {
-			mode = parts[0]
-		}
-
-		if mode == domain.ModeString(domain.ModeHints) && !config.Hints.Enabled {
-			continue
-		}
-
-		if mode == domain.ModeString(domain.ModeGrid) && !config.Grid.Enabled {
-			continue
-		}
-
-		if mode == domain.ModeString(domain.ModeRecursiveGrid) && !config.RecursiveGrid.Enabled {
+		if actionsReferenceDisabledMode(actions, config) {
 			continue
 		}
 

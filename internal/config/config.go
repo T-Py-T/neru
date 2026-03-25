@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -11,6 +12,42 @@ import (
 
 	derrors "github.com/y3owk1n/neru/internal/core/errors"
 )
+
+// StringOrStringArray is a type that can unmarshal from either a TOML string
+// or a TOML array of strings. Used for backward compatibility.
+type StringOrStringArray []string
+
+// UnmarshalTOML implements custom unmarshaling for TOML compatibility.
+// It accepts both single string values and arrays of strings.
+func (s *StringOrStringArray) UnmarshalTOML(value any) error {
+	switch val := value.(type) {
+	case string:
+		*s = []string{val}
+
+	case []any:
+		*s = make([]string, 0, len(val))
+		for _, a := range val {
+			actionStr, ok := a.(string)
+			if !ok {
+				return derrors.Newf(derrors.CodeInvalidConfig, "expected string, got %T", a)
+			}
+
+			*s = append(*s, actionStr)
+		}
+
+	case []string:
+		*s = val
+
+	default:
+		return derrors.Newf(
+			derrors.CodeInvalidConfig,
+			"cannot unmarshal %T into StringOrStringArray",
+			value,
+		)
+	}
+
+	return nil
+}
 
 // Accessibility role constants.
 const (
@@ -339,7 +376,7 @@ type ActionKeyBindingsCfg struct {
 // Config represents the complete application configuration structure.
 type Config struct {
 	General         GeneralConfig         `json:"general"         toml:"general"`
-	Hotkeys         HotkeysConfig         `json:"hotkeys"         toml:"hotkeys"`
+	Hotkeys         HotkeysConfig         `json:"hotkeys"         toml:"-"`
 	Hints           HintsConfig           `json:"hints"           toml:"hints"`
 	Grid            GridConfig            `json:"grid"            toml:"grid"`
 	RecursiveGrid   RecursiveGridConfig   `json:"recursiveGrid"   toml:"recursive_grid"`
@@ -447,8 +484,14 @@ type HotkeysConfig struct {
 	// Supported TOML format (preferred):
 	// [hotkeys]
 	// "Cmd+Shift+Space" = "hints"
-	// Values are strings. The special exec prefix is supported: "exec /usr/bin/say hi"
-	Bindings map[string]string `json:"bindings" toml:"bindings"`
+	// Values can be a single string or an array of strings:
+	// "PageUp" = ["action go_top", "action scroll_down"]
+	// The special exec prefix is supported: "exec /usr/bin/say hi"
+	// Bindings is never populated by the TOML struct decoder — it is always
+	// overwritten by the raw-map processing in service.go.  Both this field
+	// and the parent Config.Hotkeys are tagged toml:"-" so the encoder skips
+	// them entirely; Save writes the flat [hotkeys] section manually instead.
+	Bindings map[string][]string `json:"bindings" toml:"-"`
 }
 
 // ScrollConfig defines the behavior and appearance settings for scroll mode.
@@ -461,7 +504,7 @@ type ScrollConfig struct {
 
 	KeyBindings map[string][]string `json:"keyBindings" toml:"key_bindings"`
 
-	CustomHotkeys map[string]string `json:"customHotkeys" toml:"custom_hotkeys"`
+	CustomHotkeys map[string]StringOrStringArray `json:"customHotkeys" toml:"-"`
 }
 
 // HintsUI defines the visual/appearance settings for hints mode.
@@ -508,7 +551,7 @@ type HintsConfig struct {
 
 	AdditionalAXSupport AdditionalAXSupport `json:"additionalAxSupport" toml:"additional_ax_support"`
 
-	CustomHotkeys map[string]string `json:"customHotkeys" toml:"custom_hotkeys"`
+	CustomHotkeys map[string]StringOrStringArray `json:"customHotkeys" toml:"-"`
 }
 
 // GridUI defines the visual/appearance settings for grid mode.
@@ -550,7 +593,7 @@ type GridConfig struct {
 	EnableGC        bool   `json:"enableGc"        toml:"enable_gc"`
 	ResetKey        string `json:"resetKey"        toml:"reset_key"`
 
-	CustomHotkeys map[string]string `json:"customHotkeys" toml:"custom_hotkeys"`
+	CustomHotkeys map[string]StringOrStringArray `json:"customHotkeys" toml:"-"`
 }
 
 // RecursiveGridUI defines the visual/appearance settings for recursive-grid mode.
@@ -610,7 +653,7 @@ type RecursiveGridConfig struct {
 	// Depths not listed here use the top-level GridCols/GridRows/Keys.
 	Layers []RecursiveGridLayerConfig `json:"layers" toml:"layers"`
 
-	CustomHotkeys map[string]string `json:"customHotkeys" toml:"custom_hotkeys"`
+	CustomHotkeys map[string]StringOrStringArray `json:"customHotkeys" toml:"-"`
 }
 
 // AllKeysIncludingLayers returns a combined string of all unique keys from the
@@ -909,6 +952,64 @@ func (c *Config) ValidateModeIndicator() error {
 	return nil
 }
 
+// writeStringOrStringArrayMap writes a map[string]StringOrStringArray (or
+// map[string][]string) as a TOML table to the given file.  Single-action
+// entries are emitted as plain strings for backward compatibility; multi-action
+// entries use TOML array syntax.  The section header (e.g. "[scroll.custom_hotkeys]")
+// is always written so that an empty map round-trips correctly.
+func writeStringOrStringArrayMap(
+	file *os.File,
+	sectionHeader string,
+	_map map[string]StringOrStringArray,
+) error {
+	_, err := fmt.Fprintf(file, "\n[%s]\n", sectionHeader)
+	if err != nil {
+		return derrors.Wrap(
+			err, derrors.CodeConfigIOFailed, "failed to write section header",
+		)
+	}
+
+	if len(_map) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(_map))
+	for k := range _map {
+		keys = append(keys, k)
+	}
+
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		actions := _map[key]
+
+		if len(actions) == 0 {
+			continue
+		}
+
+		var line string
+		if len(actions) == 1 {
+			line = fmt.Sprintf("%q = %q", key, actions[0])
+		} else {
+			quoted := make([]string, 0, len(actions))
+			for _, a := range actions {
+				quoted = append(quoted, fmt.Sprintf("%q", a))
+			}
+
+			line = fmt.Sprintf("%q = [%s]", key, strings.Join(quoted, ", "))
+		}
+
+		_, err := fmt.Fprintln(file, line)
+		if err != nil {
+			return derrors.Wrap(
+				err, derrors.CodeConfigIOFailed, "failed to write binding",
+			)
+		}
+	}
+
+	return nil
+}
+
 // Save saves the configuration to the specified path.
 func (c *Config) Save(path string) error {
 	// Create directory if it doesn't exist
@@ -938,12 +1039,85 @@ func (c *Config) Save(path string) error {
 		}
 	}()
 
-	// Encode to TOML
+	// Encode the main config struct to TOML.
+	// The Hotkeys field is tagged toml:"-" so the encoder skips it entirely;
+	// we append the flat [hotkeys] section manually afterwards.
 	encoder := toml.NewEncoder(file)
 
 	encodeErr := encoder.Encode(c)
 	if encodeErr != nil {
 		return derrors.Wrap(encodeErr, derrors.CodeSerializationFailed, "failed to encode config")
+	}
+
+	// Always write the [hotkeys] section so that LoadWithValidation sees
+	// raw["hotkeys"] and clears the default bindings.  An empty section
+	// (no keys) is the documented way to disable all hotkeys.
+	_, err := fmt.Fprintln(file, "\n[hotkeys]")
+	if err != nil {
+		return derrors.Wrap(
+			err, derrors.CodeConfigIOFailed, "failed to write hotkeys section",
+		)
+	}
+
+	if len(c.Hotkeys.Bindings) > 0 {
+		// Sort keys for deterministic output.
+		keys := make([]string, 0, len(c.Hotkeys.Bindings))
+		for k := range c.Hotkeys.Bindings {
+			keys = append(keys, k)
+		}
+
+		sort.Strings(keys)
+
+		for _, key := range keys {
+			actions := c.Hotkeys.Bindings[key]
+
+			if len(actions) == 0 {
+				continue
+			}
+
+			var line string
+			if len(actions) == 1 {
+				// Single action: emit as a plain string for backward compat.
+				line = fmt.Sprintf("%q = %q", key, actions[0])
+			} else {
+				// Multiple actions: emit as a TOML array.
+				quoted := make([]string, 0, len(actions))
+				for _, a := range actions {
+					quoted = append(quoted, fmt.Sprintf("%q", a))
+				}
+
+				line = fmt.Sprintf("%q = [%s]", key, strings.Join(quoted, ", "))
+			}
+
+			_, err := fmt.Fprintln(file, line)
+			if err != nil {
+				return derrors.Wrap(
+					err, derrors.CodeConfigIOFailed, "failed to write hotkey binding",
+				)
+			}
+		}
+	}
+
+	// Write per-mode [<mode>.custom_hotkeys] sections.
+	// These fields are tagged toml:"-" so the encoder skips them; we write
+	// them manually to preserve the single-string format for single-action
+	// entries (backward compatibility).
+	customHotkeysSections := []struct {
+		header  string
+		hotkeys map[string]StringOrStringArray
+	}{
+		{"scroll.custom_hotkeys", c.Scroll.CustomHotkeys},
+		{"hints.custom_hotkeys", c.Hints.CustomHotkeys},
+		{"grid.custom_hotkeys", c.Grid.CustomHotkeys},
+		{"recursive_grid.custom_hotkeys", c.RecursiveGrid.CustomHotkeys},
+	}
+	for _, section := range customHotkeysSections {
+		if len(section.hotkeys) > 0 {
+			err = writeStringOrStringArrayMap(file, section.header, section.hotkeys)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	return closeErr
@@ -979,7 +1153,7 @@ func (c *Config) ResolvedExitKeys(modeName string) []string {
 // CustomHotkeysForMode returns the custom_hotkeys map for the given mode name.
 // These are per-mode hotkeys that are only active while that mode is active,
 // using the same action syntax as [hotkeys] (e.g. "exec ...", "action ...", "hints", etc.).
-func (c *Config) CustomHotkeysForMode(modeName string) map[string]string {
+func (c *Config) CustomHotkeysForMode(modeName string) map[string]StringOrStringArray {
 	switch modeName {
 	case modeNameHints:
 		return c.Hints.CustomHotkeys

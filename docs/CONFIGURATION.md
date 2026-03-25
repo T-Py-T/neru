@@ -225,6 +225,26 @@ Global hotkeys trigger Neru navigation modes from anywhere on screen.
 "Cmd+Alt+N" = "exec osascript -e 'display notification \"Hello!\" with title \"Neru\"'"
 ```
 
+### Multiple actions per hotkey
+
+You can bind multiple actions to a single hotkey by using an array:
+
+```toml
+[hotkeys]
+"PageUp" = ["action go_top", "action scroll_down"]
+"Cmd+Shift+D" = ["hints", "exec echo 'hints activated'"]
+```
+
+Actions are executed sequentially in order. If an action fails, the error is logged but the remaining actions still run. This is useful when you want to perform multiple operations with a single hotkey, such as scrolling and then performing an action.
+
+> [!WARNING]
+> Shell commands (`exec …`) **block** until they finish (or the 30-second timeout expires). In a multi-action binding like `["exec sleep 10", "hints"]`, the `hints` action won't run until the shell command completes. Place `exec` actions last when possible, or run long-running commands in the background with `"exec my-script &"`.
+
+> [!NOTE]
+> If **any** action in a multi-action binding references a disabled mode (e.g. `hints` when `hints.enabled = false`), the **entire** binding is skipped — including non-mode actions like `exec`. Split them into separate hotkeys if you need the other actions to run independently.
+
+Both `[hotkeys]` and `[<mode>.custom_hotkeys]` support this array syntax.
+
 ### Disabling all hotkeys
 
 To disable **all** built-in hotkeys (e.g. when using an external hotkey daemon like skhd), provide an empty `[hotkeys]` section:

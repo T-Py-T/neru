@@ -430,30 +430,26 @@ func (a *App) printStartupInfo() {
 
 	cfg := a.configSnapshot()
 
-	for key, value := range cfg.Hotkeys.Bindings {
-		mode := value
-		if parts := strings.Split(value, " "); len(parts) > 0 {
-			mode = parts[0]
-		}
-
-		if mode == domain.ModeString(domain.ModeHints) && !cfg.Hints.Enabled {
+	for key, actions := range cfg.Hotkeys.Bindings {
+		if len(actions) == 0 {
 			continue
 		}
 
-		if mode == domain.ModeString(domain.ModeGrid) && !cfg.Grid.Enabled {
+		if actionsReferenceDisabledMode(actions, cfg) {
 			continue
 		}
 
-		if mode == domain.ModeString(domain.ModeRecursiveGrid) && !cfg.RecursiveGrid.Enabled {
-			continue
-		}
-
-		toShow := value
-		if strings.HasPrefix(value, "exec") {
-			runes := []rune(value)
+		// For display, show first action or truncate if exec
+		toShow := actions[0]
+		if strings.HasPrefix(toShow, "exec") {
+			runes := []rune(toShow)
 			if len(runes) > MaxExecDisplayLength {
-				toShow = string(runes[:30]) + "..."
+				toShow = string(runes[:MaxExecDisplayLength]) + "..."
 			}
+		}
+
+		if len(actions) > 1 {
+			toShow = fmt.Sprintf("%s (+%d more)", toShow, len(actions)-1)
 		}
 
 		a.logger.Info(fmt.Sprintf("  %s: %s", key, toShow))

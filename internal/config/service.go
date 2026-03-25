@@ -145,31 +145,130 @@ func (s *Service) LoadWithValidation(path string) *LoadResult {
 	// default bindings so that external hotkey daemons (e.g. skhd) can manage
 	// shortcuts without conflicts. Modes remain accessible via CLI commands.
 	if hot, ok := raw["hotkeys"]; ok {
-		if hotMap, ok := hot.(map[string]any); ok {
-			// Clear default bindings when user provides hotkeys config
-			configResult.Config.Hotkeys.Bindings = map[string]string{}
+		hotMap, isTable := hot.(map[string]any)
+		if !isTable {
+			configResult.ValidationError = derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"[hotkeys] must be a TOML table, got %T",
+				hot,
+			)
+			configResult.Config = DefaultConfig()
 
-			for key, value := range hotMap {
-				str, ok := value.(string)
-				if !ok {
-					configResult.ValidationError = derrors.Newf(
-						derrors.CodeInvalidConfig,
-						"hotkeys.%s must be a string action",
-						key,
-					)
-					configResult.Config = DefaultConfig()
+			s.logger.Warn("Invalid hotkeys section type",
+				zap.Any("value", hot),
+				zap.Error(configResult.ValidationError))
 
-					s.logger.Warn("Invalid hotkey configuration",
-						zap.String("key", key),
-						zap.Any("value", value),
-						zap.Error(configResult.ValidationError))
+			return configResult
+		}
 
-					return configResult
+		// Clear default bindings when user provides hotkeys config
+		configResult.Config.Hotkeys.Bindings = map[string][]string{}
+
+		for key, value := range hotMap {
+			switch v := value.(type) {
+			case string:
+				configResult.Config.Hotkeys.Bindings[key] = []string{v}
+			case []any:
+				actions := make([]string, 0, len(v))
+				for _, a := range v {
+					actionStr, ok := a.(string)
+					if !ok {
+						configResult.ValidationError = derrors.Newf(
+							derrors.CodeInvalidConfig,
+							"hotkeys.%s must be a string or array of strings",
+							key,
+						)
+						configResult.Config = DefaultConfig()
+
+						s.logger.Warn("Invalid hotkey configuration",
+							zap.String("key", key),
+							zap.Any("value", value),
+							zap.Error(configResult.ValidationError))
+
+						return configResult
+					}
+
+					actions = append(actions, actionStr)
 				}
 
-				configResult.Config.Hotkeys.Bindings[key] = str
+				configResult.Config.Hotkeys.Bindings[key] = actions
+			default:
+				configResult.ValidationError = derrors.Newf(
+					derrors.CodeInvalidConfig,
+					"hotkeys.%s must be a string or array of strings",
+					key,
+				)
+				configResult.Config = DefaultConfig()
+
+				s.logger.Warn("Invalid hotkey configuration",
+					zap.String("key", key),
+					zap.Any("value", value),
+					zap.Error(configResult.ValidationError))
+
+				return configResult
 			}
 		}
+	}
+
+	// Process per-mode custom_hotkeys from raw map.
+	// These fields are tagged toml:"-" (to prevent the encoder from emitting
+	// arrays for single-action entries), so the struct decoder skips them.
+	// We populate them manually from the raw map here.
+	type modeCustomHotkeys struct {
+		modeKey string
+		dest    *map[string]StringOrStringArray
+	}
+
+	modeHotkeys := []modeCustomHotkeys{
+		{"scroll", &configResult.Config.Scroll.CustomHotkeys},
+		{"hints", &configResult.Config.Hints.CustomHotkeys},
+		{"grid", &configResult.Config.Grid.CustomHotkeys},
+		{"recursive_grid", &configResult.Config.RecursiveGrid.CustomHotkeys},
+	}
+
+	for _, modeHotkey := range modeHotkeys {
+		modeRaw, modeRawOk := raw[modeHotkey.modeKey]
+		if !modeRawOk {
+			continue
+		}
+
+		modeMap, modeRawOk := modeRaw.(map[string]any)
+		if !modeRawOk {
+			continue
+		}
+
+		chRaw, modeRawOk := modeMap["custom_hotkeys"]
+		if !modeRawOk {
+			continue
+		}
+
+		chMap, modeRawOk := chRaw.(map[string]any)
+		if !modeRawOk {
+			continue
+		}
+
+		result := make(map[string]StringOrStringArray, len(chMap))
+		for key, value := range chMap {
+			var _sosa StringOrStringArray
+
+			err := _sosa.UnmarshalTOML(value)
+			if err != nil {
+				configResult.ValidationError = derrors.Newf(
+					derrors.CodeInvalidConfig,
+					"%s.custom_hotkeys.%s: %v",
+					modeHotkey.modeKey,
+					key,
+					err,
+				)
+				configResult.Config = DefaultConfig()
+
+				return configResult
+			}
+
+			result[key] = _sosa
+		}
+
+		*modeHotkey.dest = result
 	}
 
 	validateErr := configResult.Config.Validate()
