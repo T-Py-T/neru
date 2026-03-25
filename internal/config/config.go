@@ -64,6 +64,13 @@ const (
 	modeNameScroll        = "scroll"
 )
 
+// DisabledSentinel is a special action value that removes a default hotkey binding.
+// Use it in [hotkeys] or [<mode>.custom_hotkeys] to disable a specific default:
+//
+//	[scroll.custom_hotkeys]
+//	"j" = "__disabled__"   # removes the default "j" = "action scroll_down"
+const DisabledSentinel = "__disabled__"
+
 // Key name constants for normalization.
 // These are the canonical lowercase forms used throughout the codebase.
 const (
@@ -723,6 +730,11 @@ func (c *Config) Validate() error {
 
 // ValidateHotkeyBindings validates the top-level [hotkeys] key format and action strings.
 func (c *Config) ValidateHotkeyBindings() error {
+	// Check for duplicate normalized keys (mirrors checkCustomHotkeysConflicts
+	// for per-mode hotkeys). After merge, two keys that normalize identically
+	// would cause ambiguous runtime behavior.
+	seen := make(map[string]string, len(c.Hotkeys.Bindings))
+
 	for key, actions := range c.Hotkeys.Bindings {
 		fieldName := "hotkeys." + key
 		if strings.TrimSpace(key) == "" {
@@ -731,6 +743,18 @@ func (c *Config) ValidateHotkeyBindings() error {
 				"hotkeys contains an empty key",
 			)
 		}
+
+		normalized := NormalizeKeyForComparison(key)
+		if prev, ok := seen[normalized]; ok {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"hotkeys has duplicate bindings (%q and %q)",
+				prev,
+				key,
+			)
+		}
+
+		seen[normalized] = key
 
 		err := ValidateHotkey(key, fieldName)
 		if err != nil {
@@ -880,10 +904,15 @@ func (c *Config) ValidateModeIndicator() error {
 // entries are emitted as plain strings for backward compatibility; multi-action
 // entries use TOML array syntax.  The section header (e.g. "[scroll.custom_hotkeys]")
 // is always written so that an empty map round-trips correctly.
+//
+// When defaults is non-nil, any default key not present in _map (after
+// normalization) is emitted as "__disabled__" so that Save+LoadWithValidation
+// round-trips correctly under merge-on-top-of-defaults semantics.
 func writeStringOrStringArrayMap(
 	file *os.File,
 	sectionHeader string,
 	_map map[string]StringOrStringArray,
+	defaults map[string]StringOrStringArray,
 ) error {
 	_, err := fmt.Fprintf(file, "\n[%s]\n", sectionHeader)
 	if err != nil {
@@ -930,6 +959,32 @@ func writeStringOrStringArrayMap(
 		}
 	}
 
+	// Emit __disabled__ markers for default bindings that were removed.
+	if defaults != nil {
+		disabledKeys := make([]string, 0)
+		for defaultKey := range defaults {
+			found := findNormalizedMapKey(_map, defaultKey)
+			if _, exists := _map[found]; !exists {
+				disabledKeys = append(disabledKeys, defaultKey)
+			}
+		}
+
+		sort.Strings(disabledKeys)
+
+		for _, key := range disabledKeys {
+			line := fmt.Sprintf("%q = %q", key, DisabledSentinel)
+
+			_, disabledErr := fmt.Fprintln(file, line)
+			if disabledErr != nil {
+				return derrors.Wrap(
+					disabledErr,
+					derrors.CodeConfigIOFailed,
+					"failed to write disabled binding marker",
+				)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -972,53 +1027,27 @@ func (c *Config) Save(path string) error {
 		return derrors.Wrap(encodeErr, derrors.CodeSerializationFailed, "failed to encode config")
 	}
 
-	// Always write the [hotkeys] section so that LoadWithValidation sees
-	// raw["hotkeys"] and clears the default bindings.  An empty section
-	// (no keys) is the documented way to disable all hotkeys.
-	_, err := fmt.Fprintln(file, "\n[hotkeys]")
-	if err != nil {
-		return derrors.Wrap(
-			err, derrors.CodeConfigIOFailed, "failed to write hotkeys section",
-		)
+	// Write the [hotkeys] section so that LoadWithValidation sees
+	// raw["hotkeys"] and merges user entries on top of defaults.  An empty
+	// section (no keys) is the documented way to disable all hotkeys.
+	//
+	// Convert map[string][]string → map[string]StringOrStringArray so we can
+	// reuse writeStringOrStringArrayMap (StringOrStringArray is []string).
+	defaults := DefaultConfig()
+
+	hotkeysSOSA := make(map[string]StringOrStringArray, len(c.Hotkeys.Bindings))
+	for k, v := range c.Hotkeys.Bindings {
+		hotkeysSOSA[k] = StringOrStringArray(v)
 	}
 
-	if len(c.Hotkeys.Bindings) > 0 {
-		// Sort keys for deterministic output.
-		keys := make([]string, 0, len(c.Hotkeys.Bindings))
-		for k := range c.Hotkeys.Bindings {
-			keys = append(keys, k)
-		}
+	defaultHotkeysSOSA := make(map[string]StringOrStringArray, len(defaults.Hotkeys.Bindings))
+	for k, v := range defaults.Hotkeys.Bindings {
+		defaultHotkeysSOSA[k] = StringOrStringArray(v)
+	}
 
-		sort.Strings(keys)
-
-		for _, key := range keys {
-			actions := c.Hotkeys.Bindings[key]
-
-			if len(actions) == 0 {
-				continue
-			}
-
-			var line string
-			if len(actions) == 1 {
-				// Single action: emit as a plain string for backward compat.
-				line = fmt.Sprintf("%q = %q", key, actions[0])
-			} else {
-				// Multiple actions: emit as a TOML array.
-				quoted := make([]string, 0, len(actions))
-				for _, a := range actions {
-					quoted = append(quoted, fmt.Sprintf("%q", a))
-				}
-
-				line = fmt.Sprintf("%q = [%s]", key, strings.Join(quoted, ", "))
-			}
-
-			_, err := fmt.Fprintln(file, line)
-			if err != nil {
-				return derrors.Wrap(
-					err, derrors.CodeConfigIOFailed, "failed to write hotkey binding",
-				)
-			}
-		}
+	err := writeStringOrStringArrayMap(file, "hotkeys", hotkeysSOSA, defaultHotkeysSOSA)
+	if err != nil {
+		return err
 	}
 
 	// Write per-mode [<mode>.custom_hotkeys] sections.
@@ -1026,16 +1055,21 @@ func (c *Config) Save(path string) error {
 	// them manually to preserve the single-string format for single-action
 	// entries (backward compatibility).
 	customHotkeysSections := []struct {
-		header  string
-		hotkeys map[string]StringOrStringArray
+		header   string
+		hotkeys  map[string]StringOrStringArray
+		defaults map[string]StringOrStringArray
 	}{
-		{"scroll.custom_hotkeys", c.Scroll.CustomHotkeys},
-		{"hints.custom_hotkeys", c.Hints.CustomHotkeys},
-		{"grid.custom_hotkeys", c.Grid.CustomHotkeys},
-		{"recursive_grid.custom_hotkeys", c.RecursiveGrid.CustomHotkeys},
+		{"scroll.custom_hotkeys", c.Scroll.CustomHotkeys, defaults.Scroll.CustomHotkeys},
+		{"hints.custom_hotkeys", c.Hints.CustomHotkeys, defaults.Hints.CustomHotkeys},
+		{"grid.custom_hotkeys", c.Grid.CustomHotkeys, defaults.Grid.CustomHotkeys},
+		{
+			"recursive_grid.custom_hotkeys",
+			c.RecursiveGrid.CustomHotkeys,
+			defaults.RecursiveGrid.CustomHotkeys,
+		},
 	}
 	for _, section := range customHotkeysSections {
-		err = writeStringOrStringArrayMap(file, section.header, section.hotkeys)
+		err = writeStringOrStringArrayMap(file, section.header, section.hotkeys, section.defaults)
 		if err != nil {
 			return err
 		}

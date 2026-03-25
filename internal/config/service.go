@@ -13,6 +13,20 @@ import (
 	derrors "github.com/y3owk1n/neru/internal/core/errors"
 )
 
+// findNormalizedMapKey returns the existing map key in m whose normalized form
+// matches the normalized form of rawKey. If no match is found it returns rawKey
+// itself so callers can use the result directly.
+func findNormalizedMapKey[V any](m map[string]V, rawKey string) string {
+	norm := NormalizeKeyForComparison(rawKey)
+	for k := range m {
+		if NormalizeKeyForComparison(k) == norm {
+			return k
+		}
+	}
+
+	return rawKey
+}
+
 // AlertProvider defines the interface for displaying native system alerts.
 // This is used to break the import cycle between config and ports.
 type AlertProvider interface {
@@ -141,8 +155,10 @@ func (s *Service) LoadWithValidation(path string) *LoadResult {
 	}
 
 	// Process hotkeys from raw map.
-	// When the user provides a [hotkeys] section (even if empty), clear all
-	// default bindings so that external hotkey daemons (e.g. skhd) can manage
+	// User entries are merged on top of the defaults from DefaultConfig().
+	// To remove a default binding, set it to "__disabled__".
+	// An empty [hotkeys] section (no keys) disables all hotkeys — this is
+	// the documented way for external hotkey daemons (e.g. skhd) to manage
 	// shortcuts without conflicts. Modes remain accessible via CLI commands.
 	if hot, ok := raw["hotkeys"]; ok {
 		hotMap, isTable := hot.(map[string]any)
@@ -161,51 +177,109 @@ func (s *Service) LoadWithValidation(path string) *LoadResult {
 			return configResult
 		}
 
-		// Clear default bindings when user provides hotkeys config
-		configResult.Config.Hotkeys.Bindings = map[string][]string{}
+		if len(hotMap) == 0 {
+			// Empty [hotkeys] section: disable all hotkeys.
+			configResult.Config.Hotkeys.Bindings = map[string][]string{}
+		} else {
+			// Detect duplicate normalized keys in the raw TOML input before
+			// merging. TOML keys are case-sensitive, so "Escape" and "escape"
+			// are distinct keys in the file but normalize identically. Without
+			// this check the merge result would be non-deterministic (Go map
+			// iteration order).
+			seenRaw := make(map[string]string, len(hotMap))
+			for key := range hotMap {
+				norm := NormalizeKeyForComparison(key)
+				if prev, dup := seenRaw[norm]; dup {
+					configResult.ValidationError = derrors.Newf(
+						derrors.CodeInvalidConfig,
+						"hotkeys has duplicate bindings (%q and %q normalize to the same key)",
+						prev,
+						key,
+					)
+					configResult.Config = DefaultConfig()
 
-		for key, value := range hotMap {
-			switch v := value.(type) {
-			case string:
-				configResult.Config.Hotkeys.Bindings[key] = []string{v}
-			case []any:
-				actions := make([]string, 0, len(v))
-				for _, a := range v {
-					actionStr, ok := a.(string)
-					if !ok {
-						configResult.ValidationError = derrors.Newf(
-							derrors.CodeInvalidConfig,
-							"hotkeys.%s must be a string or array of strings",
-							key,
-						)
-						configResult.Config = DefaultConfig()
+					s.logger.Warn("Duplicate normalized hotkey in config",
+						zap.String("key1", prev),
+						zap.String("key2", key),
+						zap.Error(configResult.ValidationError))
 
-						s.logger.Warn("Invalid hotkey configuration",
-							zap.String("key", key),
-							zap.Any("value", value),
-							zap.Error(configResult.ValidationError))
-
-						return configResult
-					}
-
-					actions = append(actions, actionStr)
+					return configResult
 				}
 
-				configResult.Config.Hotkeys.Bindings[key] = actions
-			default:
-				configResult.ValidationError = derrors.Newf(
-					derrors.CodeInvalidConfig,
-					"hotkeys.%s must be a string or array of strings",
-					key,
+				seenRaw[norm] = key
+			}
+
+			// Merge user entries on top of defaults (already populated by DefaultConfig).
+			for key, value := range hotMap {
+				// Find the existing default key that normalizes to the same value
+				// so that e.g. "cmd+shift+s" correctly overrides "Cmd+Shift+S".
+				canonicalKey := findNormalizedMapKey(
+					configResult.Config.Hotkeys.Bindings, key,
 				)
-				configResult.Config = DefaultConfig()
 
-				s.logger.Warn("Invalid hotkey configuration",
-					zap.String("key", key),
-					zap.Any("value", value),
-					zap.Error(configResult.ValidationError))
+				switch _val := value.(type) {
+				case string:
+					if _val == DisabledSentinel {
+						if _, exists := configResult.Config.Hotkeys.Bindings[canonicalKey]; !exists {
+							s.logger.Warn("__disabled__ used for key that is not a default binding",
+								zap.String("key", key))
+						}
 
-				return configResult
+						delete(configResult.Config.Hotkeys.Bindings, canonicalKey)
+					} else {
+						// Remove old casing before inserting with user's casing.
+						delete(configResult.Config.Hotkeys.Bindings, canonicalKey)
+						configResult.Config.Hotkeys.Bindings[key] = []string{_val}
+					}
+				case []any:
+					actions := make([]string, 0, len(_val))
+					for _, a := range _val {
+						actionStr, ok := a.(string)
+						if !ok {
+							configResult.ValidationError = derrors.Newf(
+								derrors.CodeInvalidConfig,
+								"hotkeys.%s must be a string or array of strings",
+								key,
+							)
+							configResult.Config = DefaultConfig()
+							s.logger.Warn("Invalid hotkey configuration",
+								zap.String("key", key),
+								zap.Any("value", value),
+								zap.Error(configResult.ValidationError))
+
+							return configResult
+						}
+
+						actions = append(actions, actionStr)
+					}
+
+					// Handle __disabled__ sentinel in array form for consistency
+					// with per-mode custom_hotkeys.
+					if len(actions) == 1 && actions[0] == DisabledSentinel {
+						if _, exists := configResult.Config.Hotkeys.Bindings[canonicalKey]; !exists {
+							s.logger.Warn("__disabled__ used for key that is not a default binding",
+								zap.String("key", key))
+						}
+
+						delete(configResult.Config.Hotkeys.Bindings, canonicalKey)
+					} else {
+						delete(configResult.Config.Hotkeys.Bindings, canonicalKey)
+						configResult.Config.Hotkeys.Bindings[key] = actions
+					}
+				default:
+					configResult.ValidationError = derrors.Newf(
+						derrors.CodeInvalidConfig,
+						"hotkeys.%s must be a string or array of strings",
+						key,
+					)
+					configResult.Config = DefaultConfig()
+					s.logger.Warn("Invalid hotkey configuration",
+						zap.String("key", key),
+						zap.Any("value", value),
+						zap.Error(configResult.ValidationError))
+
+					return configResult
+				}
 			}
 		}
 	}
@@ -213,7 +287,9 @@ func (s *Service) LoadWithValidation(path string) *LoadResult {
 	// Process per-mode custom_hotkeys from raw map.
 	// These fields are tagged toml:"-" (to prevent the encoder from emitting
 	// arrays for single-action entries), so the struct decoder skips them.
-	// We populate them manually from the raw map here.
+	// User entries are merged on top of the defaults from DefaultConfig().
+	// To remove a default binding, set it to "__disabled__".
+	// An empty [<mode>.custom_hotkeys] section clears all bindings for that mode.
 	type modeCustomHotkeys struct {
 		modeKey string
 		dest    *map[string]StringOrStringArray
@@ -247,7 +323,41 @@ func (s *Service) LoadWithValidation(path string) *LoadResult {
 			continue
 		}
 
-		result := make(map[string]StringOrStringArray, len(chMap))
+		if len(chMap) == 0 {
+			// Empty section: clear all bindings for this mode.
+			*modeHotkey.dest = make(map[string]StringOrStringArray)
+
+			continue
+		}
+
+		// Detect duplicate normalized keys in the raw TOML input before
+		// merging, same rationale as for global [hotkeys] above.
+		seenRaw := make(map[string]string, len(chMap))
+		for key := range chMap {
+			norm := NormalizeKeyForComparison(key)
+			if prev, dup := seenRaw[norm]; dup {
+				configResult.ValidationError = derrors.Newf(
+					derrors.CodeInvalidConfig,
+					"%s.custom_hotkeys has duplicate bindings (%q and %q normalize to the same key)",
+					modeHotkey.modeKey,
+					prev,
+					key,
+				)
+				configResult.Config = DefaultConfig()
+
+				s.logger.Warn("Duplicate normalized custom hotkey in config",
+					zap.String("mode", modeHotkey.modeKey),
+					zap.String("key1", prev),
+					zap.String("key2", key),
+					zap.Error(configResult.ValidationError))
+
+				return configResult
+			}
+
+			seenRaw[norm] = key
+		}
+
+		// Merge user entries on top of defaults (already populated by DefaultConfig).
 		for key, value := range chMap {
 			var _sosa StringOrStringArray
 
@@ -265,10 +375,25 @@ func (s *Service) LoadWithValidation(path string) *LoadResult {
 				return configResult
 			}
 
-			result[key] = _sosa
-		}
+			// Find the existing default key that normalizes to the same value
+			// so that e.g. "escape" correctly overrides "Escape".
+			canonicalKey := findNormalizedMapKey(*modeHotkey.dest, key)
 
-		*modeHotkey.dest = result
+			// Sentinel value removes the default binding for this key.
+			if len(_sosa) == 1 && _sosa[0] == DisabledSentinel {
+				if _, exists := (*modeHotkey.dest)[canonicalKey]; !exists {
+					s.logger.Warn("__disabled__ used for key that is not a default binding",
+						zap.String("mode", modeHotkey.modeKey),
+						zap.String("key", key))
+				}
+
+				delete(*modeHotkey.dest, canonicalKey)
+			} else {
+				// Remove old casing before inserting with user's casing.
+				delete(*modeHotkey.dest, canonicalKey)
+				(*modeHotkey.dest)[key] = _sosa
+			}
+		}
 	}
 
 	validateErr := configResult.Config.Validate()
