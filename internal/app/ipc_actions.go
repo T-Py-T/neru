@@ -302,6 +302,14 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 		}
 	}
 
+	// Merge sticky modifiers AFTER the explicit --modifier validation above,
+	// so that active sticky modifiers don't cause false rejection of
+	// non-click actions like move_mouse or move_mouse_relative.
+	if h.modesHandler != nil {
+		stickyMods := h.modesHandler.StickyModifiers()
+		modifiers |= stickyMods
+	}
+
 	if (isMoveMouse || isMoveMouseRelative) && (parsed.hasX || parsed.hasY) &&
 		(parsed.hasDX || parsed.hasDY) {
 		return ipc.Response{
