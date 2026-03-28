@@ -70,6 +70,8 @@ type parsedActionArgs struct {
 	hasX, hasY     bool
 	hasDX, hasDY   bool
 	hasCenter      bool
+	useSelection   bool
+	useBare        bool
 	monitorName    string
 	hasMonitor     bool
 	modifierStr    string
@@ -180,6 +182,10 @@ func parseActionArgs(rawArgs []string) (parsedActionArgs, bool) {
 			parsed.hasDY = true
 		case arg == "--center":
 			parsed.hasCenter = true
+		case arg == "--selection":
+			parsed.useSelection = true
+		case arg == "--bare":
+			parsed.useBare = true
 		case strings.HasPrefix(arg, "--monitor") && (arg == "--monitor" || arg[len("--monitor")] == '='):
 			val, newIdx, ok := extractStringFlag(rawArgs, idx, "--monitor")
 			idx = newIdx
@@ -248,14 +254,6 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 		return h.handleRestoreCursorPosAction(ctx, parsed)
 	}
 
-	if h.actionService == nil {
-		return ipc.Response{
-			Success: false,
-			Message: "action service not available",
-			Code:    ipc.CodeActionFailed,
-		}
-	}
-
 	modifiers, modErr := action.ParseModifiers(parsed.modifierStr)
 	if modErr != nil {
 		return ipc.Response{
@@ -267,6 +265,12 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 
 	isMoveMouse := actionName == string(action.NameMoveMouse)
 	isMoveMouseRelative := actionName == string(action.NameMoveMouseRelative)
+	isMouseButton := actionName == string(action.NameLeftClick) ||
+		actionName == string(action.NameRightClick) ||
+		actionName == string(action.NameMiddleClick) ||
+		actionName == string(action.NameMouseDown) ||
+		actionName == string(action.NameMouseUp)
+	isPointTargetedAction := isMoveMouse || isMouseButton
 
 	// Validation order matters:
 	// 1. Reject coordinate flags on non-mouse-move actions.
@@ -275,7 +279,8 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 	// 4. Reject --center mixed with --dx/--dy (center uses --x/--y as offsets, not deltas).
 	// 5. Reject --center on non-move_mouse actions.
 	// 6. Reject --monitor without --center (monitor targeting requires center mode).
-	// 7. Require --x AND --y when --center is absent for move_mouse.
+	// 7. Reject --selection mixed with explicit move targeting.
+	// 8. Require --x AND --y when --center is absent for move_mouse.
 	// Note: --center with --x/--y is intentionally allowed — x/y act as offsets from center.
 	// Note: --monitor on non-move_mouse is caught by step 5 (if --center present) or step 6 (if absent).
 
@@ -287,12 +292,6 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 			Code:    ipc.CodeInvalidInput,
 		}
 	}
-
-	isMouseButton := actionName == string(action.NameLeftClick) ||
-		actionName == string(action.NameRightClick) ||
-		actionName == string(action.NameMiddleClick) ||
-		actionName == string(action.NameMouseDown) ||
-		actionName == string(action.NameMouseUp)
 
 	if modifiers != 0 && !isMouseButton {
 		return ipc.Response{
@@ -343,15 +342,58 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 		}
 	}
 
-	if isMoveMouse && !parsed.hasCenter && (!parsed.hasX || !parsed.hasY) {
+	if parsed.useSelection && parsed.useBare {
 		return ipc.Response{
 			Success: false,
-			Message: "move_mouse requires --x and --y flags, or --center",
+			Message: "--selection and --bare cannot be used together",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
+	if parsed.useSelection && (!isMoveMouse && !isMouseButton) {
+		return ipc.Response{
+			Success: false,
+			Message: "--selection is only supported with move_mouse, scroll, and mouse button actions",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
+	if parsed.useBare && !isPointTargetedAction {
+		return ipc.Response{
+			Success: false,
+			Message: "--bare is only supported with move_mouse, scroll, and mouse button actions",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
+	if parsed.useSelection &&
+		(parsed.hasCenter || parsed.hasMonitor || parsed.hasX || parsed.hasY) {
+		return ipc.Response{
+			Success: false,
+			Message: "--selection cannot be combined with --x, --y, --center, or --monitor",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
+	if isMoveMouse && !parsed.hasCenter &&
+		!parsed.useSelection &&
+		((parsed.hasX && !parsed.hasY) || (!parsed.hasX && parsed.hasY)) {
+		return ipc.Response{
+			Success: false,
+			Message: "move_mouse requires both --x and --y when using absolute coordinates",
 			Code:    ipc.CodeInvalidInput,
 		}
 	}
 
 	if isMoveMouse && parsed.hasCenter {
+		if h.actionService == nil {
+			return ipc.Response{
+				Success: false,
+				Message: "action service not available",
+				Code:    ipc.CodeActionFailed,
+			}
+		}
+
 		offsetX, offsetY := parsed.xVal, parsed.yVal
 
 		if parsed.hasMonitor {
@@ -408,6 +450,14 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 	}
 
 	if isMoveMouseRelative {
+		if h.actionService == nil {
+			return ipc.Response{
+				Success: false,
+				Message: "action service not available",
+				Code:    ipc.CodeActionFailed,
+			}
+		}
+
 		if !parsed.hasDX || !parsed.hasDY {
 			return ipc.Response{
 				Success: false,
@@ -445,23 +495,19 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 		zap.Int("y", parsed.yVal),
 	)
 
-	var err error
-	switch actionName {
-	case string(action.NameMoveMouse):
-		err = h.actionService.MoveMouseTo(ctx, parsed.xVal, parsed.yVal, false)
-	default:
-		cursorPos, posErr := h.actionService.CursorPosition(ctx)
-		if posErr != nil {
-			h.logger.Error("Failed to get cursor position", zap.Error(posErr))
+	var (
+		err     error
+		errResp *ipc.Response
+	)
 
-			return ipc.Response{
-				Success: false,
-				Message: "failed to get cursor position",
-				Code:    ipc.CodeActionFailed,
-			}
-		}
+	if actionName == string(action.NameMoveMouse) {
+		errResp, err = h.handleMoveMouseAction(ctx, parsed)
+	} else {
+		errResp, err = h.handlePointTargetedAction(ctx, actionName, parsed, modifiers)
+	}
 
-		err = h.actionService.PerformActionAtPoint(ctx, actionName, cursorPos, modifiers)
+	if errResp != nil {
+		return *errResp
 	}
 
 	if err != nil {
@@ -478,6 +524,112 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 		Success: true,
 		Message: actionName + " performed",
 		Code:    ipc.CodeOK,
+	}
+}
+
+func (h *IPCControllerActions) handleMoveMouseAction(
+	ctx context.Context,
+	parsed parsedActionArgs,
+) (*ipc.Response, error) {
+	if parsed.hasX && parsed.hasY {
+		if h.actionService == nil {
+			return &ipc.Response{
+				Success: false,
+				Message: "action service not available",
+				Code:    ipc.CodeActionFailed,
+			}, nil
+		}
+
+		return nil, h.actionService.MoveMouseTo(ctx, parsed.xVal, parsed.yVal, false)
+	}
+
+	if parsed.useBare && h.actionService == nil {
+		return &ipc.Response{
+			Success: false,
+			Message: "action service not available",
+			Code:    ipc.CodeActionFailed,
+		}, nil
+	}
+
+	targetPoint, pointErrResp := h.resolveMoveMousePoint(ctx, parsed)
+	if pointErrResp != nil {
+		return pointErrResp, nil
+	}
+
+	if h.actionService == nil {
+		return &ipc.Response{
+			Success: false,
+			Message: "action service not available",
+			Code:    ipc.CodeActionFailed,
+		}, nil
+	}
+
+	return nil, h.actionService.MoveCursorToPointAndWait(ctx, targetPoint)
+}
+
+func (h *IPCControllerActions) handlePointTargetedAction(
+	ctx context.Context,
+	actionName string,
+	parsed parsedActionArgs,
+	modifiers action.Modifiers,
+) (*ipc.Response, error) {
+	if h.actionService == nil {
+		return &ipc.Response{
+			Success: false,
+			Message: "action service not available",
+			Code:    ipc.CodeActionFailed,
+		}, nil
+	}
+
+	targetPoint, pointErrResp := h.resolveMouseActionPoint(ctx, parsed)
+	if pointErrResp != nil {
+		return pointErrResp, nil
+	}
+
+	targetsSelection := parsed.useSelection
+	if !targetsSelection && !parsed.useBare {
+		if selectionPoint, ok := h.currentSelectionPoint(); ok &&
+			targetPoint == selectionPoint {
+			targetsSelection = true
+		}
+	}
+
+	if targetsSelection {
+		moveErr := h.actionService.MoveCursorToPointAndWait(ctx, targetPoint)
+		if moveErr != nil {
+			h.logger.Error("Failed to move cursor to mode selection", zap.Error(moveErr))
+
+			return &ipc.Response{
+				Success: false,
+				Message: "failed to perform action: " + moveErr.Error(),
+				Code:    ipc.CodeActionFailed,
+			}, nil
+		}
+	}
+
+	return nil, h.actionService.PerformActionAtPoint(ctx, actionName, targetPoint, modifiers)
+}
+
+func (h *IPCControllerActions) resolveMoveMousePoint(
+	ctx context.Context,
+	parsed parsedActionArgs,
+) (image.Point, *ipc.Response) {
+	if parsed.useSelection {
+		return h.resolveSelectionPoint()
+	}
+
+	if parsed.useBare {
+		return h.resolveCurrentCursorPoint(ctx)
+	}
+
+	if targetPoint, ok := h.currentSelectionPoint(); ok {
+		return targetPoint, nil
+	}
+
+	return image.Point{}, &ipc.Response{
+		Success: false,
+		Message: "move_mouse requires --x and --y flags, --center, active selection, or --bare",
+		Code:    ipc.CodeInvalidInput,
 	}
 }
 
@@ -511,7 +663,71 @@ func (h *IPCControllerActions) handleBackspaceAction() ipc.Response {
 
 func hasUnsupportedFlags(parsed parsedActionArgs) bool {
 	return parsed.hasX || parsed.hasY || parsed.hasDX || parsed.hasDY ||
-		parsed.hasCenter || parsed.hasMonitor || parsed.modifierStr != ""
+		parsed.hasCenter || parsed.hasMonitor || parsed.modifierStr != "" ||
+		parsed.useSelection || parsed.useBare
+}
+
+func (h *IPCControllerActions) resolveMouseActionPoint(
+	ctx context.Context,
+	parsed parsedActionArgs,
+) (image.Point, *ipc.Response) {
+	if parsed.useSelection {
+		return h.resolveSelectionPoint()
+	}
+
+	if !parsed.useBare {
+		if targetPoint, ok := h.currentSelectionPoint(); ok {
+			return targetPoint, nil
+		}
+	}
+
+	return h.resolveCurrentCursorPoint(ctx)
+}
+
+func (h *IPCControllerActions) resolveCurrentCursorPoint(
+	ctx context.Context,
+) (image.Point, *ipc.Response) {
+	cursorPos, posErr := h.actionService.CursorPosition(ctx)
+	if posErr != nil {
+		h.logger.Error("Failed to get cursor position", zap.Error(posErr))
+
+		return image.Point{}, &ipc.Response{
+			Success: false,
+			Message: "failed to get cursor position",
+			Code:    ipc.CodeActionFailed,
+		}
+	}
+
+	return cursorPos, nil
+}
+
+func (h *IPCControllerActions) resolveSelectionPoint() (image.Point, *ipc.Response) {
+	if h.modesHandler == nil {
+		return image.Point{}, &ipc.Response{
+			Success: false,
+			Message: "--selection requires an active mode selection",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
+	targetPoint, ok := h.modesHandler.CurrentSelectionPoint()
+	if !ok {
+		return image.Point{}, &ipc.Response{
+			Success: false,
+			Message: "--selection requires an active mode selection",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
+	return targetPoint, nil
+}
+
+func (h *IPCControllerActions) currentSelectionPoint() (image.Point, bool) {
+	if h.modesHandler == nil {
+		return image.Point{}, false
+	}
+
+	return h.modesHandler.CurrentSelectionPoint()
 }
 
 func (h *IPCControllerActions) handleWaitForModeExitAction(
@@ -667,6 +883,14 @@ func (h *IPCControllerActions) handleScrollAction(
 		}
 	}
 
+	if parsed.useSelection && parsed.useBare {
+		return ipc.Response{
+			Success: false,
+			Message: "--selection and --bare cannot be used together",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
 	direction, amount, ok := scrollActionMapping(actionName)
 	if !ok {
 		return ipc.Response{
@@ -681,6 +905,44 @@ func (h *IPCControllerActions) handleScrollAction(
 		zap.Int("direction", int(direction)),
 		zap.Int("amount", int(amount)),
 	)
+
+	targetsSelection := parsed.useSelection
+
+	targetPoint := image.Point{}
+	if parsed.useSelection {
+		var pointErrResp *ipc.Response
+
+		targetPoint, pointErrResp = h.resolveSelectionPoint()
+		if pointErrResp != nil {
+			return *pointErrResp
+		}
+	} else if !parsed.useBare {
+		if selectionPoint, ok := h.currentSelectionPoint(); ok {
+			targetPoint = selectionPoint
+			targetsSelection = true
+		}
+	}
+
+	if targetsSelection {
+		if h.actionService == nil {
+			return ipc.Response{
+				Success: false,
+				Message: "action service not available",
+				Code:    ipc.CodeActionFailed,
+			}
+		}
+
+		moveErr := h.actionService.MoveCursorToPointAndWait(ctx, targetPoint)
+		if moveErr != nil {
+			h.logger.Error("Failed to move cursor to scroll target", zap.Error(moveErr))
+
+			return ipc.Response{
+				Success: false,
+				Message: "failed to perform scroll action: " + moveErr.Error(),
+				Code:    ipc.CodeActionFailed,
+			}
+		}
+	}
 
 	scrollErr := h.scrollService.Scroll(ctx, direction, amount)
 	if scrollErr != nil {
