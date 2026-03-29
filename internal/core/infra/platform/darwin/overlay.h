@@ -74,6 +74,12 @@ typedef struct {
 	int matchedPrefixLength;  ///< Number of matched characters at beginning of label
 } GridCell;
 
+/// Virtual cursor indicator style configuration
+typedef struct {
+	double radius;    ///< Outer radius in points
+	char *fillColor;  ///< Fill color
+} CursorIndicatorStyle;
+
 /// Callback type for async operations
 /// @param context Context pointer
 typedef void (*ResizeCompletionCallback)(void *context);
@@ -183,5 +189,15 @@ void NeruSetHideUnmatched(OverlayWindow window, int hide);
 void NeruDrawIncrementGrid(
     OverlayWindow window, GridCell *cellsToAdd, int addCount, CGRect *cellsToRemove, int removeCount,
     GridCellStyle style);
+
+/// Show a virtual cursor indicator at the specified point
+/// @param window Overlay window handle
+/// @param position Indicator center position in overlay coordinates
+/// @param style Indicator style
+void NeruShowCursorIndicator(OverlayWindow window, CGPoint position, CursorIndicatorStyle style);
+
+/// Hide the virtual cursor indicator
+/// @param window Overlay window handle
+void NeruHideCursorIndicator(OverlayWindow window);
 
 #endif  // OVERLAY_H

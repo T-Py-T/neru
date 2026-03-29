@@ -137,6 +137,32 @@ func (o *Overlay) Clear() {
 	C.NeruClearOverlay(o.window)
 }
 
+// ShowVirtualPointer renders a virtual pointer at the current selection point.
+func (o *Overlay) ShowVirtualPointer(
+	point image.Point,
+	size int,
+	fillColor string,
+) {
+	cFillColor := C.CString(fillColor)
+	defer C.free(unsafe.Pointer(cFillColor)) //nolint:nlreturn
+
+	indicatorStyle := C.CursorIndicatorStyle{
+		radius:    C.double(size),
+		fillColor: cFillColor,
+	}
+
+	C.NeruShowCursorIndicator(
+		o.window,
+		C.CGPoint{x: C.double(point.X), y: C.double(point.Y)},
+		indicatorStyle,
+	)
+}
+
+// HideVirtualPointer removes the virtual pointer from the overlay.
+func (o *Overlay) HideVirtualPointer() {
+	C.NeruHideCursorIndicator(o.window)
+}
+
 // Cleanup frees Go-side resources (callbackManager, styleCache, labelCache)
 // without destroying the native window. Use this for overlays that share a
 // window managed by the overlay Manager.

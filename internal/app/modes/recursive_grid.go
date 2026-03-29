@@ -107,6 +107,8 @@ func (h *Handler) activateRecursiveGridModeWithAction(
 		h.recursiveGrid.Context.SetCursorFollowSelection(cursorShouldFollow)
 	}
 
+	h.refreshRecursiveGridVirtualPointerLocked()
+
 	if actionStr != nil {
 		h.logger.Info(
 			"Recursive-grid mode activated with pending action",
@@ -161,6 +163,7 @@ func (h *Handler) initializeRecursiveGridManager(screenBounds image.Rectangle) {
 		// Update callback
 		func() {
 			h.updateRecursiveGridOverlay()
+			h.refreshRecursiveGridVirtualPointerLocked()
 		},
 		// Complete callback
 		func(point image.Point) {
@@ -196,6 +199,8 @@ func (h *Handler) handleRecursiveGridKey(key string) {
 		cursorFollowSelection := h.recursiveGrid.Context.CursorFollowSelection()
 
 		if pendingAction == nil && !repeat && !cursorFollowSelection {
+			h.refreshRecursiveGridVirtualPointerLocked()
+
 			return
 		}
 
@@ -217,6 +222,8 @@ func (h *Handler) handleRecursiveGridKey(key string) {
 		h.recursiveGrid.Context.SetSelectionPoint(absoluteCenter)
 
 		if !h.recursiveGrid.Context.CursorFollowSelection() {
+			h.refreshRecursiveGridVirtualPointerLocked()
+
 			return
 		}
 
@@ -275,6 +282,14 @@ func (h *Handler) cleanupRecursiveGridMode() {
 
 		if h.recursiveGrid.Manager != nil {
 			h.recursiveGrid.Manager.Reset()
+		}
+
+		// Explicitly hide the virtual pointer before clearing the overlay.
+		// NeruClearOverlay also resets cursorIndicatorVisible, but we do this
+		// explicitly so the pointer cleanup does not silently depend on the
+		// overlay clear implementation.
+		if h.recursiveGrid.Overlay != nil {
+			h.recursiveGrid.Overlay.HideVirtualPointer()
 		}
 	}
 

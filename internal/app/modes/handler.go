@@ -264,12 +264,19 @@ func (h *Handler) RefreshGridForScreenChange() bool {
 		h.grid.Manager.Reset()
 	}
 
+	// Clear stale selection — old coordinates are invalid on the new screen.
+	h.grid.Context.ClearSelectionPoint()
+
 	drawGridErr := h.renderer.DrawGrid(gridInstance, currentInput)
 	if drawGridErr != nil {
 		h.logger.Error("Failed to refresh grid after screen change", zap.Error(drawGridErr))
 
 		return false
 	}
+
+	// Ensure the virtual pointer is hidden (DrawGrid may clear cursorIndicatorVisible
+	// via NeruClearOverlay, but we explicitly hide it for consistency).
+	h.refreshGridVirtualPointerLocked()
 
 	return true
 }
@@ -317,8 +324,14 @@ func (h *Handler) RefreshRecursiveGridForScreenChange() bool {
 		h.initializeRecursiveGridManager(normalizedBounds)
 	}
 
+	// Clear stale selection — old coordinates are invalid on the new screen.
+	if h.recursiveGrid != nil && h.recursiveGrid.Context != nil {
+		h.recursiveGrid.Context.ClearSelectionPoint()
+	}
+
 	// Redraw the overlay with the remapped grid.
 	h.updateRecursiveGridOverlay()
+	h.refreshRecursiveGridVirtualPointerLocked()
 
 	return true
 }
@@ -402,6 +415,8 @@ func (h *Handler) RefreshGridForThemeChange() bool {
 		return false
 	}
 
+	h.refreshGridVirtualPointerLocked()
+
 	return true
 }
 
@@ -419,6 +434,7 @@ func (h *Handler) RefreshRecursiveGridForThemeChange() bool {
 	}
 
 	h.updateRecursiveGridOverlay()
+	h.refreshRecursiveGridVirtualPointerLocked()
 
 	return true
 }
@@ -451,6 +467,9 @@ func (h *Handler) ResetCurrentMode() {
 		if h.grid != nil && h.grid.Manager != nil {
 			h.grid.Manager.Reset()
 
+			// Clear stale selection — input was reset so no cell is selected.
+			h.grid.Context.ClearSelectionPoint()
+
 			gridInstancePtr := h.grid.Context.GridInstance()
 			if gridInstancePtr != nil && *gridInstancePtr != nil {
 				err := h.renderer.DrawGrid(
@@ -460,6 +479,8 @@ func (h *Handler) ResetCurrentMode() {
 				if err != nil {
 					h.logger.Error("Failed to redraw grid after reset", zap.Error(err))
 				}
+
+				h.refreshGridVirtualPointerLocked()
 			}
 		}
 	case domain.ModeRecursiveGrid:
@@ -474,6 +495,8 @@ func (h *Handler) ResetCurrentMode() {
 				h.recursiveGrid.Context.SetSelectionPoint(absoluteCenter)
 
 				if !h.recursiveGrid.Context.CursorFollowSelection() {
+					h.refreshRecursiveGridVirtualPointerLocked()
+
 					return
 				}
 			}
@@ -517,6 +540,8 @@ func (h *Handler) BackspaceCurrentMode() {
 				h.recursiveGrid.Context.SetSelectionPoint(absoluteCenter)
 
 				if !h.recursiveGrid.Context.CursorFollowSelection() {
+					h.refreshRecursiveGridVirtualPointerLocked()
+
 					return
 				}
 			}
