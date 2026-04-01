@@ -454,6 +454,13 @@ Recursive grid narrows the active area with each keypress for precise cursor pla
 | `max_depth`       | int    | `10`     | Maximum recursion levels (1–20)     |
 | `layers`          | array  | `[]`     | Optional per-depth layout overrides |
 
+### Animation configuration
+
+| Option        | Type | Default | Description |
+| ------------- | ---- | ------- | ----------- |
+| `enabled`     | bool | `false` | Opt in to native depth transitions on supported platforms |
+| `duration_ms` | int  | `180`   | Recursive-grid depth transition duration in milliseconds |
+
 > [!NOTE]
 > `auto_exit_actions`, `mode_exit_keys`, `reset_key`, and `backspace_key` were removed. Use `hotkeys` (for example `"Space" = "action reset"`, `"Backspace" = "action backspace"`).
 

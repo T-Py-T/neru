@@ -552,9 +552,17 @@ type RecursiveGridLayerConfig struct {
 	Keys     string `json:"keys"     toml:"keys"`
 }
 
+// RecursiveGridAnimationConfig defines native recursive-grid animation settings.
+type RecursiveGridAnimationConfig struct {
+	Enabled    bool `json:"enabled"    toml:"enabled"`
+	DurationMS int  `json:"durationMs" toml:"duration_ms"`
+}
+
 // RecursiveGridConfig defines the visual and behavioral settings for recursive-grid mode.
 type RecursiveGridConfig struct {
 	Enabled bool `json:"enabled" toml:"enabled"`
+	// Animation configures native depth transition animations for recursive-grid on supported platforms.
+	Animation RecursiveGridAnimationConfig `json:"animation" toml:"animation"`
 	// Grid dimensions: columns and rows (default: 2x2)
 	GridCols int `json:"gridCols" toml:"grid_cols"`
 	GridRows int `json:"gridRows" toml:"grid_rows"`

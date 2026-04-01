@@ -39,13 +39,18 @@ const (
 	NSWindowSharingNone = 0
 	// NSWindowSharingReadOnly represents NSWindowSharingReadOnly (1) - visible in screen sharing.
 	NSWindowSharingReadOnly = 1
+	// millisecondsPerSecond converts config milliseconds into native seconds.
+	millisecondsPerSecond = 1000.0
 )
 
 // Overlay manages the rendering of recursive_grid overlays using native platform APIs.
 type Overlay struct {
-	window C.OverlayWindow
-	config config.RecursiveGridConfig
-	logger *zap.Logger
+	window     C.OverlayWindow
+	config     config.RecursiveGridConfig
+	logger     *zap.Logger
+	lastBounds image.Rectangle
+	lastDepth  int
+	hasLast    bool
 
 	// configMu protects config from concurrent read/write.
 	configMu sync.RWMutex
@@ -135,6 +140,9 @@ func (o *Overlay) Hide() {
 // Clear clears the overlay window and resets state.
 func (o *Overlay) Clear() {
 	C.NeruClearOverlay(o.window)
+	o.lastBounds = image.Rectangle{}
+	o.lastDepth = 0
+	o.hasLast = false
 }
 
 // ShowVirtualPointer renders a virtual pointer at the current selection point.
@@ -226,6 +234,7 @@ func (o *Overlay) DrawRecursiveGrid(
 	nextGridCols int,
 	nextGridRows int,
 	style Style,
+	virtualPointer VirtualPointerState,
 ) error {
 	if bounds.Empty() {
 		o.Clear()
@@ -244,9 +253,6 @@ func (o *Overlay) DrawRecursiveGrid(
 			zap.Int("grid_rows", gridRows),
 			zap.String("keys", keys))
 	}
-
-	// Clear previous drawing
-	o.Clear()
 
 	// Use the provided dimensions and calculate key count
 	keyCount := gridCols * gridRows
@@ -370,10 +376,35 @@ func (o *Overlay) DrawRecursiveGrid(
 		subKeyKeys:                  o.getOrCacheLabel(subKeyKeysUpper),
 	}
 
-	// Draw the grid cells
-	C.NeruDrawGridCells(o.window, &cells[0], C.int(len(cells)), finalStyle)
+	shouldAnimate := o.Config().Animation.Enabled && o.hasLast && depth != o.lastDepth &&
+		!o.lastBounds.Empty()
+	transitionDurationSeconds := float64(o.Config().Animation.DurationMS) / millisecondsPerSecond
+	if shouldAnimate {
+		C.NeruAnimateRecursiveGridTransition(
+			o.window,
+			&cells[0],
+			C.int(len(cells)),
+			finalStyle,
+			C.double(transitionDurationSeconds),
+		)
+	} else {
+		C.NeruDrawGridCells(o.window, &cells[0], C.int(len(cells)), finalStyle)
+	}
+
+	if virtualPointer.Visible {
+		o.ShowVirtualPointer(
+			virtualPointer.Position,
+			virtualPointer.Size,
+			virtualPointer.FillColor,
+		)
+	} else {
+		o.HideVirtualPointer()
+	}
 
 	o.drawMu.RUnlock()
+	o.lastBounds = bounds
+	o.lastDepth = depth
+	o.hasLast = true
 
 	return nil
 }
