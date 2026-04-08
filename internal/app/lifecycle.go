@@ -461,14 +461,28 @@ func (a *App) waitForShutdown() error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
+	programmatic := false
+
 	select {
 	case <-sigChan:
 		// OS signal received
 	case <-a.stopChan:
-		// Programmatic stop requested
+		// Programmatic stop requested (e.g. systray quit on Darwin).
+		// The systray event loop has already exited, so calling
+		// systray.Quit() again would dispatch to a dead run loop and
+		// hang until the timeout fires.
+		programmatic = true
 	}
 
 	a.logger.Info("Received shutdown signal, starting graceful shutdown...")
+
+	if programmatic {
+		signal.Stop(sigChan)
+		a.logger.Info("Graceful shutdown completed")
+
+		return nil
+	}
+
 	a.logger.Info("\n⚠️  Shutting down gracefully... (press Ctrl+C again to force quit)")
 
 	done := make(chan struct{})
@@ -511,67 +525,64 @@ func (a *App) Stop() {
 	})
 }
 
-// Cleanup cleans up resources.
+// Cleanup cleans up resources. It is safe to call multiple times; only the
+// first invocation performs the actual teardown.
 func (a *App) Cleanup() {
-	a.logger.Info("Cleaning up")
-
-	// Cancel background GC if running
-	if a.gcCancel != nil {
-		a.gcCancel()
-	}
-
-	a.ExitMode()
-
-	// Stop theme observer: nil the handler first so any in-flight KVO callback
-	// (between the async dispatch and actual observer removal) is a no-op.
-	a.stopThemeObserver()
-
-	// Stop IPC server first to prevent new requests
-	if a.ipcServer != nil {
-		stopServerErr := a.ipcServer.Stop(context.Background())
-		if stopServerErr != nil {
-			a.logger.Error("Failed to stop IPC server", zap.Error(stopServerErr))
+	a.cleanupOnce.Do(func() {
+		a.logger.Info("Cleaning up")
+		// Cancel background GC if running
+		if a.gcCancel != nil {
+			a.gcCancel()
 		}
-	}
 
-	if a.hotkeyManager != nil {
-		a.hotkeyManager.UnregisterAll()
-	}
-
-	if a.overlayManager != nil {
-		a.overlayManager.Destroy()
-	}
-
-	// Cleanup screen share state subscription
-	if a.screenShareSubscriptionID != 0 {
-		a.appState.OffScreenShareStateChanged(a.screenShareSubscriptionID)
-		a.screenShareSubscriptionID = 0
-	}
-
-	if a.eventTap != nil {
-		a.eventTap.Destroy()
-	}
-
-	// Stop accessibility cache cleanup goroutine
-	if a.axCacheStop != nil {
-		a.axCacheStop()
-		a.axCacheStop = nil
-	}
-
-	// Sync and close logger
-	loggerSyncErr := logger.Sync()
-	if loggerSyncErr != nil {
-		// Ignore "inappropriate ioctl for device" error which occurs when syncing stdout/stderr
-		if !strings.Contains(loggerSyncErr.Error(), "inappropriate ioctl for device") {
-			a.logger.Error("Failed to sync logger", zap.Error(loggerSyncErr))
+		a.ExitMode()
+		// Stop theme observer: nil the handler first so any in-flight KVO callback
+		// (between the async dispatch and actual observer removal) is a no-op.
+		a.stopThemeObserver()
+		// Stop IPC server first to prevent new requests
+		if a.ipcServer != nil {
+			stopServerErr := a.ipcServer.Stop(context.Background())
+			if stopServerErr != nil {
+				a.logger.Error("Failed to stop IPC server", zap.Error(stopServerErr))
+			}
 		}
-	}
 
-	a.appWatcher.Stop()
+		if a.hotkeyManager != nil {
+			a.hotkeyManager.UnregisterAll()
+		}
 
-	loggerCloseErr := logger.Close()
-	if loggerCloseErr != nil {
-		// Can't log this since logger is being closed
-		fmt.Fprintf(os.Stderr, "Warning: failed to close logger: %v\n", loggerCloseErr)
-	}
+		if a.overlayManager != nil {
+			a.overlayManager.Destroy()
+		}
+		// Cleanup screen share state subscription
+		if a.screenShareSubscriptionID != 0 {
+			a.appState.OffScreenShareStateChanged(a.screenShareSubscriptionID)
+			a.screenShareSubscriptionID = 0
+		}
+
+		if a.eventTap != nil {
+			a.eventTap.Destroy()
+		}
+		// Stop accessibility cache cleanup goroutine
+		if a.axCacheStop != nil {
+			a.axCacheStop()
+			a.axCacheStop = nil
+		}
+		// Sync and close logger
+		loggerSyncErr := logger.Sync()
+		if loggerSyncErr != nil {
+			// Ignore "inappropriate ioctl for device" error which occurs when syncing stdout/stderr
+			if !strings.Contains(loggerSyncErr.Error(), "inappropriate ioctl for device") {
+				a.logger.Error("Failed to sync logger", zap.Error(loggerSyncErr))
+			}
+		}
+
+		a.appWatcher.Stop()
+
+		loggerCloseErr := logger.Close()
+		if loggerCloseErr != nil {
+			// Can't log this since logger is being closed
+			fmt.Fprintf(os.Stderr, "Warning: failed to close logger: %v\n", loggerCloseErr)
+		}
+	})
 }
