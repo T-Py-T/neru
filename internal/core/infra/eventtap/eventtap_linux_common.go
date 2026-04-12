@@ -3,65 +3,199 @@
 package eventtap
 
 import (
-	"context"
+	"os"
+	"strings"
+	"sync"
 
 	"go.uber.org/zap"
 )
 
-// Callback defines the function signature for handling key press events.
-type Callback func(key string)
+type (
+	// Callback is invoked when a key event is intercepted.
+	Callback func(key string)
+	// PassthroughCallback is invoked when a modifier key is in passthrough mode.
+	PassthroughCallback func()
+)
 
-// PassthroughCallback is invoked when a modifier shortcut passes through to the system.
-type PassthroughCallback func()
-
-// EventTap represents a keyboard event interceptor (Linux stub).
+// EventTap intercepts keyboard events on Linux.
 type EventTap struct {
 	logger *zap.Logger
+
+	mu                   sync.RWMutex
+	callback             Callback
+	passthroughCallback  PassthroughCallback
+	hotkeys              []string
+	stickyModifierToggle bool
+	enabled              bool
+
+	stopCh chan struct{}
+	doneCh chan struct{}
 }
 
-// NewEventTap initializes a new event tap for Linux (stub).
-func NewEventTap(_ Callback, logger *zap.Logger) *EventTap {
-	return &EventTap{logger: logger}
+// NewEventTap creates a new EventTap instance.
+func NewEventTap(callback Callback, logger *zap.Logger) *EventTap {
+	return &EventTap{
+		logger:   logger,
+		callback: callback,
+	}
 }
 
-// Enable enables the event tap (Linux stub).
-func (et *EventTap) Enable() {}
+// Enable starts intercepting keyboard events.
+func (et *EventTap) Enable() {
+	et.mu.Lock()
+	if et.enabled {
+		et.mu.Unlock()
 
-// Disable disables the event tap (Linux stub).
-func (et *EventTap) Disable() {}
+		return
+	}
 
-// Destroy destroys the event tap (Linux stub).
-func (et *EventTap) Destroy() {}
+	et.stopCh = make(chan struct{})
+	et.doneCh = make(chan struct{})
+	et.enabled = true
+	et.mu.Unlock()
 
-// SetHotkeys sets the hotkeys (Linux stub).
-func (et *EventTap) SetHotkeys(_ []string) {}
+	go et.run()
+}
 
-// SetModifierPassthrough sets modifier passthrough (Linux stub).
+// Disable stops intercepting keyboard events.
+func (et *EventTap) Disable() {
+	et.mu.Lock()
+	if !et.enabled {
+		et.mu.Unlock()
+
+		return
+	}
+
+	stopCh := et.stopCh
+	doneCh := et.doneCh
+	et.enabled = false
+	et.mu.Unlock()
+
+	close(stopCh)
+	<-doneCh
+}
+
+// Destroy stops and cleans up the EventTap.
+func (et *EventTap) Destroy() {
+	et.Disable()
+}
+
+// SetHandler sets the callback for key events.
+func (et *EventTap) SetHandler(handler func(key string)) {
+	et.mu.Lock()
+	defer et.mu.Unlock()
+
+	et.callback = handler
+}
+
+// SetHotkeys configures the hotkey list.
+func (et *EventTap) SetHotkeys(hotkeys []string) {
+	et.mu.Lock()
+	defer et.mu.Unlock()
+
+	et.hotkeys = append([]string(nil), hotkeys...)
+}
+
+// SetModifierPassthrough enables/disables modifier passthrough.
 func (et *EventTap) SetModifierPassthrough(_ bool, _ []string) {}
 
-// SetInterceptedModifierKeys sets intercepted modifier keys (Linux stub).
+// SetInterceptedModifierKeys sets which modifier keys to intercept.
 func (et *EventTap) SetInterceptedModifierKeys(_ []string) {}
 
-// SetPassthroughCallback sets the passthrough callback (Linux stub).
-func (et *EventTap) SetPassthroughCallback(_ PassthroughCallback) {}
+// SetPassthroughCallback sets the callback for passthrough mode.
+func (et *EventTap) SetPassthroughCallback(cb PassthroughCallback) {
+	et.mu.Lock()
+	defer et.mu.Unlock()
 
-// SetStickyModifierToggle enables or disables sticky modifier toggle detection (Linux stub).
-func (et *EventTap) SetStickyModifierToggle(_ bool) {}
+	et.passthroughCallback = cb
+}
 
-// PostModifierEvent simulates a physical modifier key press or release (Linux stub).
+// SetStickyModifierToggle enables/disables sticky modifier toggle.
+func (et *EventTap) SetStickyModifierToggle(enabled bool) {
+	et.mu.Lock()
+	defer et.mu.Unlock()
+
+	et.stickyModifierToggle = enabled
+}
+
+// PostModifierEvent posts a modifier key event.
 func (et *EventTap) PostModifierEvent(_ string, _ bool) {}
 
-// SetKeyboardLayout sets the keyboard layout (Linux stub).
+// SetKeyboardLayout sets the keyboard layout.
 func (et *EventTap) SetKeyboardLayout(_ string) bool { return true }
 
-// IsEnabled returns whether the event tap is enabled (Linux stub).
-func (et *EventTap) IsEnabled() bool { return false }
+// IsEnabled returns whether interception is active.
+func (et *EventTap) IsEnabled() bool {
+	et.mu.RLock()
+	defer et.mu.RUnlock()
 
-// SetHandler sets the key handler (Linux stub).
-func (et *EventTap) SetHandler(_ func(key string)) {}
+	return et.enabled
+}
 
-// EnableWithContext enables the event tap with context (Linux stub).
-func (et *EventTap) EnableWithContext(_ context.Context) error { return nil }
+// run starts the event interception loop.
+func (et *EventTap) run() {
+	if os.Getenv("WAYLAND_DISPLAY") != "" {
+		et.runWayland()
+	} else {
+		et.runX11()
+	}
+}
 
-// DisableWithContext disables the event tap with context (Linux stub).
-func (et *EventTap) DisableWithContext(_ context.Context) error { return nil }
+// dispatchKey dispatches a key event to the callback.
+func (et *EventTap) dispatchKey(key string) {
+	et.mu.RLock()
+	callback := et.callback
+	et.mu.RUnlock()
+
+	if callback != nil && key != "" {
+		callback(key)
+	}
+}
+
+// stickyToggleEnabled returns whether sticky toggle is active.
+func (et *EventTap) stickyToggleEnabled() bool {
+	et.mu.RLock()
+	defer et.mu.RUnlock()
+
+	return et.stickyModifierToggle
+}
+
+func normalizeLinuxKey(key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+
+	// Split modifiers from base key
+	parts := strings.Split(key, "+")
+	baseKey := parts[len(parts)-1]
+
+	switch strings.ToLower(baseKey) {
+	case "return":
+		baseKey = "Return"
+	case "space":
+		baseKey = "Space"
+	case "tab":
+		baseKey = "Tab"
+	case "escape", "esc":
+		baseKey = "Escape"
+	case "backspace":
+		baseKey = "Delete"
+	case "left":
+		baseKey = "Left"
+	case "right":
+		baseKey = "Right"
+	case "up":
+		baseKey = "Up"
+	case "down":
+		baseKey = "Down"
+	default:
+		if len([]rune(baseKey)) == 1 {
+			baseKey = strings.ToLower(baseKey)
+		}
+	}
+
+	parts[len(parts)-1] = baseKey
+
+	return strings.Join(parts, "+")
+}

@@ -7,7 +7,8 @@
 **Navigate your entire screen without touching the mouse.**
 
 [![License](https://img.shields.io/github/license/y3owk1n/neru)](LICENSE)
-![Platform](<https://img.shields.io/badge/platform-macOS%20(stable)%20%7C%20Linux%20%26%20Windows%20(foundations%20only)-lightgrey>)
+![Platform](<https://img.shields.io/badge/platform-macOS%20(stable)%20%7C%20Linux%20(X11%2Fwlroots)%20%7C%20Windows%20(foundations)-lightgrey>)
+[![Linux Support](https://img.shields.io/badge/Linux-Supported-blue)](docs/LINUX_SETUP.md)
 ![Go Version](https://img.shields.io/github/go-mod/go-version/y3owk1n/neru)
 [![Latest Release](https://img.shields.io/github/v/release/y3owk1n/neru)](https://github.com/y3owk1n/neru/releases)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/y3owk1n/neru)
@@ -161,9 +162,11 @@ Full reference: [Configuration Docs →](docs/CONFIGURATION.md) · Community con
 
 ## Platform support
 
-macOS is fully supported. Linux and Windows currently expose the shared architecture,
-ports, and stubs, but still need native implementations for core functionality.
-`neru doctor` now reports these runtime capability gaps explicitly.
+macOS is fully supported. Linux and Windows currently expose the shared
+architecture, ports, and stubs, but still need native implementations for core
+functionality. On Linux, the platform factory now distinguishes X11,
+wlroots-based Wayland, GNOME Wayland, KDE Wayland, and unknown sessions so the
+app can return clearer guidance during startup.
 
 Shared code should prefer platform roles over macOS-specific assumptions:
 
@@ -175,8 +178,11 @@ Shared code should prefer platform roles over macOS-specific assumptions:
 | Platform    | Status                  |
 | ----------- | ----------------------- |
 | **macOS**   | ✅ Stable, all features |
-| **Linux**   | 🔲 Foundations only     |
+| **Linux**   | ✅ X11 / Wayland (wlroots) |
 | **Windows** | 🔲 Foundations only     |
+
+Linux-specific setup notes and planned backend targets live in
+[docs/LINUX_SETUP.md](docs/LINUX_SETUP.md).
 
 **Interested in porting?** Check [`cross-platform` issues](https://github.com/y3owk1n/neru/issues?q=is%3Aopen+is%3Aissue+label%3Across-platform) or join the [Linux discussion](https://github.com/y3owk1n/neru/discussions/559).
 
@@ -193,14 +199,14 @@ just build-linux      # or: just build-windows
 
 | Capability                | macOS | Linux | Windows |
 | :------------------------ | :---: | :---: | :-----: |
-| Recursive Grid            |  ✅   |  🔲   |   🔲    |
-| Grid                      |  ✅   |  🔲   |   🔲    |
+| Recursive Grid            |  ✅   |  ✅   |   🔲    |
+| Grid                      |  ✅   |  ✅   |   🔲    |
 | Hints                     |  ✅   |  🔲   |   🔲    |
-| Vim-Style Scrolling       |  ✅   |  🔲   |   🔲    |
-| Direct Mouse Actions      |  ✅   |  🔲   |   🔲    |
-| Global Hotkeys            |  ✅   |  🔲   |   🔲    |
+| Vim-Style Scrolling       |  ✅   |  ✅   |   🔲    |
+| Direct Mouse Actions      |  ✅   |  ✅   |   🔲    |
+| Global Hotkeys            |  ✅   |  ✅   |   🔲    |
 | Accessibility Integration |  ✅   |  🔲   |   🔲    |
-| Native Overlays           |  ✅   |  🔲   |   🔲    |
+| Native Overlays           |  ✅   |  ✅   |   🔲    |
 
 **Roadmap**
 
@@ -210,8 +216,8 @@ just build-linux      # or: just build-windows
   - [x] Full feature set
 - **Phase 2 — Linux**
   - [ ] AT-SPI accessibility integration
-  - [ ] X11/Wayland event capture
-  - [ ] Native overlays
+  - [x] X11/Wayland event capture
+  - [x] Native overlays
 - **Phase 3 — Windows**
   - [ ] UI Automation (UIA) integration
   - [ ] Windows Hooks for event capture

@@ -4,15 +4,28 @@ package accessibility
 
 import (
 	"image"
+	"os"
+	"sync"
 
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/config"
 	"github.com/y3owk1n/neru/internal/core/domain/action"
+	"github.com/y3owk1n/neru/internal/core/infra/platform"
 )
 
 // Element represents a UI element for Linux (e.g., AT-SPI).
-type Element struct{}
+type Element struct {
+	bundleIdentifier string
+	title            string
+	pid              int
+}
+
+var (
+	linuxMouseDown    bool
+	linuxMouseDownPos image.Point
+	linuxMouseDownMu  sync.RWMutex
+)
 
 // SetClickableRoles configures which accessibility roles are treated as clickable (Linux stub).
 func SetClickableRoles(_ []string, _ *zap.Logger) {}
@@ -56,26 +69,101 @@ func (ei *ElementInfo) IsFocused() bool { return ei.isFocused }
 // PID returns the element's process ID.
 func (ei *ElementInfo) PID() int { return ei.pid }
 
-// CheckAccessibilityPermissions verifies permissions for Linux (stub).
+// CheckAccessibilityPermissions verifies permissions for Linux (Linux stub).
 func CheckAccessibilityPermissions() bool { return true }
 
 // SystemWideElement returns the system-wide element (Linux stub).
 func SystemWideElement() *Element { return nil }
 
-// FocusedApplication returns the focused application (Linux stub).
-func FocusedApplication() *Element { return nil }
+// FocusedApplication returns the focused application.
+func FocusedApplication() *Element {
+	if currentLinuxBackend() == linuxBackendWayland {
+		bundleID, pid := wlrootsFocusedApplicationIdentity()
+		if bundleID != "" || pid != 0 {
+			return &Element{
+				bundleIdentifier: bundleID,
+				pid:              pid,
+			}
+		}
 
-// ApplicationByPID returns an application by PID (Linux stub).
-func ApplicationByPID(_ int) *Element { return nil }
+		if os.Getenv("DISPLAY") != "" {
+			bundleID, pid = linuxFocusedApplicationIdentity()
+			if bundleID != "" || pid != 0 {
+				return &Element{
+					bundleIdentifier: bundleID,
+					pid:              pid,
+				}
+			}
+		}
 
-// ApplicationByBundleID returns an application by bundle ID (Linux stub).
-func ApplicationByBundleID(_ string) *Element { return nil }
+		return nil
+	}
+
+	bundleID, pid := linuxFocusedApplicationIdentity()
+	if bundleID == "" && pid == 0 {
+		return nil
+	}
+
+	return &Element{
+		bundleIdentifier: bundleID,
+		pid:              pid,
+	}
+}
+
+// ApplicationByPID returns an application by PID.
+func ApplicationByPID(pid int) *Element {
+	if currentLinuxBackend() == linuxBackendWayland {
+		bundleID := wlrootsApplicationBundleIdentifier(pid)
+		if bundleID != "" {
+			return &Element{
+				bundleIdentifier: bundleID,
+				pid:              pid,
+			}
+		}
+
+		if os.Getenv("DISPLAY") != "" {
+			bundleID = linuxApplicationBundleIdentifier(pid)
+			if bundleID != "" {
+				return &Element{
+					bundleIdentifier: bundleID,
+					pid:              pid,
+				}
+			}
+		}
+
+		return nil
+	}
+
+	bundleID := linuxApplicationBundleIdentifier(pid)
+	if bundleID == "" {
+		return nil
+	}
+
+	return &Element{
+		bundleIdentifier: bundleID,
+		pid:              pid,
+	}
+}
+
+// ApplicationByBundleID returns an application by bundle ID.
+func ApplicationByBundleID(bundleID string) *Element {
+	if bundleID == "" {
+		return nil
+	}
+
+	return &Element{bundleIdentifier: bundleID}
+}
 
 // ElementAtPosition returns the element at a position (Linux stub).
 func ElementAtPosition(_, _ int) *Element { return nil }
 
 // Info retrieves metadata and positioning information for the element (Linux stub).
-func (e *Element) Info() (*ElementInfo, error) { return &ElementInfo{}, nil }
+func (e *Element) Info() (*ElementInfo, error) {
+	return &ElementInfo{
+		title: e.title,
+		pid:   e.pid,
+	}, nil
+}
 
 // Children returns the element's children (Linux stub).
 func (e *Element) Children(_ *InfoCache) ([]*Element, error) { return []*Element{}, nil }
@@ -104,62 +192,236 @@ func (e *Element) Clone() (*Element, error) { return &Element{}, nil }
 // AllWindows returns all windows (Linux stub).
 func AllWindows() ([]*Element, error) { return []*Element{}, nil }
 
-// FrontmostWindow returns the frontmost window (Linux stub).
-func FrontmostWindow() *Element { return nil }
+// FrontmostWindow returns the frontmost window.
+func FrontmostWindow() *Element {
+	if currentLinuxBackend() == linuxBackendWayland {
+		bundleID, pid := wlrootsFocusedApplicationIdentity()
+		if bundleID != "" || pid != 0 {
+			return &Element{
+				bundleIdentifier: bundleID,
+				pid:              pid,
+			}
+		}
+
+		if os.Getenv("DISPLAY") != "" {
+			bundleID, pid = linuxFocusedApplicationIdentity()
+			if bundleID != "" || pid != 0 {
+				return &Element{
+					bundleIdentifier: bundleID,
+					pid:              pid,
+				}
+			}
+		}
+
+		return nil
+	}
+
+	bundleID, pid := linuxFocusedApplicationIdentity()
+	if bundleID == "" && pid == 0 {
+		return nil
+	}
+
+	return &Element{
+		bundleIdentifier: bundleID,
+		pid:              pid,
+	}
+}
 
 // MenuBar returns the menu bar element (Linux stub).
 func (e *Element) MenuBar() *Element { return nil }
 
 // ApplicationName returns the application name (Linux stub).
-func (e *Element) ApplicationName() string { return "" }
+func (e *Element) ApplicationName() string { return e.bundleIdentifier }
 
 // BundleIdentifier returns the bundle identifier (Linux stub).
-func (e *Element) BundleIdentifier() string { return "" }
+func (e *Element) BundleIdentifier() string { return e.bundleIdentifier }
 
 // ScrollBounds returns the scroll bounds (Linux stub).
 func (e *Element) ScrollBounds() image.Rectangle { return image.Rectangle{} }
 
-// SetLeftMouseDown sets the left mouse down state (Linux stub).
-func SetLeftMouseDown(_ bool, _ image.Point) {}
+// SetLeftMouseDown sets the left mouse down state.
+func SetLeftMouseDown(down bool, pos image.Point) {
+	linuxMouseDownMu.Lock()
+	defer linuxMouseDownMu.Unlock()
 
-// IsLeftMouseDown returns whether the left mouse button is down (Linux stub).
-func IsLeftMouseDown() bool { return false }
+	linuxMouseDown = down
+	linuxMouseDownPos = pos
+}
 
-// GetLastMouseDownPosition returns the last mouse down position (Linux stub).
-func GetLastMouseDownPosition() image.Point { return image.Point{} }
+// IsLeftMouseDown returns whether the left mouse button is down.
+func IsLeftMouseDown() bool {
+	linuxMouseDownMu.RLock()
+	defer linuxMouseDownMu.RUnlock()
 
-// ClearLeftMouseDownState clears the mouse down state (Linux stub).
-func ClearLeftMouseDownState() {}
+	return linuxMouseDown
+}
 
-// EnsureMouseUp ensures the mouse is up (Linux stub).
-func EnsureMouseUp() {}
+// GetLastMouseDownPosition returns the last mouse down position.
+func GetLastMouseDownPosition() image.Point {
+	linuxMouseDownMu.RLock()
+	defer linuxMouseDownMu.RUnlock()
 
-// MoveMouseToPoint moves the mouse (Linux stub).
-func MoveMouseToPoint(_ image.Point, _ bool) {}
+	return linuxMouseDownPos
+}
 
-// LeftClickAtPoint performs a left click (Linux stub).
-func LeftClickAtPoint(_ image.Point, _ bool, _ action.Modifiers) error { return nil }
+// ClearLeftMouseDownState clears the mouse down state.
+func ClearLeftMouseDownState() {
+	linuxMouseDownMu.Lock()
+	defer linuxMouseDownMu.Unlock()
 
-// RightClickAtPoint performs a right click (Linux stub).
-func RightClickAtPoint(_ image.Point, _ bool, _ action.Modifiers) error { return nil }
+	linuxMouseDown = false
+	linuxMouseDownPos = image.Point{}
+}
 
-// MiddleClickAtPoint performs a middle click (Linux stub).
-func MiddleClickAtPoint(_ image.Point, _ bool, _ action.Modifiers) error { return nil }
+// EnsureMouseUp ensures the mouse is up.
+func EnsureMouseUp() {
+	if IsLeftMouseDown() {
+		_ = LeftMouseUp()
+	}
+}
 
-// LeftMouseDownAtPoint performs a left mouse down (Linux stub).
-func LeftMouseDownAtPoint(_ image.Point, _ action.Modifiers) error { return nil }
+// MoveMouseToPoint moves the mouse.
+func MoveMouseToPoint(point image.Point, _ bool) {
+	if currentLinuxBackend() == linuxBackendX11 {
+		_ = x11MoveMouseToPoint(point)
+	} else if currentLinuxBackend() == linuxBackendWayland {
+		_ = wlrootsMoveMouseToPoint(point)
+	}
+}
 
-// LeftMouseUpAtPoint performs a left mouse up (Linux stub).
-func LeftMouseUpAtPoint(_ image.Point, _ action.Modifiers) error { return nil }
+// LeftClickAtPoint performs a left click.
+func LeftClickAtPoint(point image.Point, restoreCursor bool, modifiers action.Modifiers) error {
+	if currentLinuxBackend() == linuxBackendX11 {
+		return x11LeftClickAtPoint(point, restoreCursor, modifiers)
+	}
 
-// LeftMouseUp performs a left mouse up at cursor (Linux stub).
-func LeftMouseUp() error { return nil }
+	if currentLinuxBackend() == linuxBackendWayland {
+		return wlrootsLeftClickAtPoint(point, restoreCursor, modifiers)
+	}
 
-// ScrollAtCursor scrolls at the cursor (Linux stub).
-func ScrollAtCursor(_, _ int) error { return nil }
+	return nil
+}
 
-// CurrentCursorPosition returns the cursor position (Linux stub).
-func CurrentCursorPosition() image.Point { return image.Point{} }
+// RightClickAtPoint performs a right click.
+func RightClickAtPoint(point image.Point, restoreCursor bool, modifiers action.Modifiers) error {
+	if currentLinuxBackend() == linuxBackendX11 {
+		return x11RightClickAtPoint(point, restoreCursor, modifiers)
+	}
+
+	if currentLinuxBackend() == linuxBackendWayland {
+		return wlrootsRightClickAtPoint(point, restoreCursor, modifiers)
+	}
+
+	return nil
+}
+
+// MiddleClickAtPoint performs a middle click.
+func MiddleClickAtPoint(point image.Point, restoreCursor bool, modifiers action.Modifiers) error {
+	if currentLinuxBackend() == linuxBackendX11 {
+		return x11MiddleClickAtPoint(point, restoreCursor, modifiers)
+	}
+
+	if currentLinuxBackend() == linuxBackendWayland {
+		return wlrootsMiddleClickAtPoint(point, restoreCursor, modifiers)
+	}
+
+	return nil
+}
+
+// LeftMouseDownAtPoint performs a left mouse down.
+func LeftMouseDownAtPoint(point image.Point, modifiers action.Modifiers) error {
+	if currentLinuxBackend() == linuxBackendX11 {
+		err := x11LeftMouseDownAtPoint(point, modifiers)
+		if err == nil {
+			SetLeftMouseDown(true, point)
+		}
+
+		return err
+	}
+
+	if currentLinuxBackend() == linuxBackendWayland {
+		err := wlrootsLeftMouseDownAtPoint(point, modifiers)
+		if err == nil {
+			SetLeftMouseDown(true, point)
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+// LeftMouseUpAtPoint performs a left mouse up.
+func LeftMouseUpAtPoint(point image.Point, modifiers action.Modifiers) error {
+	if currentLinuxBackend() == linuxBackendX11 {
+		err := x11LeftMouseUpAtPoint(point, modifiers)
+		if err == nil {
+			ClearLeftMouseDownState()
+		}
+
+		return err
+	}
+
+	if currentLinuxBackend() == linuxBackendWayland {
+		err := wlrootsLeftMouseUpAtPoint(point, modifiers)
+		if err == nil {
+			ClearLeftMouseDownState()
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+// LeftMouseUp performs a left mouse up at cursor.
+func LeftMouseUp() error {
+	if currentLinuxBackend() == linuxBackendX11 {
+		err := x11LeftMouseUp()
+		if err == nil {
+			ClearLeftMouseDownState()
+		}
+
+		return err
+	}
+
+	if currentLinuxBackend() == linuxBackendWayland {
+		err := wlrootsLeftMouseUp()
+		if err == nil {
+			ClearLeftMouseDownState()
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+// ScrollAtCursor scrolls at the cursor.
+func ScrollAtCursor(deltaX, deltaY int) error {
+	if currentLinuxBackend() == linuxBackendX11 {
+		return x11ScrollAtCursor(deltaX, deltaY)
+	}
+
+	if currentLinuxBackend() == linuxBackendWayland {
+		return wlrootsScrollAtCursor(deltaX, deltaY)
+	}
+
+	return nil
+}
+
+// CurrentCursorPosition returns the cursor position.
+func CurrentCursorPosition() image.Point {
+	if currentLinuxBackend() == linuxBackendX11 {
+		return x11CurrentCursorPosition()
+	}
+
+	if currentLinuxBackend() == linuxBackendWayland {
+		return wlrootsCurrentCursorPosition()
+	}
+
+	return image.Point{}
+}
 
 // IsClickable checks if the element is clickable (Linux stub).
 func (e *Element) IsClickable(
@@ -173,3 +435,28 @@ func (e *Element) IsClickable(
 
 // IsMissionControlActive returns whether Mission Control is active (Linux stub).
 func IsMissionControlActive() bool { return false }
+
+type linuxBackend string
+
+const (
+	linuxBackendUnknown linuxBackend = "unknown"
+	linuxBackendX11     linuxBackend = "x11"
+	linuxBackendWayland linuxBackend = "wayland"
+)
+
+// currentLinuxBackend delegates to the canonical platform.DetectLinuxBackend
+// so that compositor-family detection (GNOME, KDE, wlroots, etc.) is
+// consistent across all layers.
+func currentLinuxBackend() linuxBackend {
+	switch platform.DetectLinuxBackend() {
+	case platform.BackendX11:
+		return linuxBackendX11
+	case platform.BackendWaylandWlroots:
+		return linuxBackendWayland
+	case platform.BackendUnknown, platform.BackendWaylandGNOME,
+		platform.BackendWaylandKDE, platform.BackendWaylandOther:
+		return linuxBackendUnknown
+	}
+
+	return linuxBackendUnknown
+}
