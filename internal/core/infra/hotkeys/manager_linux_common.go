@@ -58,7 +58,7 @@ func (m *Manager) Register(keyString string, callback Callback) (HotkeyID, error
 		}
 	case platform.BackendWaylandWlroots:
 		m.logger.Info(
-			"Running on Wayland: global hotkeys are unavailable inside Neru. Bind `neru trigger <mode>` in your compositor config instead.",
+			"Running on Wayland: global hotkeys are unavailable inside Neru. Bind `neru <mode>` in your compositor config instead.",
 			zap.String("key", keyString),
 		)
 	case platform.BackendWaylandGNOME, platform.BackendWaylandKDE, platform.BackendWaylandOther:
