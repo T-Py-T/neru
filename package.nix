@@ -11,7 +11,13 @@
   libxkbcommon,
   wayland,
   wayland-protocols,
-  xorg,
+  libx11,
+  libxext,
+  libxfixes,
+  libxrandr,
+  libxrender,
+  libxtst,
+  libxi,
   version ? "main",
   useZip ? false,
   commitHash ? null,
@@ -116,26 +122,26 @@ else
       "-X github.com/y3owk1n/neru/internal/cli.GitCommit=${commitHash}"
     ];
 
-    nativeBuildInputs =
-      [
-        installShellFiles
-        writableTmpDirAsHomeHook
-      ]
-      ++ lib.optionals stdenv.hostPlatform.isLinux [
-        pkg-config
-      ];
+    nativeBuildInputs = [
+      installShellFiles
+      writableTmpDirAsHomeHook
+    ]
+    ++ lib.optionals stdenv.hostPlatform.isLinux [
+      pkg-config
+    ];
 
     buildInputs = lib.optionals stdenv.hostPlatform.isLinux [
       cairo
       libxkbcommon
       wayland
       wayland-protocols
-      xorg.libX11
-      xorg.libXext
-      xorg.libXfixes
-      xorg.libXrandr
-      xorg.libXrender
-      xorg.libXtst
+      libx11
+      libxext
+      libxfixes
+      libxrandr
+      libxrender
+      libxtst
+      libxi
     ];
 
     subPackages = [ "cmd/neru" ];
@@ -145,30 +151,29 @@ else
       export GOTOOLCHAIN=auto
     '';
 
-    postInstall =
-      ''
-        # install shell completions
-        if ${lib.boolToString (stdenv.buildPlatform.canExecute stdenv.hostPlatform)}; then
-        	installShellCompletion --cmd neru \
-        	--bash <($out/bin/neru completion bash) \
-        	--fish <($out/bin/neru completion fish) \
-        	--zsh <($out/bin/neru completion zsh)
-        fi
-      ''
-      + lib.optionalString stdenv.hostPlatform.isDarwin ''
-        # Create a simple .app bundle on the fly for macOS source builds.
-        mkdir -p $out/Applications/Neru.app/Contents/{MacOS,Resources}
+    postInstall = ''
+      # install shell completions
+      if ${lib.boolToString (stdenv.buildPlatform.canExecute stdenv.hostPlatform)}; then
+      	installShellCompletion --cmd neru \
+      	--bash <($out/bin/neru completion bash) \
+      	--fish <($out/bin/neru completion fish) \
+      	--zsh <($out/bin/neru completion zsh)
+      fi
+    ''
+    + lib.optionalString stdenv.hostPlatform.isDarwin ''
+      # Create a simple .app bundle on the fly for macOS source builds.
+      mkdir -p $out/Applications/Neru.app/Contents/{MacOS,Resources}
 
-        cp $out/bin/neru $out/Applications/Neru.app/Contents/MacOS/neru
+      cp $out/bin/neru $out/Applications/Neru.app/Contents/MacOS/neru
 
-        cp ${finalAttrs.src}/resources/icon.icns $out/Applications/Neru.app/Contents/Resources/icon.icns
+      cp ${finalAttrs.src}/resources/icon.icns $out/Applications/Neru.app/Contents/Resources/icon.icns
 
-        SRC_PLIST=${finalAttrs.src}/resources/Info.plist.template
+      SRC_PLIST=${finalAttrs.src}/resources/Info.plist.template
 
-        sed "s|VERSION|${finalAttrs.version}|g" $SRC_PLIST > $out/Applications/Neru.app/Contents/Info.plist
+      sed "s|VERSION|${finalAttrs.version}|g" $SRC_PLIST > $out/Applications/Neru.app/Contents/Info.plist
 
-        echo "✅ Neru.app bundle created at $out/Applications/Neru.app"
-      '';
+      echo "✅ Neru.app bundle created at $out/Applications/Neru.app"
+    '';
 
     passthru = {
       updateScript = nix-update-script { };
