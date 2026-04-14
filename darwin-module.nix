@@ -6,17 +6,23 @@
 }:
 let
   cfg = config.services.neru;
-  configFile = pkgs.writeScript "config.toml" cfg.config;
+  configFile =
+    if cfg.configFile != null then cfg.configFile else pkgs.writeText "config.toml" cfg.config;
 in
 {
   options = {
-    services.neru = with lib.types; {
+    services.neru = {
       enable = lib.mkEnableOption "Neru keyboard navigation";
       package = lib.mkPackageOption pkgs "neru" { };
       config = lib.mkOption {
-        type = types.lines;
+        type = lib.types.lines;
         default = builtins.readFile ./configs/default-config.toml;
         description = "Config to use for {file} `neru/config.toml`.";
+      };
+      configFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.path;
+        default = null;
+        description = "Path to existing config.toml configuration file. Takes precedence over config option.";
       };
     };
   };
@@ -42,7 +48,7 @@ in
       launchd.user.agents.neru = {
         command =
           "/usr/bin/open -W -a ${cfg.package}/Applications/Neru.app --args launch"
-          + (lib.optionalString (cfg.config != "") " --config ${configFile}");
+          + (lib.optionalString (cfg.configFile != null || cfg.config != "") " --config ${configFile}");
         serviceConfig = {
           KeepAlive = true;
           RunAtLoad = true;

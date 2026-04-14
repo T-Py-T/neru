@@ -25,7 +25,7 @@ It's a free, open-source alternative to [Homerow](https://www.homerow.app/), [Mo
 
 > See how the author uses Neru day-to-day → [HOW-I-USE-NERU.md](HOW-I-USE-NERU.md) and a quick demo with `recursive_grid` with my own config:
 
-https://github.com/user-attachments/assets/4504dc19-90e6-43c0-9179-28c866513061
+<https://github.com/user-attachments/assets/4504dc19-90e6-43c0-9179-28c866513061>
 
 ---
 
@@ -73,31 +73,43 @@ Works in native macOS apps, Electron apps (VS Code, Slack, Obsidian), all major 
 
 ## Installation
 
+**macOS (Homebrew — recommended):**
+
 > [!NOTE]
 > The homebrew tap is maintained in another repo: [y3owk1n/homebrew-tap](https://github.com/y3owk1n/homebrew-tap)
 > If there's a problem with the tap, please open an issue in that repo or even better, a PR.
 
 ```bash
-# Homebrew (recommended — gets you auto-updates)
 brew tap y3owk1n/tap
 brew install --cask y3owk1n/tap/neru
 ```
 
-```bash
-# Nix Flake
-# inputs.neru.url = "github:y3owk1n/neru";
-# See docs/INSTALLATION.md for nix-darwin / home-manager setup
+**macOS / Linux (Nix Flake):**
 
-# Build from source
+```bash
+# inputs.neru.url = "github:y3owk1n/neru";
+# Modules: nix-darwin (macOS) · nixosModules (Linux) · home-manager (both)
+# See docs/INSTALLATION.md for full setup
+```
+
+**From source (any platform):**
+
+```bash
 git clone https://github.com/y3owk1n/neru.git
 cd neru && just release
 ```
 
-Then grant accessibility access: **System Settings → Privacy & Security → Accessibility → enable Neru**.
+**Post-install (macOS):** grant accessibility access — **System Settings → Privacy & Security → Accessibility → enable Neru**.
 
 ```bash
 open -a Neru              # launch
-neru services install     # auto-start on login
+neru services install     # auto-start on login (use this only if you're not using nix with launchagents enabled)
+```
+
+**Post-install (Linux):** see [Linux Setup →](docs/LINUX_SETUP.md) for display-server requirements and permissions.
+
+```bash
+neru launch               # launch
 ```
 
 Full walkthrough: [Installation Guide →](docs/INSTALLATION.md)
@@ -177,11 +189,11 @@ Shared code should prefer platform roles over macOS-specific assumptions:
 - Keep backend selection in platform/infra code so contributors can extend Linux without editing shared mode logic.
 - Treat CGO as backend-dependent, not automatically OS-dependent: macOS needs it today, Linux may or may not depending on backend, and Windows should prefer pure-Go Win32 bindings where practical.
 
-| Platform    | Status                  |
-| ----------- | ----------------------- |
-| **macOS**   | ✅ Stable, all features |
+| Platform    | Status                     |
+| ----------- | -------------------------- |
+| **macOS**   | ✅ Stable, all features    |
 | **Linux**   | ✅ X11 / Wayland (wlroots) |
-| **Windows** | 🔲 Foundations only     |
+| **Windows** | 🔲 Foundations only        |
 
 Linux-specific setup notes and planned backend targets live in
 [docs/LINUX_SETUP.md](docs/LINUX_SETUP.md).
@@ -231,16 +243,16 @@ just build-linux      # or: just build-windows
 
 ## Documentation
 
-| Guide                                      | Contents                            |
-| ------------------------------------------ | ----------------------------------- |
-| [Installation](docs/INSTALLATION.md)       | Homebrew, Nix, source builds        |
-| [Configuration](docs/CONFIGURATION.md)     | Every TOML option                   |
-| [CLI](docs/CLI.md)                         | IPC commands and scripting          |
-| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues, app-specific fixes   |
-| [Development](docs/DEVELOPMENT.md)         | Architecture and build instructions |
-| [Architecture](docs/ARCHITECTURE.md)       | Porting guide and system design     |
+| Guide                                          | Contents                                          |
+| ---------------------------------------------- | ------------------------------------------------- |
+| [Installation](docs/INSTALLATION.md)           | Homebrew, Nix, source builds                      |
+| [Configuration](docs/CONFIGURATION.md)         | Every TOML option                                 |
+| [CLI](docs/CLI.md)                             | IPC commands and scripting                        |
+| [Troubleshooting](docs/TROUBLESHOOTING.md)     | Common issues, app-specific fixes                 |
+| [Development](docs/DEVELOPMENT.md)             | Architecture and build instructions               |
+| [Architecture](docs/ARCHITECTURE.md)           | Porting guide and system design                   |
 | [Cross-Platform Guide](docs/CROSS_PLATFORM.md) | Contributor guide for Linux/Windows/platform work |
-| [Roadmap](docs/ROADMAP.md)                 | Current priorities and milestones   |
+| [Roadmap](docs/ROADMAP.md)                     | Current priorities and milestones                 |
 
 ---
 
