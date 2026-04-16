@@ -74,6 +74,7 @@ type parsedActionArgs struct {
 	useBare        bool
 	monitorName    string
 	hasMonitor     bool
+	usePrevious    bool
 	modifierStr    string
 }
 
@@ -197,6 +198,8 @@ func parseActionArgs(rawArgs []string) (parsedActionArgs, bool) {
 			parsed.useSelection = true
 		case arg == "--bare":
 			parsed.useBare = true
+		case arg == "--previous":
+			parsed.usePrevious = true
 		case strings.HasPrefix(arg, "--monitor") && (arg == "--monitor" || arg[len("--monitor")] == '='):
 			val, newIdx, ok := extractStringFlag(rawArgs, idx, "--monitor")
 			idx = newIdx
@@ -246,11 +249,11 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 	}
 
 	if action.IsResetAction(actionName) {
-		return h.handleResetAction()
+		return h.handleResetAction(parsed)
 	}
 
 	if action.IsBackspaceAction(actionName) {
-		return h.handleBackspaceAction()
+		return h.handleBackspaceAction(parsed)
 	}
 
 	if action.IsWaitForModeExitAction(actionName) {
@@ -263,6 +266,10 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 
 	if action.IsRestoreCursorPosAction(actionName) {
 		return h.handleRestoreCursorPosAction(ctx, parsed)
+	}
+
+	if action.IsMoveMonitorAction(actionName) {
+		return h.handleMoveMonitorAction(ctx, parsed)
 	}
 
 	modifiers, modErr := action.ParseModifiers(parsed.modifierStr)
@@ -300,6 +307,14 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 		return ipc.Response{
 			Success: false,
 			Message: "--x/--y/--dx/--dy flags are only supported with move_mouse or move_mouse_relative",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
+	if parsed.usePrevious {
+		return ipc.Response{
+			Success: false,
+			Message: "--previous is only supported with move_monitor",
 			Code:    ipc.CodeInvalidInput,
 		}
 	}
@@ -682,7 +697,15 @@ func (h *IPCControllerActions) resolveMoveMousePoint(
 	}
 }
 
-func (h *IPCControllerActions) handleResetAction() ipc.Response {
+func (h *IPCControllerActions) handleResetAction(parsed parsedActionArgs) ipc.Response {
+	if hasUnsupportedFlags(parsed) {
+		return ipc.Response{
+			Success: false,
+			Message: "reset does not support action flags",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
 	if h.modesHandler == nil {
 		return ipc.Response{
 			Success: false,
@@ -696,7 +719,15 @@ func (h *IPCControllerActions) handleResetAction() ipc.Response {
 	return ipc.Response{Success: true, Message: "mode reset", Code: ipc.CodeOK}
 }
 
-func (h *IPCControllerActions) handleBackspaceAction() ipc.Response {
+func (h *IPCControllerActions) handleBackspaceAction(parsed parsedActionArgs) ipc.Response {
+	if hasUnsupportedFlags(parsed) {
+		return ipc.Response{
+			Success: false,
+			Message: "backspace does not support action flags",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
 	if h.modesHandler == nil {
 		return ipc.Response{
 			Success: false,
@@ -713,7 +744,7 @@ func (h *IPCControllerActions) handleBackspaceAction() ipc.Response {
 func hasUnsupportedFlags(parsed parsedActionArgs) bool {
 	return parsed.hasX || parsed.hasY || parsed.hasDX || parsed.hasDY ||
 		parsed.hasCenter || parsed.hasMonitor || parsed.modifierStr != "" ||
-		parsed.useSelection || parsed.useBare
+		parsed.useSelection || parsed.useBare || parsed.usePrevious
 }
 
 func (h *IPCControllerActions) resolveMouseActionPoint(
@@ -907,6 +938,57 @@ func (h *IPCControllerActions) handleRestoreCursorPosAction(
 	return ipc.Response{Success: true, Message: "cursor restored", Code: ipc.CodeOK}
 }
 
+// handleMoveMonitorAction moves the cursor (and any active mode overlay)
+// to the next or previous connected monitor.
+func (h *IPCControllerActions) handleMoveMonitorAction(
+	ctx context.Context,
+	parsed parsedActionArgs,
+) ipc.Response {
+	if parsed.hasX || parsed.hasY || parsed.hasDX || parsed.hasDY ||
+		parsed.hasCenter || parsed.hasMonitor || parsed.modifierStr != "" ||
+		parsed.useSelection || parsed.useBare {
+		return ipc.Response{
+			Success: false,
+			Message: "move_monitor only supports --previous; use move_mouse --center --monitor to target a named display",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
+	if h.modesHandler == nil {
+		return ipc.Response{
+			Success: false,
+			Message: "modes handler not available",
+			Code:    ipc.CodeActionFailed,
+		}
+	}
+
+	direction := modes.MonitorDirectionNext
+	if parsed.usePrevious {
+		direction = modes.MonitorDirectionPrevious
+	}
+
+	h.logger.Info("Moving monitor via IPC",
+		zap.Bool("previous", parsed.usePrevious),
+	)
+
+	err := h.modesHandler.MoveMonitor(ctx, direction)
+	if err != nil {
+		h.logger.Error("Failed to move monitor", zap.Error(err))
+
+		return ipc.Response{
+			Success: false,
+			Message: "failed to move monitor: " + err.Error(),
+			Code:    ipc.CodeActionFailed,
+		}
+	}
+
+	return ipc.Response{
+		Success: true,
+		Message: "move_monitor performed",
+		Code:    ipc.CodeOK,
+	}
+}
+
 // handleScrollAction dispatches a scroll sub-action (scroll_up, page_down, etc.)
 // to the ScrollService.
 func (h *IPCControllerActions) handleScrollAction(
@@ -928,6 +1010,14 @@ func (h *IPCControllerActions) handleScrollAction(
 		return ipc.Response{
 			Success: false,
 			Message: "scroll actions do not support --x/--y/--dx/--dy/--center/--monitor/--modifier flags",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
+	if parsed.usePrevious {
+		return ipc.Response{
+			Success: false,
+			Message: "--previous is only supported with move_monitor",
 			Code:    ipc.CodeInvalidInput,
 		}
 	}

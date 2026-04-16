@@ -94,7 +94,44 @@ func (h *Handler) startIndicatorPolling(mode domain.Mode) {
 				showModeInd := h.shouldShowModeIndicator(h.appState.CurrentMode())
 				stickyEnabled := h.stickyModifiersEnabled()
 				stickyPoint := h.stickyIndicatorAnchorLocked(image.Pt(cursorX, cursorY))
+
+				cursorPt := image.Pt(cursorX, cursorY)
+
+				if !cursorPt.In(h.screenBounds) && h.system != nil {
+					boundsCtx, boundsCancel := context.WithTimeout(ctx, indicatorPollTimeout)
+					newBounds, boundsErr := h.system.ScreenBounds(boundsCtx)
+
+					boundsCancel()
+
+					if boundsErr == nil && newBounds != h.screenBounds {
+						h.screenBounds = newBounds
+						// Must unlock before resizing overlays — the resize
+						// dispatches to the main queue and we must not hold
+						// h.mu across that call.
+						h.mu.Unlock()
+
+						if ind := h.overlayManager.ModeIndicatorOverlay(); ind != nil {
+							ind.ResizeToActiveScreen()
+						}
+
+						if stickyInd := h.overlayManager.StickyModifiersOverlay(); stickyInd != nil {
+							stickyInd.ResizeToActiveScreen()
+						}
+						// Skip the draw this tick — the async resize hasn't
+						// completed yet, so drawing now would target the old
+						// window frame. The next tick will draw correctly.
+						continue
+					}
+				}
+
+				screenOrigin := h.screenBounds.Min
+
 				h.mu.Unlock()
+
+				localCursorX := cursorX - screenOrigin.X
+				localCursorY := cursorY - screenOrigin.Y
+				localStickyX := stickyPoint.X - screenOrigin.X
+				localStickyY := stickyPoint.Y - screenOrigin.Y
 
 				// Mode indicator: show and draw when enabled, hide otherwise.
 				if showModeInd {
@@ -102,7 +139,7 @@ func (h *Handler) startIndicatorPolling(mode domain.Mode) {
 						ind.Show()
 					}
 
-					h.modeIndicatorService.UpdateIndicatorPosition(cursorX, cursorY)
+					h.modeIndicatorService.UpdateIndicatorPosition(localCursorX, localCursorY)
 				} else if ind := h.overlayManager.ModeIndicatorOverlay(); ind != nil {
 					ind.Clear()
 					ind.Hide()
@@ -116,7 +153,7 @@ func (h *Handler) startIndicatorPolling(mode domain.Mode) {
 							stickyInd.Show()
 						}
 
-						h.drawStickyModifiersIndicator(stickyPoint.X, stickyPoint.Y)
+						h.drawStickyModifiersIndicator(localStickyX, localStickyY)
 					} else if stickyInd := h.overlayManager.StickyModifiersOverlay(); stickyInd != nil {
 						stickyInd.Clear()
 						stickyInd.Hide()
