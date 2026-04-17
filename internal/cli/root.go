@@ -256,7 +256,6 @@ func BuildMoveMouseCommand() *cobra.Command {
 	var (
 		targetX, targetY int
 		center           bool
-		monitor          string
 		selection        bool
 		bare             bool
 	)
@@ -268,37 +267,17 @@ func BuildMoveMouseCommand() *cobra.Command {
 Coordinates are relative to the current display.
 When --center is used, the cursor moves to the center of the active screen.
 If --x and --y are also provided with --center, they act as offsets from center.
-When --monitor is used with --center, the cursor moves to the center of the
-named monitor instead of the active screen. Monitor names are matched
-case-insensitively against the localized display names reported by macOS
-(e.g. "Built-in Retina Display", "DELL U2720Q"). Without coordinates,
-move_mouse targets the active mode selection by default when one exists.
+Without coordinates, move_mouse targets the active mode selection by default when one exists.
 Use --bare to force current-cursor targeting.`,
 		PreRunE: func(_ *cobra.Command, _ []string) error {
 			return requiresRunningInstance()
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			hasMonitor := cmd.Flags().Changed("monitor")
-
-			if hasMonitor && monitor == "" {
-				return derrors.New(
-					derrors.CodeInvalidInput,
-					"--monitor value must not be empty",
-				)
-			}
-
-			if hasMonitor && !center {
-				return derrors.New(
-					derrors.CodeInvalidInput,
-					"--monitor requires --center",
-				)
-			}
-
 			if selection &&
-				(center || hasMonitor || cmd.Flags().Changed("x") || cmd.Flags().Changed("y")) {
+				(center || cmd.Flags().Changed("x") || cmd.Flags().Changed("y")) {
 				return derrors.New(
 					derrors.CodeInvalidInput,
-					"--selection cannot be combined with --x, --y, --center, or --monitor",
+					"--selection cannot be combined with --x, --y, or --center",
 				)
 			}
 
@@ -322,10 +301,6 @@ Use --bare to force current-cursor targeting.`,
 
 			if center {
 				args = append(args, "--center")
-			}
-
-			if hasMonitor {
-				args = append(args, "--monitor="+monitor)
 			}
 
 			if cmd.Flags().Changed("x") {
@@ -357,8 +332,6 @@ Use --bare to force current-cursor targeting.`,
 		BoolVar(&selection, "selection", false, "Explicitly move to the active mode selection")
 	cmd.Flags().
 		BoolVar(&bare, "bare", false, "Use the current cursor position when no explicit target is provided")
-	cmd.Flags().StringVar(&monitor, "monitor", "",
-		"Target monitor by display name (requires --center); e.g. \"Built-in Retina Display\"")
 
 	return cmd
 }
@@ -407,35 +380,60 @@ func BuildScrollActionCommand(use, short, long string) *cobra.Command {
 }
 
 // BuildMoveMonitorCommand creates a move_monitor cobra command that moves the
-// cursor (and any active overlay) to the next or previous monitor.
-//
-// To jump to a specific named display, use
-// `neru action move_mouse --center --monitor=<name>` instead.
+// cursor (and any active overlay) to a specific monitor by name, or cycles
+// through monitors.
 func BuildMoveMonitorCommand() *cobra.Command {
-	var usePrevious bool
+	var (
+		monitorName string
+		usePrevious bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "move_monitor",
 		Short: "Move cursor and overlay to another monitor",
-		Long: `Move the cursor, and any active mode overlay (hints/grid/recursive-grid), to the next or previous connected monitor.
+		Long: `Move the cursor, and any active mode overlay (hints/grid/recursive-grid), to another monitor.
 
-By default the cursor advances to the next monitor in the list returned by the operating system. Use --previous to step backwards.
+By default, cycles to the next monitor. Use --previous to cycle backwards.
+Use --name to jump directly to a specific display by name.
 
-To jump directly to a named display, use "neru action move_mouse --center --monitor=<name>" instead.`,
+Monitor names are matched case-insensitively against the localized display names
+reported by macOS (e.g. "Built-in Retina Display", "DELL U2720Q").`,
 		PreRunE: func(_ *cobra.Command, _ []string) error {
 			return requiresRunningInstance()
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			args := []string{"move_monitor"}
+			hasName := cmd.Flags().Changed("name")
 
-			if usePrevious {
-				args = append(args, "--previous")
+			if hasName && monitorName == "" {
+				return derrors.New(
+					derrors.CodeInvalidInput,
+					"--name value must not be empty",
+				)
 			}
 
-			return sendCommand(cmd, "action", args)
+			if hasName && usePrevious {
+				return derrors.New(
+					derrors.CodeInvalidInput,
+					"--previous cannot be used with --name",
+				)
+			}
+
+			actionArgs := []string{"move_monitor"}
+
+			if hasName {
+				actionArgs = append(actionArgs, "--name="+monitorName)
+			}
+
+			if usePrevious {
+				actionArgs = append(actionArgs, "--previous")
+			}
+
+			return sendCommand(cmd, "action", actionArgs)
 		},
 	}
 
+	cmd.Flags().StringVar(&monitorName, "name", "",
+		"Target monitor by display name (e.g. \"Built-in Retina Display\")")
 	cmd.Flags().
 		BoolVar(&usePrevious, "previous", false, "Cycle to the previous monitor instead of the next one")
 

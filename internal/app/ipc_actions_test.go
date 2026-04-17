@@ -15,7 +15,7 @@ import (
 )
 
 func TestParseActionArgs_MoveMouseFlags(t *testing.T) {
-	parsed, parseErr := parseActionArgs([]string{"--center", "--monitor=Built-in Retina Display"})
+	parsed, parseErr := parseActionArgs([]string{"--center", "--x=100", "--y=200"})
 	if parseErr {
 		t.Fatal("parseActionArgs() unexpected parse error")
 	}
@@ -24,8 +24,12 @@ func TestParseActionArgs_MoveMouseFlags(t *testing.T) {
 		t.Fatal("parseActionArgs() expected hasCenter to be true")
 	}
 
-	if !parsed.hasMonitor {
-		t.Fatal("parseActionArgs() expected hasMonitor to be true")
+	if parsed.xVal != 100 {
+		t.Fatalf("parseActionArgs() expected xVal to be 100, got %d", parsed.xVal)
+	}
+
+	if parsed.yVal != 200 {
+		t.Fatalf("parseActionArgs() expected yVal to be 200, got %d", parsed.yVal)
 	}
 }
 
@@ -51,7 +55,7 @@ func TestParseActionArgs_PreviousFlag(t *testing.T) {
 	}
 }
 
-func TestHandleAction_PreviousRejectedOnNonMoveMonitor(t *testing.T) {
+func TestHandleAction_MoveMonitorRejectsUnsupportedFlags_X(t *testing.T) {
 	controller := &IPCControllerActions{
 		appState: state.NewAppState(),
 		logger:   zap.NewNop(),
@@ -59,34 +63,14 @@ func TestHandleAction_PreviousRejectedOnNonMoveMonitor(t *testing.T) {
 
 	resp := controller.handleAction(context.Background(), ipc.Command{
 		Action: "action",
-		Args:   []string{"left_click", "--previous"},
+		Args:   []string{"move_monitor", "--x=100"},
 	})
 
 	if resp.Success {
-		t.Fatal("handleAction(left_click --previous) expected failure")
+		t.Fatal("handleAction(move_monitor --x) expected failure")
 	}
 
-	if resp.Message != "--previous is only supported with move_monitor" {
-		t.Fatalf("unexpected error message: %q", resp.Message)
-	}
-}
-
-func TestHandleAction_MoveMonitorRejectsMonitorFlag(t *testing.T) {
-	controller := &IPCControllerActions{
-		appState: state.NewAppState(),
-		logger:   zap.NewNop(),
-	}
-
-	resp := controller.handleAction(context.Background(), ipc.Command{
-		Action: "action",
-		Args:   []string{"move_monitor", "--monitor=foo"},
-	})
-
-	if resp.Success {
-		t.Fatal("handleAction(move_monitor --monitor) expected failure")
-	}
-
-	if resp.Message != "move_monitor only supports --previous; use move_mouse --center --monitor to target a named display" {
+	if resp.Message != "move_monitor does not support these flags" {
 		t.Fatalf("unexpected error message: %q", resp.Message)
 	}
 }
@@ -106,34 +90,7 @@ func TestHandleAction_MoveMonitorRejectsUnsupportedFlags(t *testing.T) {
 		t.Fatal("handleAction(move_monitor --selection) expected failure")
 	}
 
-	if resp.Message != "move_monitor only supports --previous; use move_mouse --center --monitor to target a named display" {
-		t.Fatalf("unexpected error message: %q", resp.Message)
-	}
-}
-
-func TestHandleAction_PreviousRejectedOnScrollAction(t *testing.T) {
-	controller := &IPCControllerActions{
-		appState: state.NewAppState(),
-		logger:   zap.NewNop(),
-		scrollService: services.NewScrollService(
-			&portmocks.MockAccessibilityPort{},
-			&portmocks.MockOverlayPort{},
-			&portmocks.SystemMock{},
-			config.ScrollConfig{ScrollStep: 10, ScrollStepHalf: 20, ScrollStepFull: 30},
-			zap.NewNop(),
-		),
-	}
-
-	resp := controller.handleAction(context.Background(), ipc.Command{
-		Action: "action",
-		Args:   []string{"scroll_down", "--previous"},
-	})
-
-	if resp.Success {
-		t.Fatal("handleAction(scroll_down --previous) expected failure")
-	}
-
-	if resp.Message != "--previous is only supported with move_monitor" {
+	if resp.Message != "move_monitor does not support these flags" {
 		t.Fatalf("unexpected error message: %q", resp.Message)
 	}
 }
@@ -216,6 +173,109 @@ func TestHandleAction_ScrollSelectionWithoutActiveSelectionErrors(t *testing.T) 
 	}
 }
 
+func TestHandleAction_PreviousRejectedOnNonMoveMonitor(t *testing.T) {
+	controller := &IPCControllerActions{
+		appState: state.NewAppState(),
+		logger:   zap.NewNop(),
+	}
+
+	resp := controller.handleAction(context.Background(), ipc.Command{
+		Action: "action",
+		Args:   []string{"left_click", "--previous"},
+	})
+
+	if resp.Success {
+		t.Fatal("handleAction(left_click --previous) expected failure")
+	}
+
+	if resp.Message != "--previous and --name are only supported with move_monitor" {
+		t.Fatalf("unexpected error message: %q", resp.Message)
+	}
+}
+
+func TestHandleAction_NameRejectedOnNonMoveMonitor(t *testing.T) {
+	controller := &IPCControllerActions{
+		appState: state.NewAppState(),
+		logger:   zap.NewNop(),
+	}
+
+	resp := controller.handleAction(context.Background(), ipc.Command{
+		Action: "action",
+		Args:   []string{"reset", "--name=DELL"},
+	})
+
+	if resp.Success {
+		t.Fatal("handleAction(reset --name) expected failure")
+	}
+
+	if resp.Message != "reset does not support action flags" {
+		t.Fatalf("unexpected error message: %q", resp.Message)
+	}
+}
+
+func TestHandleAction_PreviousRejectedOnScrollAction(t *testing.T) {
+	controller := &IPCControllerActions{
+		appState: state.NewAppState(),
+		logger:   zap.NewNop(),
+		scrollService: services.NewScrollService(
+			&portmocks.MockAccessibilityPort{},
+			&portmocks.MockOverlayPort{},
+			&portmocks.SystemMock{},
+			config.ScrollConfig{ScrollStep: 10, ScrollStepHalf: 20, ScrollStepFull: 30},
+			zap.NewNop(),
+		),
+	}
+
+	resp := controller.handleAction(context.Background(), ipc.Command{
+		Action: "action",
+		Args:   []string{"scroll_down", "--previous"},
+	})
+
+	if resp.Success {
+		t.Fatal("handleAction(scroll_down --previous) expected failure")
+	}
+
+	if resp.Message != "scroll actions do not support --x/--y/--dx/--dy/--center/--name/--modifier/--previous flags" {
+		t.Fatalf("unexpected error message: %q", resp.Message)
+	}
+}
+
+func TestParseActionArgs_NameFlag(t *testing.T) {
+	parsed, parseErr := parseActionArgs([]string{"--name=DELL U2720Q"})
+	if parseErr {
+		t.Fatal("parseActionArgs() unexpected parse error for --name")
+	}
+
+	if !parsed.hasMonitorName {
+		t.Fatal("parseActionArgs() expected hasMonitorName to be true")
+	}
+
+	if parsed.monitorName != "DELL U2720Q" {
+		t.Fatalf(
+			"parseActionArgs() expected monitorName to be 'DELL U2720Q', got %q",
+			parsed.monitorName,
+		)
+	}
+}
+
+func TestParseActionArgs_NameFlagSpaceForm(t *testing.T) {
+	parsed, parseErr := parseActionArgs([]string{"--name", "Built-in Retina Display"})
+	if parseErr {
+		t.Fatal("parseActionArgs() unexpected parse error for --name space form")
+	}
+
+	if !parsed.hasMonitorName {
+		t.Fatal("parseActionArgs() expected hasMonitorName to be true")
+	}
+
+	if parsed.monitorName != "Built-in Retina Display" {
+		t.Fatalf(
+			"parseActionArgs() expected monitorName to be 'Built-in Retina Display', got %q",
+			parsed.monitorName,
+		)
+	}
+}
+
 func TestShouldClearSelectionAfterMoveMouse(t *testing.T) {
 	t.Parallel()
 
@@ -240,12 +300,6 @@ func TestShouldClearSelectionAfterMoveMouse(t *testing.T) {
 		{
 			name:             "center move clears selection",
 			parsed:           parsedActionArgs{hasCenter: true},
-			targetsSelection: false,
-			want:             true,
-		},
-		{
-			name:             "monitor center move clears selection",
-			parsed:           parsedActionArgs{hasCenter: true, hasMonitor: true},
 			targetsSelection: false,
 			want:             true,
 		},
