@@ -42,11 +42,10 @@ jobs:
                   COMMIT_URL="https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
                   NOTES_FILE="$(mktemp)"
                   cat > "${NOTES_FILE}" <<EOF
-                  This pre-release is automatically built from the latest commit on \`main\` after the nightly workflow passes.
+                  This pre-release is automatically built from the latest commit on \`main\`.
 
                   > [!WARNING]
-                  > This is a nightly build, not a tagged release.
-                  > It may include incomplete changes, regressions, or experimental behavior.
+                  > This is a nightly build, not a tagged release. It may include incomplete changes, regressions, or experimental behavior.
                   > Use a tagged release if you want the most stable experience.
 
                   ### Build Details
@@ -74,6 +73,13 @@ jobs:
                     --title "Neru Nightly" \
                     --notes-file "${NOTES_FILE}" \
                     --prerelease
+
+                  RELEASE_ID="$(gh release view nightly --json databaseId --jq '.databaseId')"
+                  gh api \
+                    --method PATCH \
+                    "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+                    -f draft=false \
+                    -f prerelease=true
 
     publish-nightly-artifacts:
         needs: prepare-nightly-release
