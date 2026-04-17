@@ -38,11 +38,41 @@ jobs:
               env:
                   GH_TOKEN: ${{ github.token }}
               run: |
+                  SHORT_SHA="${GITHUB_SHA::7}"
+                  COMMIT_URL="https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+                  NOTES_FILE="$(mktemp)"
+                  cat > "${NOTES_FILE}" <<EOF
+                  This pre-release is automatically built from the latest commit on \`main\` after the nightly workflow passes.
+
+                  > [!WARNING]
+                  > This is a nightly build, not a tagged release.
+                  > It may include incomplete changes, regressions, or experimental behavior.
+                  > Use a tagged release if you want the most stable experience.
+
+                  ### Build Details
+
+                  - **Commit:** [\`${SHORT_SHA}\`](${COMMIT_URL})
+                  - **Branch:** \`main\`
+                  - **Full SHA:** \`${GITHUB_SHA}\`
+                  - **Source:** GitHub Actions nightly workflow
+
+                  ### Artifacts
+
+                  - \`neru-darwin-arm64.zip\` for macOS on Apple Silicon
+                  - \`neru-darwin-amd64.zip\` for macOS on Intel
+                  - \`neru-linux-amd64.zip\` for Linux x86_64
+                  - \`neru-linux-arm64.zip\` for Linux ARM64
+
+                  ### Feedback
+
+                  If nightly regresses, please include the commit above when filing an issue so we can narrow it down faster.
+                  EOF
+
                   gh release delete nightly --yes --cleanup-tag || true
                   gh release create nightly \
                     --target "${GITHUB_SHA}" \
-                    --title "Nightly" \
-                    --notes "Automated nightly build from commit ${GITHUB_SHA}." \
+                    --title "Neru Nightly" \
+                    --notes-file "${NOTES_FILE}" \
                     --prerelease
 
     publish-nightly-artifacts:
