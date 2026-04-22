@@ -49,6 +49,7 @@ const (
 	centeredRectHalf                       = 0.5
 	paddingMultiplier                      = 2
 	subKeyPreviewPaddingBottom             = 4
+	stickyBadgeClearPadding                = 3
 )
 
 type linuxOverlayBackend string
@@ -79,11 +80,16 @@ type Manager struct {
 	x11     *x11Overlay
 	wlroots *wlrootsOverlay
 
+	keyboardCaptureEnabled bool
+
 	hintOverlay            *hints.Overlay
 	gridOverlay            *grid.Overlay
 	modeIndicatorOverlay   *modeindicator.Overlay
 	recursiveGridOverlay   *recursivegrid.Overlay
 	stickyModifiersOverlay *stickyindicator.Overlay
+
+	stickyBadgeRect    image.Rectangle
+	stickyBadgeVisible bool
 }
 
 var (
@@ -95,10 +101,11 @@ var (
 // NewOverlayManager creates a new overlay Manager.
 func NewOverlayManager(logger *zap.Logger) *Manager {
 	manager := &Manager{
-		logger:  logger,
-		mode:    ModeIdle,
-		subs:    make(map[uint64]func(StateChange), initialSubscriberCapacity),
-		backend: detectLinuxOverlayBackend(),
+		logger:                 logger,
+		mode:                   ModeIdle,
+		subs:                   make(map[uint64]func(StateChange), initialSubscriberCapacity),
+		backend:                detectLinuxOverlayBackend(),
+		keyboardCaptureEnabled: true,
 	}
 
 	switch manager.backend {
@@ -164,6 +171,26 @@ func (m *Manager) Hide() {
 	} else if m.wlroots != nil {
 		m.wlroots.Hide()
 	}
+
+	m.stickyBadgeVisible = false
+	m.stickyBadgeRect = image.Rectangle{}
+}
+
+// SetKeyboardCaptureEnabled controls whether the Wayland overlay requests
+// exclusive keyboard focus or remains keyboard-passive.
+func (m *Manager) SetKeyboardCaptureEnabled(enabled bool) {
+	if m == nil {
+		return
+	}
+
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
+
+	m.keyboardCaptureEnabled = enabled
+
+	if m.wlroots != nil {
+		m.wlroots.setKeyboardCaptureEnabled(enabled)
+	}
 }
 
 // Clear clears the overlay content.
@@ -176,6 +203,9 @@ func (m *Manager) Clear() {
 	} else if m.wlroots != nil {
 		m.wlroots.Clear()
 	}
+
+	m.stickyBadgeVisible = false
+	m.stickyBadgeRect = image.Rectangle{}
 }
 
 // ResizeToActiveScreen resizes the overlay to the active screen.
@@ -401,7 +431,16 @@ func (m *Manager) DrawModeIndicator(posX, posY int) {
 
 // DrawStickyModifiersIndicator draws the sticky modifiers indicator overlay.
 func (m *Manager) DrawStickyModifiersIndicator(posX, posY int, symbols string) {
-	if m.stickyModifiersOverlay == nil || symbols == "" {
+	if m.stickyModifiersOverlay == nil {
+		return
+	}
+
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
+
+	if symbols == "" {
+		m.clearStickyBadgeLocked()
+
 		return
 	}
 
@@ -410,8 +449,12 @@ func (m *Manager) DrawStickyModifiersIndicator(posX, posY int, symbols string) {
 		return
 	}
 
-	m.renderMu.Lock()
-	defer m.renderMu.Unlock()
+	m.clearStickyBadgeLocked()
+	m.stickyBadgeRect = expandRect(
+		badgeBounds(posX, posY, symbols, style),
+		stickyBadgeClearPadding,
+	)
+	m.stickyBadgeVisible = true
 
 	if m.x11 != nil {
 		m.x11.DrawBadge(posX, posY, symbols, colors, style)
@@ -560,6 +603,21 @@ func (m *Manager) SetHideUnmatched(hide bool) {
 
 // SetSharingType is a no-op on Linux.
 func (m *Manager) SetSharingType(_ bool) {}
+
+func (m *Manager) clearStickyBadgeLocked() {
+	if !m.stickyBadgeVisible {
+		return
+	}
+
+	if m.x11 != nil {
+		m.x11.ClearRect(m.stickyBadgeRect)
+	} else if m.wlroots != nil {
+		m.wlroots.ClearRect(m.stickyBadgeRect)
+	}
+
+	m.stickyBadgeVisible = false
+	m.stickyBadgeRect = image.Rectangle{}
+}
 
 func (m *Manager) publish(change StateChange) {
 	m.mu.RLock()
@@ -735,6 +793,34 @@ func estimateTextWidth(text string, fontSize float64) int {
 
 func estimateTextHeight(fontSize float64) int {
 	return int(math.Ceil(fontSize * textHeightMultiplier))
+}
+
+func badgeBounds(posX, posY int, text string, style overlayBadgeStyle) image.Rectangle {
+	fontSize := style.fontSize
+	if fontSize <= 0 {
+		fontSize = 14
+	}
+
+	paddingX := resolveAutoPadding(fontSize, style.paddingX, true)
+	paddingY := resolveAutoPadding(fontSize, style.paddingY, false)
+	width := estimateTextWidth(text, fontSize) + paddingX*paddingMultiplier
+	height := estimateTextHeight(fontSize) + paddingY*paddingMultiplier
+
+	return image.Rect(
+		posX+style.offsetX,
+		posY+style.offsetY,
+		posX+style.offsetX+width,
+		posY+style.offsetY+height,
+	)
+}
+
+func expandRect(rect image.Rectangle, amount int) image.Rectangle {
+	return image.Rect(
+		rect.Min.X-amount,
+		rect.Min.Y-amount,
+		rect.Max.X+amount,
+		rect.Max.Y+amount,
+	)
 }
 
 func centeredRect(cell image.Rectangle, width, height int) image.Rectangle {

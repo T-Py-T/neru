@@ -7,6 +7,8 @@ import "image"
 // Exported wrappers for wlroots input injection.
 // These delegate to the build-tagged (cgo/nocgo) implementations.
 
+var globalWlrootsModifierDispatcher = newWlrootsModifierDispatcher(wlrootsModifierEvent)
+
 // WlrootsMoveCursorToPoint moves the virtual pointer to an absolute position.
 func WlrootsMoveCursorToPoint(point image.Point) error {
 	return wlrootsMoveCursorToPoint(point)
@@ -38,4 +40,9 @@ func WlrootsButtonRelease(button int) error {
 // larger scroll distances.
 func WlrootsScroll(axis, delta int) error {
 	return wlrootsScroll(axis, delta)
+}
+
+// WlrootsModifierEvent presses or releases a virtual keyboard modifier.
+func WlrootsModifierEvent(modifier string, isDown bool) error {
+	return globalWlrootsModifierDispatcher.event(modifier, isDown)
 }

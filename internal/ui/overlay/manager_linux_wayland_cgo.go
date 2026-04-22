@@ -6,6 +6,7 @@ package overlay
 #cgo linux pkg-config: wayland-client cairo xkbcommon
 #include <wayland-client.h>
 #include <xkbcommon/xkbcommon.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -14,6 +15,7 @@ package overlay
 #include <errno.h>
 #include <cairo/cairo.h>
 #include <poll.h>
+#include <stdio.h>
 
 #include "../../core/infra/platform/linux/wlr_protocol/xdg-shell.h"
 #include "../../core/infra/platform/linux/wlr_protocol/layer-shell.h"
@@ -80,16 +82,33 @@ static struct {
     int count;
 } key_ring = { .head = 0, .tail = 0, .count = 0 };
 
-static volatile int keyboard_enter_received = 0;
+static void neru_key_ring_push(const char *key) {
+    if (!key || key[0] == '\0' || key_ring.count >= NERU_KEY_RING_CAP) return;
 
-//export neruWaylandOverlayOnKey
-static void neruWaylandOverlayOnKey(const char *key) {
-    (void)key; // unused — keyboard events go through neru_keyboard_key
+    snprintf(key_ring.keys[key_ring.head], sizeof(key_ring.keys[0]), "%s", key);
+    key_ring.head = (key_ring.head + 1) % NERU_KEY_RING_CAP;
+    key_ring.count++;
 }
 
-//export neruWaylandOverlayOnEnter
-static void neruWaylandOverlayOnEnter(void) {
-    keyboard_enter_received = 1;
+static const char* neru_modifier_name_from_keysym(xkb_keysym_t keysym) {
+    switch (keysym) {
+        case XKB_KEY_Shift_L:
+        case XKB_KEY_Shift_R:
+            return "shift";
+        case XKB_KEY_Control_L:
+        case XKB_KEY_Control_R:
+            return "ctrl";
+        case XKB_KEY_Alt_L:
+        case XKB_KEY_Alt_R:
+            return "alt";
+        case XKB_KEY_Super_L:
+        case XKB_KEY_Super_R:
+        case XKB_KEY_Meta_L:
+        case XKB_KEY_Meta_R:
+            return "cmd";
+        default:
+            return NULL;
+    }
 }
 
 // Create anonymous shared memory
@@ -234,9 +253,7 @@ static void neru_keyboard_keymap(void *data, struct wl_keyboard *keyboard,
 }
 
 static void neru_keyboard_enter(void *data, struct wl_keyboard *keyboard,
-    uint32_t serial, struct wl_surface *surface, struct wl_array *keys) {
-    keyboard_enter_received = 1;
-}
+    uint32_t serial, struct wl_surface *surface, struct wl_array *keys) {}
 
 static void neru_keyboard_leave(void *data, struct wl_keyboard *keyboard,
     uint32_t serial, struct wl_surface *surface) {}
@@ -244,49 +261,64 @@ static void neru_keyboard_leave(void *data, struct wl_keyboard *keyboard,
 static void neru_keyboard_key(void *data, struct wl_keyboard *keyboard,
     uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
     NeruWaylandOverlay *overlay = (NeruWaylandOverlay *)data;
-    if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
-        char buf[64] = {0};
+    if (!overlay->xkb_state) return;
 
-        if (overlay->xkb_state) {
-            xkb_keysym_t keysym = xkb_state_key_get_one_sym(overlay->xkb_state, key + 8);
-            xkb_keysym_get_name(keysym, buf, sizeof(buf));
+    xkb_keysym_t keysym = xkb_state_key_get_one_sym(overlay->xkb_state, key + 8);
+    const char *modifier_name = neru_modifier_name_from_keysym(keysym);
+    if (modifier_name) {
+        char modifier_key[64] = {0};
+        snprintf(
+            modifier_key,
+            sizeof(modifier_key),
+            "__modifier_%s_%s",
+            modifier_name,
+            state == WL_KEYBOARD_KEY_STATE_PRESSED ? "down" : "up"
+        );
+        neru_key_ring_push(modifier_key);
 
-            // Check modifiers - build standard macOS-style modifier prefix
-            char mod_prefix[64] = "";
-            if (xkb_state_mod_name_is_active(overlay->xkb_state, XKB_MOD_NAME_SHIFT, XKB_STATE_MODS_EFFECTIVE) > 0) strcat(mod_prefix, "Shift+");
-            if (xkb_state_mod_name_is_active(overlay->xkb_state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE) > 0) strcat(mod_prefix, "Ctrl+");
-            if (xkb_state_mod_name_is_active(overlay->xkb_state, XKB_MOD_NAME_ALT, XKB_STATE_MODS_EFFECTIVE) > 0) strcat(mod_prefix, "Alt+");
-            if (xkb_state_mod_name_is_active(overlay->xkb_state, XKB_MOD_NAME_LOGO, XKB_STATE_MODS_EFFECTIVE) > 0) strcat(mod_prefix, "Cmd+");
+        return;
+    }
 
-            char utf8_buf[64] = {0};
-            xkb_state_key_get_utf8(overlay->xkb_state, key + 8, utf8_buf, sizeof(utf8_buf));
+    if (state != WL_KEYBOARD_KEY_STATE_PRESSED) {
+        return;
+    }
 
-            char *final_key = buf; // Fallback to keysym name
+    char buf[64] = {0};
+    xkb_keysym_get_name(keysym, buf, sizeof(buf));
 
-            // If the utf8 string is exactly 1 printable ascii character (and not space), use it!
-            // This properly handles characters like ',' or '.' which xkb_keysym_get_name translates to "comma"/"period".
-            if (utf8_buf[0] != '\0' && utf8_buf[1] == '\0' && utf8_buf[0] > 32 && utf8_buf[0] <= 126) {
-                final_key = utf8_buf;
-                // If it's a letter, lowercase it for consistency so Shift+l doesn't become Shift+L
-                if (final_key[0] >= 'A' && final_key[0] <= 'Z') {
-                    final_key[0] = final_key[0] + 32;
-                }
-            } else if (buf[0]) {
-                // Otherwise format the keysym name
-                for (int i = 0; buf[i]; i++) {
-                    if (buf[i] >= 'A' && buf[i] <= 'Z') {
-                        buf[i] = buf[i] + 32;
-                    }
-                }
-            }
+    // Check modifiers - build standard macOS-style modifier prefix
+    char mod_prefix[64] = "";
+    if (xkb_state_mod_name_is_active(overlay->xkb_state, XKB_MOD_NAME_SHIFT, XKB_STATE_MODS_EFFECTIVE) > 0) strcat(mod_prefix, "Shift+");
+    if (xkb_state_mod_name_is_active(overlay->xkb_state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE) > 0) strcat(mod_prefix, "Ctrl+");
+    if (xkb_state_mod_name_is_active(overlay->xkb_state, XKB_MOD_NAME_ALT, XKB_STATE_MODS_EFFECTIVE) > 0) strcat(mod_prefix, "Alt+");
+    if (xkb_state_mod_name_is_active(overlay->xkb_state, XKB_MOD_NAME_LOGO, XKB_STATE_MODS_EFFECTIVE) > 0) strcat(mod_prefix, "Cmd+");
 
-            if (final_key[0] && key_ring.count < NERU_KEY_RING_CAP) {
-                snprintf(key_ring.keys[key_ring.head], sizeof(key_ring.keys[0]),
-                         "%s%s", mod_prefix, final_key);
-                key_ring.head = (key_ring.head + 1) % NERU_KEY_RING_CAP;
-                key_ring.count++;
+    char utf8_buf[64] = {0};
+    xkb_state_key_get_utf8(overlay->xkb_state, key + 8, utf8_buf, sizeof(utf8_buf));
+
+    char *final_key = buf; // Fallback to keysym name
+
+    // If the utf8 string is exactly 1 printable ascii character (and not space), use it!
+    // This properly handles characters like ',' or '.' which xkb_keysym_get_name translates to "comma"/"period".
+    if (utf8_buf[0] != '\0' && utf8_buf[1] == '\0' && utf8_buf[0] > 32 && utf8_buf[0] <= 126) {
+        final_key = utf8_buf;
+        // If it's a letter, lowercase it for consistency so Shift+l doesn't become Shift+L
+        if (final_key[0] >= 'A' && final_key[0] <= 'Z') {
+            final_key[0] = final_key[0] + 32;
+        }
+    } else if (buf[0]) {
+        // Otherwise format the keysym name
+        for (int i = 0; buf[i]; i++) {
+            if (buf[i] >= 'A' && buf[i] <= 'Z') {
+                buf[i] = buf[i] + 32;
             }
         }
+    }
+
+    if (final_key[0]) {
+        char full_key[128] = {0};
+        snprintf(full_key, sizeof(full_key), "%s%s", mod_prefix, final_key);
+        neru_key_ring_push(full_key);
     }
 }
 
@@ -333,6 +365,9 @@ static const struct wl_seat_listener seat_listener = {
 static NeruWaylandOverlay* neru_wayland_overlay_new(void) {
     NeruWaylandOverlay *overlay = calloc(1, sizeof(NeruWaylandOverlay));
     if (!overlay) return NULL;
+
+    overlay->keyboard_interactivity_set =
+        ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE;
 
     overlay->display = wl_display_connect(NULL);
     if (!overlay->display) {
@@ -429,8 +464,10 @@ static void neru_wayland_overlay_setup_buffers(NeruWaylandOverlay *overlay) {
 
         // Request exclusive keyboard interactivity when overlay is shown
         // This tells the compositor to send keyboard events to this surface
-        zwlr_layer_surface_v1_set_keyboard_interactivity(scr->layer_surface,
-            ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
+        zwlr_layer_surface_v1_set_keyboard_interactivity(
+            scr->layer_surface,
+            overlay->keyboard_interactivity_set
+        );
 
         zwlr_layer_surface_v1_add_listener(scr->layer_surface, &layer_surface_listener, overlay);
         wl_surface_commit(scr->wl_surface);
@@ -511,6 +548,30 @@ static void neru_wayland_overlay_hide(NeruWaylandOverlay *overlay) {
     wl_display_flush(overlay->display);
 }
 
+static void neru_wayland_overlay_set_keyboard_capture(
+    NeruWaylandOverlay *overlay,
+    int enabled
+) {
+    if (!overlay) return;
+
+    overlay->keyboard_interactivity_set = enabled
+        ? ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE
+        : ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE;
+
+    for (int i = 0; i < overlay->nr_screens; i++) {
+        NeruWaylandOverlayScreen *scr = &overlay->screens[i];
+        if (!scr->layer_surface || !scr->wl_surface) continue;
+
+        zwlr_layer_surface_v1_set_keyboard_interactivity(
+            scr->layer_surface,
+            overlay->keyboard_interactivity_set
+        );
+        wl_surface_commit(scr->wl_surface);
+    }
+
+    wl_display_roundtrip(overlay->display);
+}
+
 static void neru_wayland_overlay_clear(NeruWaylandOverlay *overlay) {
     if (!overlay) return;
     for (int i = 0; i < overlay->nr_screens; i++) {
@@ -521,6 +582,24 @@ static void neru_wayland_overlay_clear(NeruWaylandOverlay *overlay) {
             cairo_paint(scr->cr);
             cairo_restore(scr->cr);
         }
+    }
+}
+
+static void neru_wayland_overlay_clear_rect(NeruWaylandOverlay *overlay, double x, double y, double width, double height) {
+    if (!overlay || width <= 0 || height <= 0) return;
+    for (int i = 0; i < overlay->nr_screens; i++) {
+        NeruWaylandOverlayScreen *scr = &overlay->screens[i];
+        if (!scr->cr) continue;
+
+        double scr_x = x - scr->x;
+        double scr_y = y - scr->y;
+
+        cairo_t *cr = scr->cr;
+        cairo_save(cr);
+        cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+        cairo_rectangle(cr, scr_x, scr_y, width, height);
+        cairo_fill(cr);
+        cairo_restore(cr);
     }
 }
 
@@ -635,14 +714,12 @@ static const char* neruWaylandOverlayGetKey(NeruWaylandOverlay *overlay) {
     return neru_wayland_overlay_get_key(overlay);
 }
 
-//export neruWaylandOverlayCheckEnter
-static int neruWaylandOverlayCheckEnter(NeruWaylandOverlay *overlay) {
-    (void)overlay;
-    if (keyboard_enter_received) {
-        keyboard_enter_received = 0;
-        return 1;
-    }
-    return 0;
+//export neruWaylandOverlaySetKeyboardCapture
+static void neruWaylandOverlaySetKeyboardCapture(
+    NeruWaylandOverlay *overlay,
+    int enabled
+) {
+    neru_wayland_overlay_set_keyboard_capture(overlay, enabled);
 }
 */
 import "C"
@@ -744,6 +821,19 @@ func (o *wlrootsOverlay) Hide() {
 func (o *wlrootsOverlay) Clear() {
 	if o != nil && o.raw != nil {
 		C.neru_wayland_overlay_clear(o.raw)
+	}
+}
+
+func (o *wlrootsOverlay) ClearRect(rect image.Rectangle) {
+	if o != nil && o.raw != nil && !rect.Empty() {
+		C.neru_wayland_overlay_clear_rect(
+			o.raw,
+			C.double(rect.Min.X),
+			C.double(rect.Min.Y),
+			C.double(rect.Dx()),
+			C.double(rect.Dy()),
+		)
+		C.neru_wayland_overlay_flush(o.raw)
 	}
 }
 
@@ -891,16 +981,7 @@ func (o *wlrootsOverlay) DrawBadge(
 		fontSize = 14
 	}
 
-	paddingX := resolveAutoPadding(fontSize, style.paddingX, true)
-	paddingY := resolveAutoPadding(fontSize, style.paddingY, false)
-	width := estimateTextWidth(text, fontSize) + paddingX*paddingMultiplier
-	height := estimateTextHeight(fontSize) + paddingY*paddingMultiplier
-	rect := image.Rect(
-		posX+style.offsetX,
-		posY+style.offsetY,
-		posX+style.offsetX+width,
-		posY+style.offsetY+height,
-	)
+	rect := badgeBounds(posX, posY, text, style)
 
 	o.drawRect(rect, colors.background, colors.border, max(style.borderWidth, 1))
 	o.drawTextCentered(text, rect, style.fontFamily, fontSize, colors.text)
@@ -999,6 +1080,19 @@ func (o *wlrootsOverlay) keyboardPoller() {
 			time.Sleep(pollInterval)
 		}
 	}
+}
+
+func (o *wlrootsOverlay) setKeyboardCaptureEnabled(enabled bool) {
+	if o == nil || o.raw == nil {
+		return
+	}
+
+	cEnabled := C.int(0)
+	if enabled {
+		cEnabled = 1
+	}
+
+	C.neruWaylandOverlaySetKeyboardCapture(o.raw, cEnabled)
 }
 
 // startPoller launches the keyboard polling goroutine.
