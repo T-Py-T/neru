@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/y3owk1n/neru/internal/core/domain"
+	"github.com/y3owk1n/neru/internal/core/infra/eventtap"
+	"github.com/y3owk1n/neru/internal/ui/overlay"
 )
 
 const (
@@ -25,6 +27,11 @@ func (h *Handler) startIndicatorPolling(mode domain.Mode) {
 	// indicator is enabled for this mode.
 	if h.config == nil || (!h.modeIndicatorEnabled(mode) && !h.stickyModifiersEnabled()) {
 		return
+	}
+	// Disable exclusive keyboard so scroll events pass through to applications
+	// when indicator overlays are shown, but only if uinput scroll is active
+	if m := overlay.Get(); m != nil && eventtap.IsUinputScrollAvailable() {
+		m.SetKeyboardCaptureEnabled(false)
 	}
 	// Ensure the mode indicator overlay covers the correct screen before
 	// the goroutine starts drawing. Scroll and hints modes already call
@@ -175,6 +182,11 @@ func (h *Handler) startIndicatorPolling(mode domain.Mode) {
 // stopIndicatorPolling stops the indicator polling goroutine and cleans up
 // both mode indicator and sticky modifiers indicator overlays.
 func (h *Handler) stopIndicatorPolling() {
+	// Restore keyboard capture if uinput scroll was active.
+	if m := overlay.Get(); m != nil && eventtap.IsUinputScrollAvailable() {
+		m.SetKeyboardCaptureEnabled(true)
+	}
+
 	// Signal stop first.
 	if h.indicatorStopCh != nil {
 		close(h.indicatorStopCh)

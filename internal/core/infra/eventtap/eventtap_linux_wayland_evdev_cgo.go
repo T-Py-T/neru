@@ -4,7 +4,9 @@ package eventtap
 
 /*
 #include <errno.h>
+#include <fcntl.h>
 #include <linux/input.h>
+#include <linux/uinput.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -47,6 +49,79 @@ static int neru_evdev_is_keyboard(int fd) {
 static ssize_t neru_evdev_read_event(int fd, struct input_event *event) {
 	return read(fd, event, sizeof(struct input_event));
 }
+
+static int neru_uinput_create_scroll(int *out_fd) {
+	int fd = open("/dev/uinput", O_RDWR);
+	if (fd < 0) {
+		fd = open("/dev/input/uinput", O_RDWR);
+	}
+	if (fd < 0) {
+		return 0;
+	}
+
+	if (ioctl(fd, UI_SET_EVBIT, EV_REL) < 0) {
+		close(fd);
+		return 0;
+	}
+	if (ioctl(fd, UI_SET_RELBIT, REL_WHEEL) < 0) {
+		close(fd);
+		return 0;
+	}
+	if (ioctl(fd, UI_SET_RELBIT, REL_HWHEEL) < 0) {
+		close(fd);
+		return 0;
+	}
+	if (ioctl(fd, UI_SET_RELBIT, REL_WHEEL_HI_RES) < 0) {
+		close(fd);
+		return 0;
+	}
+	if (ioctl(fd, UI_SET_RELBIT, REL_HWHEEL_HI_RES) < 0) {
+		close(fd);
+		return 0;
+	}
+
+	struct uinput_setup usetup;
+	memset(&usetup, 0, sizeof(usetup));
+	usetup.id.bustype = BUS_USB;
+	usetup.id.vendor = 0x1234;
+	usetup.id.product = 0x5678;
+	strcpy(usetup.name, "neru-scroll");
+	if (ioctl(fd, UI_DEV_SETUP, &usetup) < 0) {
+		close(fd);
+		return 0;
+	}
+	if (ioctl(fd, UI_DEV_CREATE) < 0) {
+		close(fd);
+		return 0;
+	}
+
+	*out_fd = fd;
+	return 1;
+}
+
+static int neru_uinput_scroll(int fd, int axis, int value) {
+	struct input_event ev;
+	memset(&ev, 0, sizeof(ev));
+
+	ev.type = EV_REL;
+	ev.code = (axis == 0) ? REL_WHEEL_HI_RES : REL_HWHEEL_HI_RES;
+	ev.value = value * 120;
+	ssize_t w1 = write(fd, &ev, sizeof(ev));
+
+	memset(&ev, 0, sizeof(ev));
+	ev.type = EV_REL;
+	ev.code = (axis == 0) ? REL_WHEEL : REL_HWHEEL;
+	ev.value = value;
+	ssize_t w2 = write(fd, &ev, sizeof(ev));
+
+	memset(&ev, 0, sizeof(ev));
+	ev.type = EV_SYN;
+	ev.code = SYN_REPORT;
+	ev.value = 0;
+	ssize_t w3 = write(fd, &ev, sizeof(ev));
+
+	return (w1 == sizeof(ev) && w2 == sizeof(ev) && w3 == sizeof(ev)) ? 1 : 0;
+}
 */
 import "C"
 
@@ -71,6 +146,8 @@ const (
 var (
 	errWaylandEvdevUnavailable = errors.New("wayland evdev capture unavailable")
 	errWaylandEvdevGrabFailed  = errors.New("wayland evdev grab failed")
+	errUinputScrollUnavailable = errors.New("uinput scroll device unavailable")
+	errUinputScrollSend        = errors.New("failed to send uinput scroll event")
 )
 
 type waylandEvdevEvent struct {
@@ -392,4 +469,51 @@ func (state *waylandEvdevKeyState) trackKey(code uint16, isDown bool) {
 	}
 
 	delete(state.pressed, code)
+}
+
+var (
+	uinputScrollOnce sync.Once
+	uinputScrollFd   int
+	errUinputScroll  error
+)
+
+func initUinputScroll() error {
+	var fd C.int
+	if C.neru_uinput_create_scroll(&fd) == 0 {
+		return fmt.Errorf("%w", errUinputScrollUnavailable)
+	}
+	uinputScrollFd = int(fd)
+
+	return nil
+}
+
+func getUinputScrollFd() (int, error) {
+	uinputScrollOnce.Do(func() {
+		errUinputScroll = initUinputScroll()
+	})
+	if errUinputScroll != nil {
+		return 0, errUinputScroll
+	}
+
+	return uinputScrollFd, nil
+}
+
+// IsUinputScrollAvailable returns true if uinput scroll is available.
+func IsUinputScrollAvailable() bool {
+	_, _ = getUinputScrollFd()
+
+	return errUinputScroll == nil
+}
+
+// ScrollDeviceScroll sends a scroll event via the uinput virtual device.
+func ScrollDeviceScroll(axis, value int) error {
+	fd, err := getUinputScrollFd()
+	if err != nil {
+		return err
+	}
+	if C.neru_uinput_scroll(C.int(fd), C.int(axis), C.int(value)) == 0 {
+		return fmt.Errorf("%w", errUinputScrollSend)
+	}
+
+	return nil
 }
