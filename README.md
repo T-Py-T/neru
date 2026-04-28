@@ -24,7 +24,7 @@ It's a free, open-source alternative to [Homerow](https://www.homerow.app/), [Mo
 
 > See how the author uses Neru day-to-day → [HOW-I-USE-NERU.md](HOW-I-USE-NERU.md) and a quick demo with `recursive_grid` with my own config:
 
-<https://github.com/user-attachments/assets/4504dc19-90e6-43c0-9179-28c866513061>
+<https://github.com/user-attachments/assets/6b5673e1-7131-4bc0-ad57-41678e9423b9>
 
 ---
 
