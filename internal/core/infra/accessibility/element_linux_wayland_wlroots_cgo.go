@@ -275,14 +275,13 @@ func wlrootsScrollAtCursor(deltaX, deltaY int) error {
 	if deltaY != 0 {
 		events := wlrootsScrollEvents(deltaY)
 
-		// Wayland axis convention: positive = scroll down.
-		// Application convention: positive deltaY = scroll up.
-		// Negate to convert between the two conventions.
-		step := -wlrootsScrollStep
+		// Wayland axis convention on niri/Sway/River matches the kernel
+		// evdev path: positive deltaY = scroll up. See issue #732.
+		step := wlrootsScrollStep
 
 		discreteStep := 1
 		if deltaY < 0 {
-			step = wlrootsScrollStep
+			step = -wlrootsScrollStep
 			discreteStep = -1
 		}
 
