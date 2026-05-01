@@ -14,7 +14,11 @@ import (
 	"context"
 	"image"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
 
 	derrors "github.com/y3owk1n/neru/internal/core/errors"
 	"github.com/y3owk1n/neru/internal/core/ports"
@@ -215,9 +219,32 @@ func (s *SystemAdapter) CursorPosition(ctx context.Context) (image.Point, error)
 }
 
 // IsDarkMode returns true if Linux dark mode is currently active.
-// TODO(linux): implement using org.freedesktop.appearance color-scheme D-Bus property.
+// Queries the freedesktop appearance portal via busctl. Returns false on
+// any error or when no portal is reachable. See issue #697.
 func (s *SystemAdapter) IsDarkMode() bool {
-	return false
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, "busctl",
+		"--user", "--quiet", "call",
+		"org.freedesktop.portal.Desktop",
+		"/org/freedesktop/portal/desktop",
+		"org.freedesktop.portal.Settings",
+		"Read", "ss",
+		"org.freedesktop.appearance", "color-scheme",
+	).Output()
+	if err != nil {
+		return false
+	}
+
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 {
+		return false
+	}
+
+	n, err := strconv.Atoi(fields[len(fields)-1])
+
+	return err == nil && n == 1
 }
 
 // CheckPermissions verifies accessibility permissions on Linux.
