@@ -37,6 +37,3 @@ config.toml
 !configs/default-config.toml
 
 .direnv/
-
-# Local planning / PRDs / feature-tracking notes (not part of the repo)
-tasks/
