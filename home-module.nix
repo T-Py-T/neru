@@ -61,8 +61,7 @@ in
               status will be a non-zero number, for example:
               `-	1	org.nix-community.home.neru`
 
-            In case of failure, check the logs with `cat ~/Library/Logs/neru/app.log`.
-            If the app fails to launch at all, check `cat /tmp/neru.err.log` for errors from the `open` command.
+            If the app fails to launch at all, check `cat /tmp/neru.err.log` for launch errors.
 
             For more detailed service status, run `launchctl print gui/$(id -u)/org.nix-community.home.neru`.
           '';
@@ -111,17 +110,14 @@ in
       enable = cfg.launchd.enable;
       config = {
         ProgramArguments = [
-          "/usr/bin/open"
-          "-W"
-          "-a"
-          "${cfg.package}/Applications/Neru.app"
-          "--args"
+          "${cfg.package}/Applications/Neru.app/Contents/MacOS/neru"
           "launch"
           "--config"
           "${config.xdg.configHome}/neru/config.toml"
         ];
         RunAtLoad = true;
         KeepAlive = cfg.launchd.keepAlive;
+        StandardOutPath = "/tmp/neru.log";
         StandardErrorPath = "/tmp/neru.err.log";
         ProcessType = "Interactive";
         LimitLoadToSessionType = "Aqua";
