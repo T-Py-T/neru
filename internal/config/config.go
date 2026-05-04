@@ -1395,6 +1395,33 @@ func (c *HintsConfig) buildRolesMap(bundleID string) map[string]struct{} {
 	return rolesMap
 }
 
+// MatchesAdditionalBundle checks if a bundle ID matches any user-provided additional bundles.
+// It supports both exact matches and wildcard patterns (ending with *).
+func MatchesAdditionalBundle(bundleID string, additionalBundles []string) bool {
+	if bundleID == "" || len(additionalBundles) == 0 {
+		return false
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(bundleID))
+
+	for _, candidate := range additionalBundles {
+		trimmed := strings.ToLower(strings.TrimSpace(candidate))
+		if trimmed == "" {
+			continue
+		}
+
+		if prefix, found := strings.CutSuffix(trimmed, "*"); found {
+			if strings.HasPrefix(lower, prefix) {
+				return true
+			}
+		} else if lower == trimmed {
+			return true
+		}
+	}
+
+	return false
+}
+
 // IsAllLetters checks if a string contains only letters (a-z, A-Z).
 func IsAllLetters(keyStr string) bool {
 	for _, r := range keyStr {
@@ -1406,4 +1433,30 @@ func IsAllLetters(keyStr string) bool {
 	}
 
 	return len(keyStr) > 0
+}
+
+// KnownChromiumBundles contains known Chromium-based application bundle identifiers.
+// These applications benefit from AXEnhancedUserInterface accessibility improvements.
+var KnownChromiumBundles = []string{
+	"net.imput.helium",
+	"com.google.Chrome",
+	"com.brave.Browser",
+	"company.thebrowser.Browser",
+}
+
+// KnownFirefoxBundles contains known Firefox-based application bundle identifiers.
+// These applications benefit from AXEnhancedUserInterface accessibility improvements.
+var KnownFirefoxBundles = []string{
+	"org.mozilla.firefox",
+	"app.zen-browser.zen",
+}
+
+// KnownElectronBundles contains known Electron-based application bundle identifiers.
+// These applications require manual accessibility attribute toggling to work properly.
+var KnownElectronBundles = []string{
+	"com.microsoft.VSCode",
+	"com.exafunction.windsurf",
+	"com.tinyspeck.slackmacgap",
+	"com.spotify.client",
+	"md.obsidian",
 }
