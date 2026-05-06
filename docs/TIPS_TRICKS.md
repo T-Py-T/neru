@@ -16,6 +16,7 @@
 - [Running a Custom Configuration via App Bundle](#running-a-custom-configuration-via-app-bundle)
 - [Triggering Neru Actions from External Tools](#triggering-neru-actions-from-external-tools)
 - [Combining Hints with Other Actions](#combining-hints-with-other-actions)
+- [Moving windows to other macOS native spaces](#moving-windows-to-other-macOS-native-spaces)
 
 ---
 
@@ -222,6 +223,19 @@ The `--action` flag on hints mode is not limited to `left_click`. You can pass o
 ```
 
 Useful for apps where you frequently need a right-click menu (e.g. Finder, VS Code file tree) without moving your hands to the mouse.
+
+## Moving windows to other macOS native spaces
+
+The snippet is ugly but it works fine, feel free to improvise it. Things to note:
+
+- `feed <key>` should be your native macOS hotkey for switching spaces
+- `yabai` is just something that I uses and not required
+- restore cursor is also optional
+
+```toml
+"Alt+Shift+1" = ["action save_cursor_pos", "action move_mouse --window --y -1000 --x -1000", "action sleep 0.05", "action move_mouse_relative --dx 100 --dy 2", "action sleep 0.05", "action mouse_down", "action sleep 0.1", "action move_mouse_relative --dx 5 --dy 5", "action sleep 0.1", "action feed cmd+shift+ctrl+alt+1", "action sleep 0.2", "action mouse_up", "exec yabai -m space --balance", "action restore_cursor_pos"]
+"Alt+Shift+2" = ["action save_cursor_pos", "action move_mouse --window --y -1000 --x -1000", "action sleep 0.05", "action move_mouse_relative --dx 100 --dy 2", "action sleep 0.05", "action mouse_down", "action sleep 0.1", "action move_mouse_relative --dx 5 --dy 5", "action sleep 0.1", "action feed cmd+shift+ctrl+alt+2", "action sleep 0.2", "action mouse_up", "exec yabai -m space --balance", "action restore_cursor_pos"]
+```
 
 ---
 
