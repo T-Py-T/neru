@@ -40,6 +40,7 @@ type MockAXClient struct {
 	LastCalledBundleID         string
 	LastClickableNodesRoles    []string
 	LastBundleRoles            []string
+	LastMenuBarStrictFiltering bool
 	ClickableNodesRolesHistory [][]string
 }
 
@@ -69,7 +70,11 @@ func (m *MockAXClient) ClickableNodes(_ AXElement, _ bool, roles []string) ([]AX
 }
 
 // MenuBarClickableElements returns the configured menu bar nodes or error.
-func (m *MockAXClient) MenuBarClickableElements() ([]AXNode, error) {
+func (m *MockAXClient) MenuBarClickableElements(strictFiltering bool) ([]AXNode, error) {
+	m.mu.Lock()
+	m.LastMenuBarStrictFiltering = strictFiltering
+	m.mu.Unlock()
+
 	return m.MockMenuBarNodes, m.MockMenuBarNodesErr
 }
 
