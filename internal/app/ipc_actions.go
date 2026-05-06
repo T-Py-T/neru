@@ -239,6 +239,10 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 		return h.handleFeedAction(cmd.Args[1:])
 	}
 
+	if action.Name(actionName) == action.NameSleep {
+		return h.handleSleepAction(cmd.Args[1:])
+	}
+
 	parsed, parseErr := parseActionArgs(cmd.Args[1:])
 	if parseErr {
 		return ipc.Response{
@@ -581,6 +585,84 @@ func (h *IPCControllerActions) handleFeedAction(args []string) ipc.Response {
 		Message: "feed performed",
 		Code:    ipc.CodeOK,
 	}
+}
+
+func (h *IPCControllerActions) handleSleepAction(args []string) ipc.Response {
+	durationStr := ""
+	for idx := 0; idx < len(args); idx++ {
+		arg := strings.TrimSpace(args[idx])
+		if after, ok := strings.CutPrefix(arg, "--duration="); ok {
+			durationStr = after
+		} else if arg == "--duration" {
+			val, newIdx, ok := extractStringFlag(args, idx, "--duration")
+			idx = newIdx
+
+			if ok && val != "" {
+				durationStr = val
+			}
+		} else if !strings.HasPrefix(arg, "--") && arg != "" && durationStr == "" {
+			durationStr = arg
+		}
+	}
+
+	duration, err := parseSleepDuration(durationStr)
+	if err != nil {
+		return ipc.Response{
+			Success: false,
+			Message: err.Error(),
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
+	h.logger.Debug("sleep action sleeping", zap.Duration("duration", duration))
+	time.Sleep(duration)
+
+	return ipc.Response{
+		Success: true,
+		Message: "sleep performed",
+		Code:    ipc.CodeOK,
+	}
+}
+
+func parseSleepDuration(durationStr string) (time.Duration, error) {
+	if durationStr == "" {
+		return 0, derrors.New(
+			derrors.CodeInvalidInput,
+			"sleep requires a duration (e.g., 0.2s, 200ms)",
+		)
+	}
+
+	duration, err := time.ParseDuration(durationStr)
+	if err == nil {
+		if duration <= 0 {
+			return 0, derrors.Newf(
+				derrors.CodeInvalidInput,
+				"sleep duration must be positive, got %s",
+				durationStr,
+			)
+		}
+
+		return duration, nil
+	}
+
+	secs, err := strconv.ParseFloat(durationStr, 64)
+	if err != nil {
+		return 0, derrors.Newf(
+			derrors.CodeInvalidInput,
+			"invalid sleep duration %q: expected a number (seconds) or a duration string such as 200ms or 1.5s",
+			durationStr,
+		)
+	}
+
+	if secs <= 0 {
+		return 0, derrors.Newf(
+			derrors.CodeInvalidInput,
+			"sleep duration must be positive, got %s",
+			durationStr,
+		)
+	}
+
+	return time.Duration(secs * float64(time.Second)), nil
 }
 
 func (h *IPCControllerActions) handleMoveMouseAction(
