@@ -147,14 +147,26 @@ Some browser-like apps need a short delay after a click so the page content can 
 
 ```toml
 [[hints.app_configs]]
-bundle_id = "net.imput.helium"
-
-[hints.app_configs.hotkeys]
-"Return" = ["action left_click", "action sleep 0.8", "hints"]
-"Shift+L" = "__disabled__"
+bundle_id = "com.brave.Browser"
+hotkeys = {
+	"Return" = ["action left_click", "action sleep 0.8", "hints"],
+	"Shift+L" = "__disabled__"
+}
 ```
 
-This merges on top of `[hints.hotkeys]`, so only the keys listed here change for Helium. Everything else keeps using your normal hint bindings.
+This merges on top of `[hints.hotkeys]`, so only the keys listed here change for Brave Browser. Everything else keeps using your normal hint bindings.
+
+You can use the same pattern for grid and recursive_grid modes:
+
+```toml
+[[grid.app_configs]]
+bundle_id = "com.brave.Browser"
+hotkeys = { "Return" = "action left_click" }
+
+[[recursive_grid.app_configs]]
+bundle_id = "com.brave.Browser"
+hotkeys = { "u" = "action left_click" }
+```
 
 ## Checking the Accessibility Tree on macOS
 
