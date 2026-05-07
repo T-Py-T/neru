@@ -13,6 +13,14 @@ import (
 	"github.com/y3owk1n/neru/internal/core/infra/ipc"
 )
 
+func parseCSV(input string) []string {
+	if input == "" {
+		return nil
+	}
+
+	return strings.Split(input, ",")
+}
+
 // IPCControllerLifecycle handles lifecycle-related IPC commands.
 type IPCControllerLifecycle struct {
 	appState *state.AppState
@@ -140,7 +148,7 @@ type ModeActivationOptions struct {
 	Repeat                bool
 	CursorFollowSelection *bool
 	FilterRoles           []string
-	FilterTextContains    string
+	FilterTextContains    []string
 }
 
 // extractModeOptions extracts and validates the optional action and repeat
@@ -236,12 +244,14 @@ func (h *IPCControllerModes) extractModeOptions(
 				return opts, &resp
 			}
 		case strings.HasPrefix(arg, "--role="):
-			opts.FilterRoles = append(opts.FilterRoles, strings.TrimPrefix(arg, "--role="))
+			opts.FilterRoles = append(
+				opts.FilterRoles,
+				parseCSV(strings.TrimPrefix(arg, "--role="))...)
 		case arg == "--role":
-			if startIdx+1 >= len(cmd.Args) {
+			if startIdx+1 >= len(cmd.Args) || cmd.Args[startIdx+1] == "--role" {
 				resp := ipc.Response{
 					Success: false,
-					Message: "--role requires a value",
+					Message: "--role requires a value (use comma-separated: --role=AXButton,AXLink)",
 					Code:    ipc.CodeInvalidInput,
 				}
 
@@ -249,14 +259,15 @@ func (h *IPCControllerModes) extractModeOptions(
 			}
 
 			startIdx++
-			opts.FilterRoles = append(opts.FilterRoles, cmd.Args[startIdx])
+			opts.FilterRoles = append(opts.FilterRoles, parseCSV(cmd.Args[startIdx])...)
 		case strings.HasPrefix(arg, "--text="):
-			opts.FilterTextContains = strings.TrimPrefix(arg, "--text=")
+			texts := parseCSV(strings.TrimPrefix(arg, "--text="))
+			opts.FilterTextContains = append(opts.FilterTextContains, texts...)
 		case arg == "--text":
-			if startIdx+1 >= len(cmd.Args) {
+			if startIdx+1 >= len(cmd.Args) || cmd.Args[startIdx+1] == "--text" {
 				resp := ipc.Response{
 					Success: false,
-					Message: "--text requires a value",
+					Message: "--text requires a value (use comma-separated: --text=foo,bar)",
 					Code:    ipc.CodeInvalidInput,
 				}
 
@@ -264,7 +275,8 @@ func (h *IPCControllerModes) extractModeOptions(
 			}
 
 			startIdx++
-			opts.FilterTextContains = cmd.Args[startIdx]
+			texts := parseCSV(cmd.Args[startIdx])
+			opts.FilterTextContains = append(opts.FilterTextContains, texts...)
 		case opts.Action == nil:
 			actionArg := arg
 			opts.Action = &actionArg

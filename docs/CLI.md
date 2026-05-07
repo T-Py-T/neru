@@ -250,8 +250,8 @@ neru hints --role AXButton --text submit
 # Show only links with "docs" in title/description/value
 neru hints --role AXLink --text docs
 
-# Multiple roles + text filter
-neru hints --role AXButton --role AXLink --text save
+# Multiple roles/values - comma-separated for convenience
+neru hints --role AXButton,AXLink --text save,cancel
 
 # With repeat - filter persists on re-activation
 neru hints --text next --action left_click --repeat
@@ -259,8 +259,8 @@ neru hints --text next --action left_click --repeat
 
 | Flag | Description |
 |------|-------------|
-| `--role` | Filter by AX role (can be repeated). Overrides configured clickable roles. |
-| `--text` | Filter elements by text content (title, description, or value). Case-insensitive substring match. |
+| `--role` | Filter by AX role. Comma-separated for multiple (e.g., `--role AXButton,AXLink`). |
+| `--text` | Filter elements by text content (title, description, or value). Case-insensitive substring match. Comma-separated for OR match (matches any). |
 
 The filter is preserved across repeat activations, making it easy to click multiple elements of the same type in succession.
 
