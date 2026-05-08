@@ -46,6 +46,20 @@ static int neru_evdev_is_keyboard(int fd) {
 		NERU_TEST_KEY(key_bits, KEY_ENTER);
 }
 
+static int neru_evdev_get_name(int fd, char *name, size_t name_size) {
+	int r = ioctl(fd, EVIOCGNAME(name_size), name);
+	if (r < 0) return -1;
+	return r;
+}
+
+static int neru_evdev_get_bustype(int fd) {
+	struct input_id id;
+	if (ioctl(fd, EVIOCGID, &id) < 0) {
+		return -1;
+	}
+	return id.bustype;
+}
+
 static ssize_t neru_evdev_read_event(int fd, struct input_event *event) {
 	return read(fd, event, sizeof(struct input_event));
 }
@@ -130,6 +144,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -149,6 +164,32 @@ var (
 	errUinputScrollUnavailable = errors.New("uinput scroll device unavailable")
 	errUinputScrollSend        = errors.New("failed to send uinput scroll event")
 )
+
+const waylandEvdevDeviceNameSize = 256
+
+const waylandEvdevBusVirtual = 0x06
+
+var knownVirtualDevices = []string{"kanata"}
+
+func isUinputVirtualDevice(fd C.int, name string) bool {
+	bustype := int(C.neru_evdev_get_bustype(fd))
+	if bustype == waylandEvdevBusVirtual {
+		return true
+	}
+
+	if name == "" {
+		return false
+	}
+
+	lower := strings.ToLower(name)
+	for _, known := range knownVirtualDevices {
+		if strings.Contains(lower, known) {
+			return true
+		}
+	}
+
+	return false
+}
 
 type waylandEvdevEvent struct {
 	eventType uint16
@@ -187,8 +228,20 @@ func newWaylandEvdevCapture() (*waylandEvdevCapture, error) {
 			continue
 		}
 
-		fd := C.int(file.Fd())
-		if C.neru_evdev_is_keyboard(fd) == 0 {
+		fileDescriptor := C.int(file.Fd())
+		if C.neru_evdev_is_keyboard(fileDescriptor) == 0 {
+			_ = file.Close()
+
+			continue
+		}
+
+		var deviceName [waylandEvdevDeviceNameSize]C.char
+		if C.neru_evdev_get_name(fileDescriptor, &deviceName[0], waylandEvdevDeviceNameSize) <= 0 {
+			deviceName[0] = 0
+		}
+
+		name := C.GoString(&deviceName[0])
+		if isUinputVirtualDevice(fileDescriptor, name) {
 			_ = file.Close()
 
 			continue
@@ -260,16 +313,74 @@ func (capture *waylandEvdevCapture) grabAll() error {
 		return nil
 	}
 
+	var grabbedFiles []*os.File
 	for _, file := range capture.files {
 		fd := C.int(file.Fd())
 		if C.neru_evdev_grab(fd, 1) != 0 {
-			capture.ungrabAll()
+			for _, f := range grabbedFiles {
+				C.neru_evdev_grab(C.int(f.Fd()), 0)
+			}
+
+			virtualFile := capture.findVirtualDevice()
+			if virtualFile != nil {
+				kfd := C.int(virtualFile.Fd())
+				if C.neru_evdev_grab(kfd, 1) != 0 {
+					_ = virtualFile.Close()
+				} else {
+					for _, f := range capture.files {
+						_ = f.Close()
+					}
+
+					capture.files = []*os.File{virtualFile}
+					capture.grabbed = true
+
+					return nil
+				}
+			}
+
+			for _, f := range capture.files {
+				_ = f.Close()
+			}
 
 			return fmt.Errorf("%w: %s", errWaylandEvdevGrabFailed, file.Name())
 		}
+
+		grabbedFiles = append(grabbedFiles, file)
 	}
 
 	capture.grabbed = true
+
+	return nil
+}
+
+func (capture *waylandEvdevCapture) findVirtualDevice() *os.File {
+	paths, _ := filepath.Glob("/dev/input/event*")
+	for _, path := range paths {
+		file, openErr := os.Open(path)
+		if openErr != nil {
+			continue
+		}
+
+		fileDescriptor := C.int(file.Fd())
+
+		var deviceName [waylandEvdevDeviceNameSize]C.char
+		if C.neru_evdev_get_name(fileDescriptor, &deviceName[0], waylandEvdevDeviceNameSize) <= 0 {
+			deviceName[0] = 0
+		}
+
+		name := C.GoString(&deviceName[0])
+		if !isUinputVirtualDevice(fileDescriptor, name) {
+			_ = file.Close()
+
+			continue
+		}
+
+		if C.neru_evdev_is_keyboard(fileDescriptor) != 0 {
+			return file
+		}
+
+		_ = file.Close()
+	}
 
 	return nil
 }
