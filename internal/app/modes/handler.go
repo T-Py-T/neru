@@ -115,6 +115,9 @@ type Handler struct {
 	indicatorTicker *time.Ticker
 	indicatorStopCh chan struct{}
 	indicatorDoneCh chan struct{}
+
+	// Cycle hint state
+	cycleHintIndex int
 }
 
 // NewHandler creates a new mode handler.
@@ -191,6 +194,7 @@ func NewHandler(
 		executeHotkeyAction:        executeHotkeyAction,
 		themeProvider:              systemPort,
 		system:                     systemPort,
+		cycleHintIndex:             -1,
 	}
 
 	// Initialize mode implementations
@@ -571,6 +575,8 @@ func (h *Handler) BackspaceCurrentMode() {
 		if h.hints != nil && h.hints.Context != nil && h.hints.Context.Manager() != nil {
 			h.hints.Context.Manager().HandleBackspace()
 		}
+
+		h.cycleHintIndex = -1
 	case domain.ModeGrid:
 		if h.grid != nil && h.grid.Manager != nil {
 			h.grid.Manager.HandleBackspace()
@@ -610,6 +616,94 @@ func (h *Handler) BackspaceCurrentMode() {
 	case domain.ModeIdle, domain.ModeScroll:
 		// no-op
 	}
+}
+
+// CycleHint cycles through visible hints in hints mode, selecting the next or previous one.
+func (h *Handler) CycleHint(ctx context.Context, backward bool) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.appState.CurrentMode() != domain.ModeHints {
+		return derrors.New(derrors.CodeInvalidInput, "cycle_hint requires hints mode")
+	}
+
+	if h.hints == nil || h.hints.Context == nil {
+		return derrors.New(derrors.CodeActionFailed, "hints component not available")
+	}
+
+	manager := h.hints.Context.Manager()
+	if manager == nil {
+		return derrors.New(derrors.CodeActionFailed, "hints manager not available")
+	}
+
+	filteredHints := manager.FilteredHints()
+	if len(filteredHints) == 0 {
+		filteredHints = h.hints.Context.Hints().All()
+	}
+
+	if len(filteredHints) == 0 {
+		return derrors.New(derrors.CodeActionFailed, "no hints available")
+	}
+
+	if h.cycleHintIndex >= len(filteredHints) {
+		h.cycleHintIndex = len(filteredHints) - 1
+	}
+
+	switch {
+	case h.cycleHintIndex < 0:
+		h.cycleHintIndex = 0
+		if backward {
+			h.cycleHintIndex = len(filteredHints) - 1
+		}
+	default:
+		if backward {
+			if h.cycleHintIndex > 0 {
+				h.cycleHintIndex--
+			} else {
+				h.cycleHintIndex = len(filteredHints) - 1
+			}
+		} else {
+			if h.cycleHintIndex < len(filteredHints)-1 {
+				h.cycleHintIndex++
+			} else {
+				h.cycleHintIndex = 0
+			}
+		}
+	}
+
+	selectedHint := filteredHints[h.cycleHintIndex]
+
+	center := selectedHint.Element().Center()
+
+	moveErr := h.actionService.MoveCursorToPoint(ctx, center)
+	if moveErr != nil {
+		h.logger.Error("Failed to move cursor during cycle_hint", zap.Error(moveErr))
+
+		return derrors.New(derrors.CodeActionFailed, "failed to move cursor: "+moveErr.Error())
+	}
+
+	pendingAction := h.hints.Context.PendingAction()
+	if pendingAction != nil {
+		cursorFollowSelection := h.hints.Context.CursorFollowSelection()
+		filterRoles := h.hints.Context.FilterRoles()
+		filterTextContains := h.hints.Context.FilterTextContains()
+
+		h.executeActionAtPoint(pendingAction, center, true, func() {
+			h.activateHintModeInternal(nil, nil, filterRoles, filterTextContains)
+
+			// Restore state so subsequent cycles continue to execute the action
+			if h.appState.CurrentMode() == domain.ModeHints &&
+				h.hints != nil && h.hints.Context != nil {
+				h.hints.Context.SetPendingAction(pendingAction)
+				h.hints.Context.SetRepeat(true)
+				h.hints.Context.SetCursorFollowSelection(cursorFollowSelection)
+				h.hints.Context.SetFilterRoles(filterRoles)
+				h.hints.Context.SetFilterTextContains(filterTextContains)
+			}
+		})
+	}
+
+	return nil
 }
 
 func (h *Handler) focusedBundleID() string {
