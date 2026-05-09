@@ -346,7 +346,14 @@ func readPortalColorScheme() (int, bool) {
 		return 0, false
 	}
 
-	fields := strings.Fields(string(out))
+	return parsePortalColorSchemeBusctlOutput(string(out))
+}
+
+// parsePortalColorSchemeBusctlOutput extracts the color-scheme enum from
+// busctl's stdout. Covered by unit tests so CI does not need a live session
+// bus or busctl binary.
+func parsePortalColorSchemeBusctlOutput(out string) (int, bool) {
+	fields := strings.Fields(out)
 	if len(fields) == 0 {
 		return 0, false
 	}

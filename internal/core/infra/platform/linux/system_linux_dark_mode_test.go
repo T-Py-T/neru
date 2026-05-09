@@ -111,6 +111,43 @@ func TestDarkModeCapabilitySupportedStates(t *testing.T) {
 	}
 }
 
+func TestParsePortalColorSchemeBusctlOutput(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		input   string
+		want    int
+		wantOK  bool
+	}{
+		{name: "prefer_dark", input: "v v u 1", want: colorSchemeDark, wantOK: true},
+		{name: "prefer_light", input: "v v u 2", want: colorSchemeLight, wantOK: true},
+		{name: "no_preference", input: "v v u 0", want: colorSchemeNoPreference, wantOK: true},
+		{name: "read_one_form", input: "v u 1", want: colorSchemeDark, wantOK: true},
+		{name: "extra_whitespace", input: "  v   v   u   1  \n", want: colorSchemeDark, wantOK: true},
+		{name: "empty", input: "", want: 0, wantOK: false},
+		{name: "no_numeric_token", input: "v v u", want: 0, wantOK: false},
+		{name: "out_of_range_high", input: "v v u 9", want: 0, wantOK: false},
+		{name: "negative", input: "v v u -1", want: 0, wantOK: false},
+		{name: "garbage_suffix", input: "hello world", want: 0, wantOK: false},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := parsePortalColorSchemeBusctlOutput(testCase.input)
+			if ok != testCase.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, testCase.wantOK)
+			}
+
+			if got != testCase.want {
+				t.Fatalf("value = %d, want %d", got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestDarkModeCapabilityDowngradesToStubWhenUnreachable(t *testing.T) {
 	t.Parallel()
 
