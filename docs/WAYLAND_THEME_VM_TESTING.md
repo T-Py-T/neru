@@ -24,8 +24,8 @@ cd ~/neru
 
 # Replace with your fork/host and branch name.
 git fetch origin
-git checkout wayland-theme
-git pull --ff-only origin wayland-theme
+git checkout feat/linux-wayland-theme
+git pull --ff-only origin feat/linux-wayland-theme
 
 # Regenerate protocols if your checkout expects them (first run after sparse changes).
 command -v just >/dev/null && just generate-all-protocols
@@ -41,7 +41,7 @@ golangci-lint run ./...   # if installed; matches CI on Linux
 go vet ./...
 ```
 
-**Rule:** If a step fails, **fix on your dev machine on `wayland-theme`**, push, then **pull again** on the VM — never patch sources only on the VM.
+**Rule:** If a step fails, **fix on your dev machine on `feat/linux-wayland-theme`**, push, then **pull again** on the VM — never patch sources only on the VM.
 
 ## 3. Manual functional checklist (portal + `doctor`)
 
@@ -102,15 +102,15 @@ Your editor can only have **one branch checked out per workspace folder**. Use *
 ```bash
 cd /path/to/neru
 git fetch origin
-git worktree add ../neru-wayland-theme wayland-theme
+git worktree add ../neru-feat-linux-wayland-theme feat/linux-wayland-theme
 git worktree add ../neru-main main
 ```
 
-Open **`../neru-wayland-theme`** and **`../neru-main`** as **two separate workspace roots** (or two editor windows). Each worktree has **its own** `HEAD`; `git pull` / `git push` inside one does not change the checked-out branch of the other.
+Open **`../neru-feat-linux-wayland-theme`** and **`../neru-main`** as **two separate workspace roots** (or two editor windows). Each worktree has **its own** `HEAD`; `git pull` / `git push` inside one does not change the checked-out branch of the other.
 
 **Conventions that reduce collisions:**
 
-- **One branch per line of work** (`wayland-theme`, `fix/foo`, etc.).
+- **One branch per line of work** (`feat/linux-wayland-theme`, `fix/foo`, etc.).
 - **Never force-push shared branches** without coordination.
 - **Small commits**, **Conventional Commits** messages (`feat(linux): …`), rebase your feature branch on `main` before merge.
 
