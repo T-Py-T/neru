@@ -7,21 +7,29 @@ Related implementation: freedesktop `xdg-desktop-portal` appearance `color-schem
 ## 1. One-time VM setup
 
 - [ ] Toolchain: Go, `just`, build deps per `docs/LINUX_SETUP.md` (or your existing `setup-linux-dev.sh`).
-- [ ] Clone **once** (fork or upstream + your remote):
+- [ ] Clone **once** from **your fork only** (keeps all pushes and PRs on the fork until you intentionally contribute upstream):
 
   ```bash
   git clone https://github.com/T-Py-T/neru.git
   cd neru
-  git remote add upstream https://github.com/y3owk1n/neru.git   # optional
   ```
 
-- [ ] **Upstream-only clone** (e.g. `origin` → `y3owk1n/neru`): add your fork and fetch the feature branch instead of expecting it on `origin`:
+  Do **not** add `upstream` on lab VMs if your goal is to avoid accidental fetches or PRs against the application repo.
+
+- [ ] **Mistaken upstream clone** (e.g. `origin` still points at `y3owk1n/neru`): point `origin` at the fork and widen fetch so feature branches exist locally:
 
   ```bash
   cd ~/neru
-  git remote add fork https://github.com/T-Py-T/neru.git   # adjust to your fork
-  git fetch fork feat/linux-wayland-theme
-  git switch -c feat/linux-wayland-theme fork/feat/linux-wayland-theme
+  git remote set-url origin https://github.com/T-Py-T/neru.git   # your fork
+  git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+  git fetch origin
+  git switch feat/linux-wayland-theme   # or: git switch -c feat/linux-wayland-theme origin/feat/linux-wayland-theme
+  ```
+
+- [ ] **Extra `fork` remote** (e.g. after a one-off `git remote add fork …`): optional cleanup once `origin` is the fork:
+
+  ```bash
+  git remote remove fork
   ```
 
 ## 2. Every test run (branch from git only)
