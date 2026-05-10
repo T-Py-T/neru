@@ -56,12 +56,12 @@ func (m *Manager) Register(keyString string, callback Callback) (HotkeyID, error
 
 			return 0, err
 		}
-	case platform.BackendWaylandWlroots:
+	case platform.BackendWaylandWlroots, platform.BackendWaylandKDE:
 		m.logger.Info(
 			"Running on Wayland: global hotkeys are unavailable inside Neru. Bind `neru <mode>` in your compositor config instead.",
 			zap.String("key", keyString),
 		)
-	case platform.BackendWaylandGNOME, platform.BackendWaylandKDE, platform.BackendWaylandOther:
+	case platform.BackendWaylandGNOME, platform.BackendWaylandOther:
 		m.logger.Info(
 			"Linux hotkey registration stored, but native Wayland global hotkeys are not implemented for this compositor.",
 			zap.String("key", keyString),

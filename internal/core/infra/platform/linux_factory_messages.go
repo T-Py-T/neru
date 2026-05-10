@@ -31,7 +31,7 @@ func unsupportedLinuxBackendError(backend LinuxBackend) error {
 			derrors.CodeNotSupported,
 			"neru could not detect a Linux display server. Ensure WAYLAND_DISPLAY or DISPLAY is set.",
 		)
-	case BackendX11, BackendWaylandWlroots:
+	case BackendX11, BackendWaylandWlroots, BackendWaylandKDE:
 		return derrors.Newf(
 			derrors.CodeInternal,
 			"unsupportedLinuxBackendError called on supported backend: %s",

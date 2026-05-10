@@ -23,6 +23,7 @@ import (
 const (
 	backendX11            = "x11"
 	backendWaylandWlroots = "wayland-wlroots"
+	backendWaylandKDE     = "wayland-kde"
 )
 
 // SystemAdapter is a Linux system adapter.
@@ -33,6 +34,13 @@ type SystemAdapter struct {
 // NewSystemAdapter creates a new SystemAdapter.
 func NewSystemAdapter(backend string) *SystemAdapter {
 	return &SystemAdapter{backend: backend}
+}
+
+// waylandUsesWlrClientStack is true when the session uses the same Wayland
+// client protocols as wlroots (layer shell, xdg-output, virtual pointer, etc.).
+// KDE Plasma's KWin implements these for third-party clients; GNOME does not.
+func (s *SystemAdapter) waylandUsesWlrClientStack() bool {
+	return s.backend == backendWaylandWlroots || s.backend == backendWaylandKDE
 }
 
 // Health checks the health of the Linux system adapter.
@@ -127,7 +135,7 @@ func (s *SystemAdapter) ScreenBounds(ctx context.Context) (image.Rectangle, erro
 		return x11ActiveScreenBounds()
 	}
 
-	if s.backend == backendWaylandWlroots {
+	if s.waylandUsesWlrClientStack() {
 		return wlrootsScreenBounds()
 	}
 
@@ -147,7 +155,7 @@ func (s *SystemAdapter) ScreenBoundsByName(
 		return x11ScreenBoundsByName(name)
 	}
 
-	if s.backend == backendWaylandWlroots {
+	if s.waylandUsesWlrClientStack() {
 		return wlrootsScreenBoundsByName(name)
 	}
 
@@ -164,7 +172,7 @@ func (s *SystemAdapter) ScreenNames(ctx context.Context) ([]string, error) {
 		return x11ScreenNames()
 	}
 
-	if s.backend == backendWaylandWlroots {
+	if s.waylandUsesWlrClientStack() {
 		return wlrootsScreenNames()
 	}
 
@@ -185,7 +193,7 @@ func (s *SystemAdapter) MoveCursorToPoint(
 		return x11MoveCursorToPoint(point)
 	}
 
-	if s.backend == backendWaylandWlroots {
+	if s.waylandUsesWlrClientStack() {
 		return wlrootsMoveCursorToPoint(point)
 	}
 
@@ -204,7 +212,7 @@ func (s *SystemAdapter) CursorPosition(ctx context.Context) (image.Point, error)
 		return x11CursorPosition()
 	}
 
-	if s.backend == backendWaylandWlroots {
+	if s.waylandUsesWlrClientStack() {
 		return wlrootsCursorPosition()
 	}
 
