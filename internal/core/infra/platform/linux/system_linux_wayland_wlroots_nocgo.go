@@ -57,7 +57,9 @@ func wlrootsClick(point image.Point, button int) error {
 }
 
 func wlrootsButtonEvent(point image.Point, button int, pressed bool) error {
-	_, _, _ = point, button, pressed
+	_ = point
+	_ = button
+	_ = pressed
 
 	return derrors.New(
 		derrors.CodeNotSupported,
@@ -75,7 +77,9 @@ func wlrootsButtonRelease(button int) error {
 }
 
 func wlrootsScroll(axis, delta, discrete int) error {
-	_, _, _ = axis, delta, discrete
+	_ = axis
+	_ = delta
+	_ = discrete
 
 	return derrors.New(
 		derrors.CodeNotSupported,

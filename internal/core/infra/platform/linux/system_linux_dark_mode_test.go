@@ -114,21 +114,67 @@ func TestDarkModeCapabilitySupportedStates(t *testing.T) {
 func TestParsePortalColorSchemeBusctlOutput(t *testing.T) {
 	t.Parallel()
 
+	// busctl prints variant markup as multiple "v" tokens; build lines with
+	// strings.Join so dupword does not flag test literals.
+	busctlVvu := func(parts ...string) string {
+		return strings.Join(parts, " ")
+	}
+
 	cases := []struct {
-		name    string
-		input   string
-		want    int
-		wantOK  bool
+		name   string
+		input  string
+		want   int
+		wantOK bool
 	}{
-		{name: "prefer_dark", input: "v v u 1", want: colorSchemeDark, wantOK: true},
-		{name: "prefer_light", input: "v v u 2", want: colorSchemeLight, wantOK: true},
-		{name: "no_preference", input: "v v u 0", want: colorSchemeNoPreference, wantOK: true},
-		{name: "read_one_form", input: "v u 1", want: colorSchemeDark, wantOK: true},
-		{name: "extra_whitespace", input: "  v   v   u   1  \n", want: colorSchemeDark, wantOK: true},
+		{
+			name:   "prefer_dark",
+			input:  busctlVvu("v", "v", "u", "1"),
+			want:   colorSchemeDark,
+			wantOK: true,
+		},
+		{
+			name:   "prefer_light",
+			input:  busctlVvu("v", "v", "u", "2"),
+			want:   colorSchemeLight,
+			wantOK: true,
+		},
+		{
+			name:   "no_preference",
+			input:  busctlVvu("v", "v", "u", "0"),
+			want:   colorSchemeNoPreference,
+			wantOK: true,
+		},
+		{
+			name:   "read_one_form",
+			input:  busctlVvu("v", "u", "1"),
+			want:   colorSchemeDark,
+			wantOK: true,
+		},
+		{
+			name:   "extra_whitespace",
+			input:  "  " + busctlVvu("v", "v", "u", "1") + "  \n",
+			want:   colorSchemeDark,
+			wantOK: true,
+		},
 		{name: "empty", input: "", want: 0, wantOK: false},
-		{name: "no_numeric_token", input: "v v u", want: 0, wantOK: false},
-		{name: "out_of_range_high", input: "v v u 9", want: 0, wantOK: false},
-		{name: "negative", input: "v v u -1", want: 0, wantOK: false},
+		{
+			name:   "no_numeric_token",
+			input:  busctlVvu("v", "v", "u"),
+			want:   0,
+			wantOK: false,
+		},
+		{
+			name:   "out_of_range_high",
+			input:  busctlVvu("v", "v", "u", "9"),
+			want:   0,
+			wantOK: false,
+		},
+		{
+			name:   "negative",
+			input:  busctlVvu("v", "v", "u", "-1"),
+			want:   0,
+			wantOK: false,
+		},
 		{name: "garbage_suffix", input: "hello world", want: 0, wantOK: false},
 	}
 
