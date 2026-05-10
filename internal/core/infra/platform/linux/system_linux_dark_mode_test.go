@@ -111,6 +111,13 @@ func TestDarkModeCapabilitySupportedStates(t *testing.T) {
 	}
 }
 
+func TestSessionAppearanceDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	// Live environments may return supported or stub; CI must not require D-Bus.
+	_, _ = SessionAppearance()
+}
+
 func TestParsePortalColorSchemeBusctlOutput(t *testing.T) {
 	t.Parallel()
 
