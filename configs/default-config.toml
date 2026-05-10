@@ -278,7 +278,7 @@ enabled = true                              # Show menu bar icon (false = headle
 # See https://github.com/y3owk1n/neru/blob/main/docs/CONFIGURATION.md#logging
 [logging]
 log_level = "info"                          # debug, info, warn, error
-log_file = ""                               # Custom log path (empty = default location)
+log_file = ""                               # Empty: platform default (macOS: ~/Library/Logs/neru/app.log, Linux: ~/.local/state/neru/log/app.log, Windows: %LOCALAPPDATA%/neru/log/app.log)
 structured_logging = true                   # JSON format
 disable_file_logging = true                 # Console only (no file)
 max_file_size = 10                          # MB before rotation
