@@ -15,6 +15,15 @@ Related implementation: freedesktop `xdg-desktop-portal` appearance `color-schem
   git remote add upstream https://github.com/y3owk1n/neru.git   # optional
   ```
 
+- [ ] **Upstream-only clone** (e.g. `origin` → `y3owk1n/neru`): add your fork and fetch the feature branch instead of expecting it on `origin`:
+
+  ```bash
+  cd ~/neru
+  git remote add fork https://github.com/T-Py-T/neru.git   # adjust to your fork
+  git fetch fork feat/linux-wayland-theme
+  git switch -c feat/linux-wayland-theme fork/feat/linux-wayland-theme
+  ```
+
 ## 2. Every test run (branch from git only)
 
 Run inside an **interactive graphical session** on the VM (SSH is fine **if** you import the same env as the logged-in user — see §6).
@@ -122,4 +131,18 @@ Open **`../neru-feat-linux-wayland-theme`** and **`../neru-main`** as **two sepa
 eval "$(systemctl --user show-environment | sed 's/^/export /')"
 ```
 
+**Portal over SSH:** `busctl --user call org.freedesktop.portal.Desktop …` often fails from SSH (`Could not activate remote peer` / startup job failed) because `xdg-desktop-portal` is tied to the **logged-in graphical session**, not every user-bus login. For a reliable read, run the **same `busctl` command** in a terminal **inside** the desktop session (or use VM console). Automated `go test ./internal/core/infra/platform/linux/...` still validates parsing logic on the VM without a live portal.
+
 For `neru launch` + overlays you still need a backend **supported by Neru** in that session (see `docs/LINUX_SETUP.md`).
+
+## 7. PR release checklist (theme-only)
+
+Use this when signing off **feat/linux-wayland-theme** before opening or merging the PR:
+
+| Target | Session | Required checks |
+| ------ | ------- | ---------------- |
+| **XFCE** (or any Neru-supported **X11** session) | X11 | `go test ./internal/core/infra/platform/linux/...` green; `§3.A` `busctl` in a **GUI terminal** returns `v v u` and a trailing `0`, `1`, or `2`; where `neru launch` works, `§3.B` **Dark Mode** line tracks UI/gsettings toggle without daemon restart. |
+| **KDE Plasma** | Wayland typical | Same `go test`; `busctl` + optional **kdeglobals** fallback (`~/.config/kdeglobals` `[General] ColorScheme`); `neru launch` may be `NOT_SUPPORTED` — theme detection via `doctor` still applies if you can run the daemon on an X11 Plasma session or once Wayland backend lands. |
+| **GNOME** | Wayland typical | Same `go test`; `§3.A`–`3.B` in a **GUI** session; for full daemon parity use **GNOME on Xorg** until Wayland backend exists. |
+
+**CI / dev machine:** `go test ./…` on Linux (or dedicated runner) exercises `parsePortalColorSchemeBusctlOutput` and `darkModeCapability` without a desktop.
