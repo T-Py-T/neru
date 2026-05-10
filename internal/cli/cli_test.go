@@ -108,6 +108,7 @@ func TestCommandInitialization(t *testing.T) {
 		"action":                         false,
 		"status":                         false,
 		"doctor":                         false,
+		"session-appearance":             false,
 		"launch":                         false,
 		"docs":                           false,
 		"config":                         false,
