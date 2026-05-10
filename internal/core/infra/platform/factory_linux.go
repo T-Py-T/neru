@@ -7,16 +7,12 @@ import (
 	"github.com/y3owk1n/neru/internal/core/ports"
 )
 
-// NewSystemPort returns a Linux SystemPort implementation.
+// NewSystemPort returns a Linux SystemPort implementation for every detected
+// backend. Input-heavy features may still return CodeNotSupported at call
+// time on GNOME/KDE/unknown, but the adapter is always constructible so
+// theme/capability probes and other read-only paths work consistently.
 func NewSystemPort() (ports.SystemPort, error) {
-	switch backend := detectLinuxBackend(); backend {
-	case BackendX11, BackendWaylandWlroots:
-		return linux.NewSystemAdapter(backend.String()), nil
-	case BackendUnknown, BackendWaylandGNOME, BackendWaylandKDE, BackendWaylandOther:
-		return nil, unsupportedLinuxBackendError(backend)
-	default:
-		return nil, unsupportedLinuxBackendError(backend)
-	}
+	return linux.NewSystemAdapter(detectLinuxBackend().String()), nil
 }
 
 // ShowConfigOnboardingAlert is a stub on Linux.
