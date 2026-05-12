@@ -9,6 +9,7 @@
 
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
+#import <stdatomic.h>
 
 #pragma mark - HintItem Class
 
@@ -2892,5 +2893,169 @@ void NeruHideCursorIndicator(OverlayWindow window) {
 
 		controller.overlayView.fullRedraw = NO;
 		[controller.overlayView setNeedsDisplayInRect:dirtyRect];
+	});
+}
+
+static NSColor *NeruColorFromHexString(NSString *hexString, NSColor *defaultColor) {
+	if (!hexString || hexString.length == 0)
+		return defaultColor;
+
+	NSString *hex =
+	    [hexString stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"#"]];
+	unsigned int alpha = 255;
+	unsigned int red = 255;
+	unsigned int green = 255;
+	unsigned int blue = 255;
+
+	if (hex.length == 8) {
+		[[NSScanner scannerWithString:[hex substringWithRange:NSMakeRange(0, 2)]] scanHexInt:&alpha];
+		[[NSScanner scannerWithString:[hex substringWithRange:NSMakeRange(2, 2)]] scanHexInt:&red];
+		[[NSScanner scannerWithString:[hex substringWithRange:NSMakeRange(4, 2)]] scanHexInt:&green];
+		[[NSScanner scannerWithString:[hex substringWithRange:NSMakeRange(6, 2)]] scanHexInt:&blue];
+	} else if (hex.length == 6) {
+		[[NSScanner scannerWithString:[hex substringWithRange:NSMakeRange(0, 2)]] scanHexInt:&red];
+		[[NSScanner scannerWithString:[hex substringWithRange:NSMakeRange(2, 2)]] scanHexInt:&green];
+		[[NSScanner scannerWithString:[hex substringWithRange:NSMakeRange(4, 2)]] scanHexInt:&blue];
+	} else if (hex.length == 3) {
+		unichar r = [hex characterAtIndex:0];
+		unichar g = [hex characterAtIndex:1];
+		unichar b = [hex characterAtIndex:2];
+		NSString *expanded = [NSString stringWithFormat:@"%C%C%C%C%C%C", r, r, g, g, b, b];
+		return NeruColorFromHexString(expanded, defaultColor);
+	} else {
+		return defaultColor;
+	}
+
+	return [NSColor colorWithRed:(CGFloat)red / 255.0
+	                       green:(CGFloat)green / 255.0
+	                        blue:(CGFloat)blue / 255.0
+	                       alpha:(CGFloat)alpha / 255.0];
+}
+
+static CAMediaTimingFunction *NeruTimingFunction(NSString *easing) {
+	if ([easing isEqualToString:@"linear"])
+		return [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear];
+	if ([easing isEqualToString:@"ease_in"])
+		return [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseIn];
+	if ([easing isEqualToString:@"ease_in_out"])
+		return [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+
+	return [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+}
+
+static NSPoint NeruAppKitPointFromQuartzPoint(CGPoint point) {
+	CGDirectDisplayID displayID = 0;
+	uint32_t displayCount = 0;
+	CGGetDisplaysWithPoint(point, 1, &displayID, &displayCount);
+
+	if (displayCount == 0) {
+		NSRect mainFrame = [NSScreen mainScreen].frame;
+		return NSMakePoint(point.x, NSMaxY(mainFrame) - point.y);
+	}
+
+	CGRect displayBounds = CGDisplayBounds(displayID);
+	for (NSScreen *screen in [NSScreen screens]) {
+		NSNumber *screenNumber = screen.deviceDescription[@"NSScreenNumber"];
+		if (screenNumber.unsignedIntValue != displayID)
+			continue;
+
+		CGFloat localX = point.x - displayBounds.origin.x;
+		CGFloat localY = point.y - displayBounds.origin.y;
+		return NSMakePoint(screen.frame.origin.x + localX, NSMaxY(screen.frame) - localY);
+	}
+
+	NSRect mainFrame = [NSScreen mainScreen].frame;
+	return NSMakePoint(point.x, NSMaxY(mainFrame) - point.y);
+}
+
+/// Show a transient mouse action indicator in its own overlay window.
+/// @param position Global cursor position in Quartz coordinates
+/// @param style Indicator style
+static _Atomic int _NeruMouseActionPanelCount = 0;
+static const int _NeruMaxMouseActionPanels = 10;
+
+void NeruShowMouseActionIndicator(CGPoint position, MouseActionIndicatorStyle style) {
+	NSString *backgroundHex = style.backgroundColor ? @(style.backgroundColor) : nil;
+	NSString *borderHex = style.borderColor ? @(style.borderColor) : nil;
+	NSString *shape = style.shape ? @(style.shape) : @"circle";
+	NSString *easing = style.easing ? @(style.easing) : @"ease_out";
+
+	dispatch_async(dispatch_get_main_queue(), ^{
+		if (atomic_load(&_NeruMouseActionPanelCount) >= _NeruMaxMouseActionPanels) {
+			return;
+		}
+		CGFloat size = MAX(style.size, 1);
+		CGFloat endScale = style.endScale > 0 ? style.endScale : 1.0;
+		CGFloat maxScale = MAX(style.startScale > 0 ? style.startScale : 1.0, MAX(endScale, 1.0));
+		CGFloat canvasSize = ceil(size * maxScale + MAX(style.borderWidth, 0) * 4.0);
+		NSPoint center = NeruAppKitPointFromQuartzPoint(position);
+		NSRect frame = NSMakeRect(center.x - canvasSize / 2.0, center.y - canvasSize / 2.0, canvasSize, canvasSize);
+
+		NSPanel *panel =
+		    [[NSPanel alloc] initWithContentRect:frame
+		                               styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
+		                                 backing:NSBackingStoreBuffered
+		                                   defer:NO];
+		[panel setHidesOnDeactivate:NO];
+		[panel setReleasedWhenClosed:NO];
+		[panel setLevel:kCGMaximumWindowLevel];
+		[panel setOpaque:NO];
+		[panel setBackgroundColor:[NSColor clearColor]];
+		[panel setIgnoresMouseEvents:YES];
+		[panel setAcceptsMouseMovedEvents:NO];
+		[panel setHasShadow:NO];
+		[panel setSharingType:style.hideInScreenShare ? NSWindowSharingNone : NSWindowSharingReadOnly];
+		[panel setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary |
+		                             NSWindowCollectionBehaviorFullScreenAuxiliary |
+		                             NSWindowCollectionBehaviorIgnoresCycle];
+		atomic_fetch_add(&_NeruMouseActionPanelCount, 1);
+
+		NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, canvasSize, canvasSize)];
+		view.wantsLayer = YES;
+		view.layer.backgroundColor = NSColor.clearColor.CGColor;
+		[panel setContentView:view];
+
+		CGRect indicatorRect = CGRectMake((canvasSize - size) / 2.0, (canvasSize - size) / 2.0, size, size);
+		CGFloat cornerRadius = [shape isEqualToString:@"square"] ? MAX(size * 0.18, 2.0) : size / 2.0;
+
+		CAShapeLayer *layer = [CAShapeLayer layer];
+		layer.frame = view.bounds;
+		CGPathRef path = CGPathCreateWithRoundedRect(indicatorRect, cornerRadius, cornerRadius, NULL);
+		layer.path = path;
+		CGPathRelease(path);
+		layer.fillColor = NeruColorFromHexString(backgroundHex, [NSColor clearColor]).CGColor;
+		layer.strokeColor = NeruColorFromHexString(borderHex, [NSColor whiteColor]).CGColor;
+		layer.lineWidth = MAX(style.borderWidth, 0);
+		layer.opacity = style.startOpacity;
+		[view.layer addSublayer:layer];
+
+		[panel orderFrontRegardless];
+
+		CFTimeInterval duration = MAX(style.durationMS, 1) / 1000.0;
+		CAMediaTimingFunction *timing = NeruTimingFunction(easing);
+
+		CABasicAnimation *scaleAnimation = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
+		scaleAnimation.fromValue = @(style.startScale);
+		scaleAnimation.toValue = @(style.endScale);
+		scaleAnimation.duration = duration;
+		scaleAnimation.timingFunction = timing;
+
+		CABasicAnimation *opacityAnimation = [CABasicAnimation animationWithKeyPath:@"opacity"];
+		opacityAnimation.fromValue = @(style.startOpacity);
+		opacityAnimation.toValue = @(style.endOpacity);
+		opacityAnimation.duration = duration;
+		opacityAnimation.timingFunction = timing;
+
+		layer.transform = CATransform3DMakeScale(style.endScale, style.endScale, 1.0);
+		layer.opacity = style.endOpacity;
+		[layer addAnimation:scaleAnimation forKey:@"mouseActionScale"];
+		[layer addAnimation:opacityAnimation forKey:@"mouseActionOpacity"];
+
+		dispatch_after(
+		    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(duration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+			    [panel orderOut:nil];
+			    [panel close];
+			    atomic_fetch_add(&_NeruMouseActionPanelCount, -1);
+		    });
 	});
 }
