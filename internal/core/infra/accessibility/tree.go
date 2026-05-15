@@ -19,6 +19,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/config"
+	"github.com/y3owk1n/neru/internal/core/domain/element"
 	derrors "github.com/y3owk1n/neru/internal/core/errors"
 )
 
@@ -340,24 +341,38 @@ func BuildTree(root *Element, opts TreeOptions) (*TreeNode, error) {
 }
 
 // Roles that typically don't contain interactive elements.
-var nonInteractiveRoles = map[string]bool{
-	"AXStaticText": true,
-	"AXImage":      true,
+var nonInteractiveRoles = map[element.Role]bool{
+	element.RoleStaticText: true,
+	element.RoleImage:      true,
 }
 
 // Roles that are themselves interactive (leaf nodes).
-var interactiveLeafRoles = map[string]bool{
-	"AXButton":             true,
-	"AXComboBox":           true,
-	"AXCheckBox":           true,
-	"AXRadioButton":        true,
-	"AXLink":               true,
-	"AXPopUpButton":        true,
-	"AXSlider":             true,
-	"AXTabButton":          true,
-	"AXSwitch":             true,
-	"AXDisclosureTriangle": true,
-	"AXTextArea":           true,
+var interactiveLeafRoles = map[element.Role]bool{
+	element.RoleButton:             true,
+	element.RoleMenuButton:         true,
+	element.RoleComboBox:           true,
+	element.RoleCheckBox:           true,
+	element.RoleLink:               true,
+	element.RolePopUpButton:        true,
+	element.RoleSlider:             true,
+	element.RoleTabButton:          true,
+	element.RoleSwitch:             true,
+	element.RoleDisclosureTriangle: true,
+	element.RoleTextArea:           true,
+	element.RoleTextField:          true,
+	// element.RoleRadioButton:        true, // in safari, url bar is radio button, but has nested button in it...
+}
+
+// Roles that can contain important interactive children even when their
+// parent is an interactive leaf (e.g., a button that opens a popover).
+// This set is checked to ensure we don't stop traversal at buttons/menus
+// that trigger popovers, sheets, or menus.
+var importantContainerRoles = map[element.Role]bool{
+	element.RolePopover: true,
+	element.RoleSheet:   true,
+	element.RoleMenu:    true,
+	element.RoleSGTMenu: true,
+	element.RoleList:    true,
 }
 
 func buildTreeRecursive(
@@ -381,7 +396,7 @@ func buildTreeRecursive(
 	}
 
 	// Early exit for roles that can't have interactive children
-	if nonInteractiveRoles[parent.info.Role()] {
+	if nonInteractiveRoles[element.Role(parent.info.Role())] {
 		if opts.stats != nil {
 			opts.stats.skippedNonInteractive.Add(1)
 		}
@@ -389,26 +404,60 @@ func buildTreeRecursive(
 		return
 	}
 
-	// Don't traverse deeper into interactive leaf elements
-	if interactiveLeafRoles[parent.info.Role()] {
-		if opts.stats != nil {
-			opts.stats.stoppedAtLeaf.Add(1)
-		}
+	// Don't traverse deeper into interactive leaf elements,
+	// unless they have important container children (e.g., popovers, sheets, menus).
+	// This handles cases like a toolbar button that opens a popover.
+	var children []*Element
+	if interactiveLeafRoles[element.Role(parent.info.Role())] {
+		var childrenErr error
+		children, childrenErr = parent.element.Children(opts.cache)
+		hasImportantContainer := false
+		if childrenErr == nil && len(children) > 0 {
+			for _, child := range children {
+				childInfo := opts.cache.Get(child)
+				if childInfo == nil {
+					childInfo, _ = child.Info()
+					opts.cache.Set(child, childInfo)
+				}
+				if childInfo != nil && importantContainerRoles[element.Role(childInfo.Role())] {
+					hasImportantContainer = true
 
-		return
-	}
-
-	children, err := parent.element.Children(opts.cache)
-	if err != nil || len(children) == 0 {
-		if opts.stats != nil {
-			if err != nil {
-				opts.stats.childrenErrors.Add(1)
-			} else {
-				opts.stats.noChildren.Add(1)
+					break
+				}
 			}
 		}
+		if !hasImportantContainer {
+			for _, child := range children {
+				child.Release()
+			}
+			if opts.stats != nil {
+				switch {
+				case childrenErr != nil:
+					opts.stats.childrenErrors.Add(1)
+				case len(children) == 0:
+					opts.stats.noChildren.Add(1)
+				default:
+					opts.stats.stoppedAtLeaf.Add(1)
+				}
+			}
 
-		return
+			return
+		}
+		// Reuse children slice for traversal below, skip the second Children() call.
+	} else {
+		var err error
+		children, err = parent.element.Children(opts.cache)
+		if err != nil || len(children) == 0 {
+			if opts.stats != nil {
+				if err != nil {
+					opts.stats.childrenErrors.Add(1)
+				} else {
+					opts.stats.noChildren.Add(1)
+				}
+			}
+
+			return
+		}
 	}
 
 	// Decide whether to parallelize
@@ -600,7 +649,7 @@ func shouldIncludeElement(
 
 		// Filter out zero-sized interactive elements (they're broken/invalid)
 		if elementRect.Dx() == 0 || elementRect.Dy() == 0 {
-			if interactiveLeafRoles[info.Role()] {
+			if interactiveLeafRoles[element.Role(info.Role())] {
 				return false
 			}
 		}
@@ -614,7 +663,7 @@ func shouldIncludeElement(
 			// Filter if either dimension is too small (not just both)
 			if elementRect.Dx() < minElementSize || elementRect.Dy() < minElementSize {
 				// Only filter if it's not a known important role
-				if !interactiveLeafRoles[info.Role()] {
+				if !interactiveLeafRoles[element.Role(info.Role())] {
 					return false
 				}
 			}
@@ -627,7 +676,7 @@ func shouldIncludeElement(
 			centerY := elementRect.Min.Y + halfHeight
 			if centerX < windowBounds.Min.X || centerX > windowBounds.Max.X ||
 				centerY < windowBounds.Min.Y || centerY > windowBounds.Max.Y {
-				if !interactiveLeafRoles[info.Role()] {
+				if !interactiveLeafRoles[element.Role(info.Role())] {
 					return false
 				}
 			}
