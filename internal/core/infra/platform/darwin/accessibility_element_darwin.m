@@ -432,6 +432,7 @@ static CFStringRef kAXLinkRole = CFSTR("AXLink");
 static CFStringRef kAXCheckboxRole = CFSTR("AXCheckBox");
 static CFStringRef kAXFocusableAttribute = CFSTR("AXFocusable");
 static CFStringRef kAXVisibleAttribute = CFSTR("AXVisible");
+static CFStringRef kAXWidgetIdentifierPrefix = CFSTR("widget-local:");
 
 #pragma mark - Click Action Functions
 
@@ -444,9 +445,10 @@ int hasClickAction(void *element) {
 
 	AXUIElementRef axElement = (AXUIElementRef)element;
 
-	CFTypeRef attrs[] = {kAXHiddenAttribute, kAXEnabledAttribute, kAXRoleAttribute, kAXFocusableAttribute};
+	CFTypeRef attrs[] = {
+	    kAXHiddenAttribute, kAXEnabledAttribute, kAXRoleAttribute, kAXFocusableAttribute, kAXIdentifierAttribute};
 
-	CFArrayRef attrArray = CFArrayCreate(NULL, (const void **)attrs, 4, &kCFTypeArrayCallBacks);
+	CFArrayRef attrArray = CFArrayCreate(NULL, (const void **)attrs, 5, &kCFTypeArrayCallBacks);
 
 	if (!attrArray)
 		return 0;
@@ -461,12 +463,13 @@ int hasClickAction(void *element) {
 	bool explicitlyDisabled = false;
 	bool hasEnabledAttribute = false;
 	bool isFocusable = false;
+	bool isWidget = false;
 	CFStringRef role = NULL;
 
 	if (err == kAXErrorSuccess && values) {
 		CFIndex count = CFArrayGetCount(values);
 
-		for (CFIndex i = 0; i < count && i < 4; i++) {
+		for (CFIndex i = 0; i < count && i < 5; i++) {
 			CFTypeRef value = CFArrayGetValueAtIndex(values, i);
 			CFTypeRef attr = attrs[i];
 
@@ -494,6 +497,12 @@ int hasClickAction(void *element) {
 			else if (attr == kAXFocusableAttribute && CFGetTypeID(value) == CFBooleanGetTypeID()) {
 				isFocusable = CFBooleanGetValue((CFBooleanRef)value);
 			}
+
+			// AXIdentifier: checks for the `widget-local:` prefix (internal Apple convention,
+			// verified on macOS 14/15) used by all macOS Notification Center and desktop widgets.
+			else if (attr == kAXIdentifierAttribute && CFGetTypeID(value) == CFStringGetTypeID()) {
+				isWidget = CFStringHasPrefix((CFStringRef)value, kAXWidgetIdentifierPrefix);
+			}
 		}
 
 		CFRelease(values);
@@ -514,7 +523,6 @@ int hasClickAction(void *element) {
 				continue;
 
 			if (CFStringCompare(action, kAXPressAction, 0) == kCFCompareEqualTo ||
-			    CFStringCompare(action, CFSTR("AXScrollToVisible"), 0) == kCFCompareEqualTo ||
 			    CFStringCompare(action, CFSTR("AXShowMenu"), 0) == kCFCompareEqualTo ||
 			    CFStringCompare(action, CFSTR("AXConfirm"), 0) == kCFCompareEqualTo ||
 			    CFStringCompare(action, CFSTR("AXPick"), 0) == kCFCompareEqualTo ||
@@ -544,6 +552,16 @@ int hasClickAction(void *element) {
 		if (CFStringCompare(role, kAXScrollAreaRole, 0) == kCFCompareEqualTo ||
 		    CFStringCompare(role, kAXGroupRole, 0) == kCFCompareEqualTo ||
 		    CFStringCompare(role, kAXSplitGroupRole, 0) == kCFCompareEqualTo) {
+			// Override: macOS widgets use AXGroup but are inherently interactive.
+			if (isWidget) {
+				if (hasEnabledAttribute && explicitlyDisabled) {
+					CFRelease(role);
+					return 0;
+				}
+				CFRelease(role);
+				return 1;
+			}
+
 			CFRelease(role);
 			return 0;
 		}
