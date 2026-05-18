@@ -138,12 +138,15 @@ func (h *Handler) activateHintModeInternal(
 		h.cycleHintIndex = -1
 	}
 
-	actionEnum, ok := h.activateModeBase(
+	// Defer bundle ID fetch until after validation (secure input check) to avoid
+	// unnecessary AX calls when a password field is focused.
+	actionEnum, activated := h.activateModeBase(
 		domain.ModeNameHints,
 		h.config.Hints.Enabled,
 		action.TypeMoveMouse,
+		"",
 	)
-	if !ok {
+	if !activated {
 		// If validation fails during a refresh (e.g., secure input activated,
 		// focused app became excluded), exit cleanly instead of leaving stale
 		// hints on the overlay.
@@ -209,13 +212,30 @@ func (h *Handler) activateHintModeInternal(
 		h.hints.Context.SetStartWithSearch(search)
 	}
 
-	// Use new HintService to show hints
-	ctx, cancel := context.WithTimeout(context.Background(), HintTimeout)
-	defer cancel()
+	// Fetch bundle ID for hint generation. Validation already passed (secure input check,
+	// exclusion check), so this is the only call. Use a dedicated short timeout so slow
+	// AX doesn't erode the hint generation budget.
+	bundleCtx, bundleCancel := context.WithTimeout(context.Background(), 1*time.Second)
+	bundleID, bundleIDErr := h.actionService.FocusedAppBundleID(bundleCtx)
+
+	bundleCancel()
+
+	if bundleIDErr != nil {
+		h.logger.Debug("Failed to get focused app bundle ID for hint generation",
+			zap.Error(bundleIDErr))
+	}
 
 	// Get hints from service. Drawing is intentionally deferred until after
 	// active-screen filtering so activation performs one full overlay render.
-	domainHints, domainHintsErr := h.hintService.GenerateHints(ctx, filterRoles, filterTextContains)
+	ctx, cancel := context.WithTimeout(context.Background(), HintTimeout)
+	defer cancel()
+
+	domainHints, domainHintsErr := h.hintService.GenerateHints(
+		ctx,
+		filterRoles,
+		filterTextContains,
+		bundleID,
+	)
 	if domainHintsErr != nil {
 		h.logger.Error(
 			"Failed to show hints",

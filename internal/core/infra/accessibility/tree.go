@@ -301,7 +301,8 @@ func BuildTree(root *Element, opts TreeOptions) (*TreeNode, error) {
 	node := getTreeNode(root, info, nil, config.DefaultChildrenCapacity)
 
 	opts.stats = stats
-	buildTreeRecursive(node, 1, opts, windowBounds)
+	buildTreeRecursive(node, 1, opts, windowBounds, windowBounds)
+	accumulateSearchText(node)
 
 	if ce := opts.Logger().Check(zap.DebugLevel, "Tree build completed"); ce != nil {
 		ce.Write(
@@ -366,6 +367,7 @@ func buildTreeRecursive(
 	depth int,
 	opts TreeOptions,
 	clipBounds image.Rectangle,
+	windowBounds image.Rectangle,
 ) {
 	if opts.stats != nil {
 		opts.stats.nodesVisited.Add(1)
@@ -404,7 +406,7 @@ func buildTreeRecursive(
 	var children []*Element
 	if interactiveLeafRoles[element.Role(parent.info.Role())] {
 		var childrenErr error
-		children, childrenErr = parent.element.Children()
+		children, childrenErr = parent.element.Children(parent.info.Role())
 		hasImportantContainer := false
 		if childrenErr == nil && len(children) > 0 {
 			for _, child := range children {
@@ -439,7 +441,7 @@ func buildTreeRecursive(
 		// Reuse children slice for traversal below, skip the second Children() call.
 	} else {
 		var err error
-		children, err = parent.element.Children()
+		children, err = parent.element.Children(parent.info.Role())
 		if err != nil || len(children) == 0 {
 			if opts.stats != nil {
 				if err != nil {
@@ -458,9 +460,9 @@ func buildTreeRecursive(
 		len(children) >= opts.parallelThreshold
 
 	if shouldParallelize {
-		buildChildrenParallel(parent, children, depth, opts, clipBounds)
+		buildChildrenParallel(parent, children, depth, opts, clipBounds, windowBounds)
 	} else {
-		buildChildrenSequential(parent, children, depth, opts, clipBounds)
+		buildChildrenSequential(parent, children, depth, opts, clipBounds, windowBounds)
 	}
 }
 
@@ -470,6 +472,7 @@ func buildChildrenSequential(
 	depth int,
 	opts TreeOptions,
 	clipBounds image.Rectangle,
+	windowBounds image.Rectangle,
 ) {
 	// First pass: count valid children and collect their info
 	type childData struct {
@@ -510,6 +513,12 @@ func buildChildrenSequential(
 
 	// Second pass: create nodes and recurse
 	for _, data := range validChildren {
+		// Skip hit-test for elements within the original window bounds
+		// (not in a scroll area). These elements are guaranteed visible
+		// by the AX tree — only scroll areas can have off-screen children.
+		// Must be set before getTreeNode to avoid relying on pointer aliasing.
+		data.info.skipHitTest = clipBounds == windowBounds
+
 		childNode := getTreeNode(data.element, data.info, parent, 0)
 
 		parent.children = append(parent.children, childNode)
@@ -532,7 +541,7 @@ func buildChildrenSequential(
 			}
 		}
 
-		buildTreeRecursive(childNode, depth+1, opts, newClipBounds)
+		buildTreeRecursive(childNode, depth+1, opts, newClipBounds, windowBounds)
 	}
 
 	if opts.stats != nil {
@@ -546,6 +555,7 @@ func buildChildrenParallel(
 	depth int,
 	opts TreeOptions,
 	clipBounds image.Rectangle,
+	windowBounds image.Rectangle,
 ) {
 	// Pre-allocate result slice with exact capacity
 	type childResult struct {
@@ -561,7 +571,7 @@ func buildChildrenParallel(
 	// Process children in parallel
 	for index, child := range children {
 		waitGroup.Add(1)
-		go func(idx int, elem *Element, bounds image.Rectangle) {
+		go func(idx int, elem *Element, bounds, winBounds image.Rectangle) {
 			defer waitGroup.Done()
 
 			info, err := elem.Info()
@@ -589,6 +599,11 @@ func buildChildrenParallel(
 				return
 			}
 
+			// Skip hit-test for elements within the original window bounds
+			// (not in a scroll area). Must be set before getTreeNode to avoid
+			// relying on pointer aliasing.
+			info.skipHitTest = bounds == winBounds
+
 			childNode := getTreeNode(elem, info, parent, 0)
 
 			newClipBounds := bounds
@@ -610,10 +625,10 @@ func buildChildrenParallel(
 			}
 
 			// Recursively build (this may spawn more goroutines at deeper levels)
-			buildTreeRecursive(childNode, depth+1, opts, newClipBounds)
+			buildTreeRecursive(childNode, depth+1, opts, newClipBounds, winBounds)
 
 			results <- childResult{node: childNode, index: idx}
-		}(index, child, clipBounds)
+		}(index, child, clipBounds, windowBounds)
 	}
 
 	// Close results channel when all goroutines complete
@@ -740,6 +755,7 @@ func shouldIncludeElement(
 }
 
 // FindClickableElements finds all clickable elements in the tree.
+// Search text is already accumulated during tree building via accumulateSearchText.
 func (n *TreeNode) FindClickableElements(
 	allowedRoles map[string]struct{},
 	configProvider config.Provider,
@@ -753,8 +769,6 @@ func (n *TreeNode) FindClickableElements(
 			configProvider,
 			ignoreClickableCheck,
 		) {
-			node.info.searchText = node.collectSearchText()
-
 			result = append(result, node)
 		}
 
@@ -778,6 +792,35 @@ func appendSearchText(builder *strings.Builder, seen map[string]struct{}, text s
 	}
 	builder.WriteString(text)
 	seen[text] = struct{}{}
+}
+
+// accumulateSearchText performs a single post-order walk over the tree to
+// collect text from each node's subtree. This replaces the previous approach
+// where collectSearchText was called separately for each clickable element,
+// which resulted in O(n*m) descendant walks.
+func accumulateSearchText(root *TreeNode) {
+	root.walkTreePostOrder(func(node *TreeNode) {
+		if node.info == nil {
+			return
+		}
+
+		var builder strings.Builder
+		seen := make(map[string]struct{})
+
+		// Collect text from this node itself
+		appendSearchText(&builder, seen, node.info.Title())
+		appendSearchText(&builder, seen, node.info.Description())
+		appendSearchText(&builder, seen, node.info.Value())
+
+		// Merge text from children (already computed since this is post-order)
+		for _, child := range node.children {
+			if child.info != nil && child.info.searchText != "" {
+				appendSearchText(&builder, seen, child.info.searchText)
+			}
+		}
+
+		node.info.searchText = builder.String()
+	})
 }
 
 // Release releases the AXUIElementRef for every node in the subtree except
@@ -823,40 +866,12 @@ func (n *TreeNode) Release(keep map[*Element]struct{}) {
 	})
 }
 
-func (n *TreeNode) collectSearchText() string {
-	var builder strings.Builder
-	seen := make(map[string]struct{})
-
-	n.walkTreeDescendants(func(node *TreeNode) bool {
-		if node == nil || node.info == nil {
-			return true
-		}
-
-		appendSearchText(&builder, seen, node.info.Title())
-		appendSearchText(&builder, seen, node.info.Description())
-		appendSearchText(&builder, seen, node.info.Value())
-
-		return true
-	})
-
-	return builder.String()
-}
-
 // walkTree walks the tree in pre-order and calls the visitor function for each node.
 func (n *TreeNode) walkTree(visit func(*TreeNode) bool) {
 	if !visit(n) {
 		return
 	}
 
-	for _, child := range n.children {
-		child.walkTree(visit)
-	}
-}
-
-// walkTreeDescendants walks only the descendants (children and their subtrees),
-// excluding the root node itself. Used for collecting text from child elements
-// without including the root's own text fields.
-func (n *TreeNode) walkTreeDescendants(visit func(*TreeNode) bool) {
 	for _, child := range n.children {
 		child.walkTree(visit)
 	}
