@@ -75,8 +75,10 @@ type Overlay struct {
 	// Cached C strings for style properties to reduce allocations
 	styleCache *overlayutil.StyleCache
 
-	// Cached C strings for hint labels to avoid malloc/free per draw
-	labelCacheMu sync.RWMutex
+	// Label C strings are retained in cachedLabels until Clear() or Destroy().
+	// The C overlay holds label pointers between draws for incremental updates,
+	// so eviction while active would produce empty labels.
+	labelCacheMu sync.Mutex
 	cachedLabels map[string]*C.char
 
 	// drawMu serializes draw operations against cache invalidation.
@@ -445,25 +447,20 @@ func (o *Overlay) freeLabelCacheLocked() {
 			C.free(unsafe.Pointer(cStr))
 		}
 	}
-	// Re-initialize map to clear references
 	o.cachedLabels = make(map[string]*C.char)
 }
 
 // getOrCacheLabel returns a cached C string for the label, creating it if needed.
+// Labels are retained until Clear() or Destroy() to avoid dangling pointers in the
+// C overlay, which stores label pointers between draws for incremental updates.
 func (o *Overlay) getOrCacheLabel(label string) *C.char {
-	o.labelCacheMu.RLock()
-	if cStr, ok := o.cachedLabels[label]; ok {
-		o.labelCacheMu.RUnlock()
-
-		return cStr
-	}
-	o.labelCacheMu.RUnlock()
 	o.labelCacheMu.Lock()
 	defer o.labelCacheMu.Unlock()
-	// Double-check
+
 	if cStr, ok := o.cachedLabels[label]; ok {
 		return cStr
 	}
+
 	cStr := C.CString(label)
 	o.cachedLabels[label] = cStr
 
