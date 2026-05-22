@@ -5,6 +5,7 @@
 //  Copyright © 2025 Neru. All rights reserved.
 //
 
+#import "accessibility.h"
 #import "appwatcher.h"
 
 #import <Cocoa/Cocoa.h>
@@ -112,6 +113,8 @@ extern void handleScreenParametersChanged(void);
 				free(bundleIDCopy);
 			});
 		}
+
+		updateMissionControlState();
 	}
 }
 
@@ -136,6 +139,8 @@ extern void handleScreenParametersChanged(void);
 			free(appNameCopy);
 			free(bundleIDCopy);
 		});
+
+		updateMissionControlState();
 	}
 }
 
@@ -236,6 +241,13 @@ void startAppWatcher(void) {
 		                                         selector:@selector(screenParametersDidChange:)
 		                                             name:NSApplicationDidChangeScreenParametersNotification
 		                                           object:nil];
+
+		// Synchronize the cached Mission Control state at startup.
+		// If detection is disabled (the default), this is a cheap no-op that
+		// resets the cache to false.  When detection is later enabled via
+		// setDetectMissionControlEnabled, the queue, timer, and space-change
+		// observer are initialized lazily at that point.
+		updateMissionControlState();
 	});
 }
 

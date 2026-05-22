@@ -39,6 +39,9 @@ type Watcher interface {
 	OnDeactivate(callback appwatcher.AppCallback)
 	OnTerminate(callback appwatcher.AppCallback)
 	OnScreenParametersChanged(callback func())
+	OnMissionControlActivated(callback func())
+	OnMissionControlDeactivated(callback func())
+	SetMCDetection(enabled bool)
 }
 
 // ModeService defines the common interface for mode-specific services.

@@ -233,6 +233,64 @@ func (c *Config) ValidateHints() error {
 		return err
 	}
 
+	if (len(c.Hints.OnMissionControlActivated) > 0 || len(c.Hints.OnMissionControlDeactivated) > 0) &&
+		!c.Hints.DetectMissionControl {
+		return derrors.Newf(
+			derrors.CodeInvalidConfig,
+			"hints.on_mission_control_activated/deactivated requires hints.detect_mission_control = true",
+		)
+	}
+
+	if c.Hints.DetectMissionControl && !c.Hints.IncludeDockHints {
+		return derrors.Newf(
+			derrors.CodeInvalidConfig,
+			"hints.detect_mission_control requires hints.include_dock_hints = true "+
+				"(dock windows are the only element source available during Mission Control)",
+		)
+	}
+
+	for idx, actionStr := range c.Hints.OnMissionControlActivated {
+		trimmed := strings.TrimSpace(actionStr)
+		if trimmed == "" {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"hints.on_mission_control_activated[%d] cannot be empty",
+				idx,
+			)
+		}
+
+		err := validateHotkeyActionString(trimmed)
+		if err != nil {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"hints.on_mission_control_activated[%d]: %v",
+				idx,
+				err,
+			)
+		}
+	}
+
+	for idx, actionStr := range c.Hints.OnMissionControlDeactivated {
+		trimmed := strings.TrimSpace(actionStr)
+		if trimmed == "" {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"hints.on_mission_control_deactivated[%d] cannot be empty",
+				idx,
+			)
+		}
+
+		err := validateHotkeyActionString(trimmed)
+		if err != nil {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"hints.on_mission_control_deactivated[%d]: %v",
+				idx,
+				err,
+			)
+		}
+	}
+
 	return nil
 }
 

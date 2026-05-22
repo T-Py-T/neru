@@ -195,9 +195,38 @@ func (a *App) setupAppWatcherCallbacks() {
 		a.handleScreenParametersChange()
 	})
 
+	// Watch for Mission Control activated events
+	a.appWatcher.OnMissionControlActivated(func() {
+		cfg := a.configSnapshot()
+		if len(cfg.Hints.OnMissionControlActivated) > 0 && cfg.Hints.DetectMissionControl {
+			a.logger.Info("Mission Control activated: executing actions",
+				zap.Strings("actions", cfg.Hints.OnMissionControlActivated))
+			a.dispatchHotkeyActionsAsync(
+				"mission_control_activated",
+				cfg.Hints.OnMissionControlActivated,
+			)
+		}
+	})
+
+	// Watch for Mission Control deactivated events
+	a.appWatcher.OnMissionControlDeactivated(func() {
+		cfg := a.configSnapshot()
+		if len(cfg.Hints.OnMissionControlDeactivated) > 0 && cfg.Hints.DetectMissionControl {
+			a.logger.Info("Mission Control deactivated: executing actions",
+				zap.Strings("actions", cfg.Hints.OnMissionControlDeactivated))
+			a.dispatchHotkeyActionsAsync(
+				"mission_control_deactivated",
+				cfg.Hints.OnMissionControlDeactivated,
+			)
+		}
+	})
+
 	// Watch for macOS theme changes (Dark Mode / Light Mode) to update
 	// theme-aware label colors without requiring restart.
 	a.setupThemeObserver()
+
+	// Gate Mission Control detection at all levels using config
+	a.appWatcher.SetMCDetection(a.configSnapshot().Hints.DetectMissionControl)
 }
 
 // handleScreenParametersChange responds to display configuration changes by updating overlays.
