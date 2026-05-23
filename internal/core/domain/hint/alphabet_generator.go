@@ -17,9 +17,6 @@ const (
 	// MinCharactersLength is the minimum length for characters.
 	MinCharactersLength = 2
 
-	// CountsCapacity is the capacity for counts.
-	CountsCapacity = 5
-
 	// maxLabelCacheEntries caps the global label cache to prevent unbounded growth.
 	maxLabelCacheEntries = 64
 )
@@ -48,8 +45,7 @@ var stringBuilderPool = sync.Pool{
 }
 
 // AlphabetGenerator generates hint labels using an alphabet-based strategy.
-// It uses a prefix-avoidance algorithm to ensure no single-character label
-// conflicts with the start of a multi-character label.
+// It uses fixed-length base-N encoding within each tier to spread labels across the alphabet.
 type AlphabetGenerator struct {
 	characters       string
 	uppercaseChars   string
@@ -82,7 +78,7 @@ func NewAlphabetGenerator(characters string) (*AlphabetGenerator, error) {
 	charCount := len(characters)
 
 	// Calculate max hints: up to 3 chars
-	// Max capacity for length 3 prefix-free code is N^3
+	// Max capacity for fixed-length 3-char base-N encoding is N^3
 	n := charCount
 	maxHints := n * n * n
 
@@ -199,7 +195,7 @@ func (g *AlphabetGenerator) UpdateCharacters(characters string) error {
 
 	uppercaseChars := uppercaseBuilder.String()
 	charCount := len(characters)
-	// Max capacity for length 3 prefix-free code is N^3
+	// Max capacity for fixed-length 3-char base-N encoding is N^3
 	n := charCount
 	maxHints := n * n * n
 
@@ -218,10 +214,9 @@ func (g *AlphabetGenerator) UpdateCharacters(characters string) error {
 	return nil
 }
 
-// generateLabels generates alphabet-based hint labels using a prefix-avoidance strategy.
-// It ensures no label is a prefix of another to prevent ambiguity during input.
-// Returns uppercase labels sorted by length then alphabetically.
-// Uses a level-based approach where each level represents labels of increasing length.
+// generateLabels generates fixed-length base-N alphabet labels.
+// For counts up to the alphabet size, returns single characters.
+// For larger counts, progressively generates 2-char, 3-char, etc. labels to satisfy the count.
 // Results are cached in a bounded LRU cache for instant reuse on repeated counts.
 func (g *AlphabetGenerator) generateLabels(count int) []string {
 	if count == 0 {
@@ -289,106 +284,47 @@ func (g *AlphabetGenerator) computeLabels(count int) []string {
 	numChars := len(chars)
 	labels := make([]string, 0, count)
 
-	// Calculate distribution of labels across different lengths (levels)
-	// counts[i] stores number of labels of length i+1
-	// Uses greedy algorithm to minimize average label length while ensuring prefix-free property
-	counts := make([]int, 0, CountsCapacity)
+	if count <= numChars {
+		for i := range count {
+			char := chars[i]
+			if cached, ok := singleCharCache.Load(char); ok {
+				if str, ok := cached.(string); ok {
+					labels = append(labels, str)
 
-	remainingTarget := count
-	availableSlots := numChars // Slots available at current level (length 1)
+					continue
+				}
+			}
 
-	// Determine how many labels to keep at each level
-	for remainingTarget > 0 {
-		// Calculate capacity if all current slots are expanded to next level
-		nextLevelCapacity := availableSlots * numChars
-
-		var keep int
-
-		switch {
-		case availableSlots >= remainingTarget:
-			// Can satisfy remaining target at current level
-			keep = remainingTarget
-		case nextLevelCapacity < remainingTarget:
-			// Need to expand everything to reach target, keep none at current level
-			keep = 0
-		default:
-			// Keep as many as possible at current level while ensuring next level can handle remainder
-			// Formula derived from: availableSlots*N - keep*(N-1) >= remainingTarget
-			keep = (availableSlots*numChars - remainingTarget) / (numChars - 1)
+			labels = append(labels, string(char))
 		}
 
-		counts = append(counts, keep)
-		remainingTarget -= keep
-
-		// Update slots for next level: remaining slots expanded by branching factor
-		availableSlots = (availableSlots - keep) * numChars
-
-		if availableSlots == 0 && remainingTarget > 0 {
-			// Should not happen if maxHints check passed
-			break
-		}
+		return labels
 	}
 
-	var current []int
+	length := 2
+	if count > numChars*numChars {
+		length = 3
+	}
 
-	// Generate labels for each level using base-N arithmetic
-	for level, keep := range counts {
-		length := level + 1
-
-		if length == 1 {
-			// Generate single-character labels
-			for i := range keep {
-				char := chars[i]
-				if cached, ok := singleCharCache.Load(char); ok {
-					if str, ok := cached.(string); ok {
-						labels = append(labels, str)
-
-						continue
-					}
-				}
-
-				labels = append(labels, string(char))
-			}
-			// Start next level from after the kept labels
-			current = []int{keep}
-		} else {
-			// Generate multi-character labels by expanding prefixes
-			// 'current' represents the starting point in base-N numbering
-
-			// Ensure current array has correct length for this level
-			for len(current) < length {
-				current = append(current, 0)
-			}
-
-			// Generate 'keep' labels starting from current position
-			for range keep {
-				// Build label string from current indices using pooled builder
-				stringBuilder, ok := stringBuilderPool.Get().(*strings.Builder)
-				if !ok {
-					stringBuilder = &strings.Builder{}
-				}
-
-				stringBuilder.Reset()
-				stringBuilder.Grow(length)
-
-				for _, index := range current {
-					stringBuilder.WriteRune(chars[index])
-				}
-
-				labels = append(labels, stringBuilder.String())
-				stringBuilderPool.Put(stringBuilder)
-
-				// Increment current position (like adding 1 in base-N)
-				for pos := len(current) - 1; pos >= 0; pos-- {
-					current[pos]++
-					if current[pos] < numChars {
-						break
-					}
-					// Carry over to next position
-					current[pos] = 0
-				}
-			}
+	for index := range count {
+		stringBuilder, ok := stringBuilderPool.Get().(*strings.Builder)
+		if !ok {
+			stringBuilder = &strings.Builder{}
 		}
+
+		stringBuilder.Reset()
+		stringBuilder.Grow(length)
+
+		v := index
+		for range length {
+			digit := v % numChars
+			v /= numChars
+
+			stringBuilder.WriteRune(chars[digit])
+		}
+
+		labels = append(labels, stringBuilder.String())
+		stringBuilderPool.Put(stringBuilder)
 	}
 
 	return labels
