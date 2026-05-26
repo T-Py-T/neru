@@ -27,7 +27,7 @@ Bridge `.c` / `.m` files must `#include` their matching header and must **not** 
 
 typedef void *OverlayWindow;
 
-OverlayWindow createOverlayWindow(void);
+OverlayWindow NeruCreateOverlayWindow(void);
 void NeruDestroyOverlayWindow(OverlayWindow window);
 void NeruShowOverlayWindow(OverlayWindow window);
 void NeruHideOverlayWindow(OverlayWindow window);
@@ -70,12 +70,28 @@ Standard structure:
 
 #pragma mark - C Interface Implementation
 
-OverlayWindow createOverlayWindow(void) {
+OverlayWindow NeruCreateOverlayWindow(void) {
     // Implementation
 }
 ```
 
 ## Naming Conventions
+
+### C bridge exports (Go-callable)
+
+Every function declared in a `.h` file and called from Go via CGO must use a **`Neru` prefix** (PascalCase after the prefix) to avoid symbol collisions with system libraries and to mark the public bridge surface. Do not add unprefixed CGO exports.
+
+```objc
+OverlayWindow NeruCreateOverlayWindow(void);
+void NeruShowOverlayWindow(OverlayWindow window);
+EventTap NeruCreateEventTap(EventTapCallback callback, void *userData);
+int NeruCheckAccessibilityPermissions(void);
+int NeruRegisterHotkey(int keyCode, int modifiers, int hotkeyId, HotkeyCallback callback, void *userData);
+```
+
+Objective-C methods, private `static` helpers, and symbols not exported through bridge headers keep Apple's usual camelCase without the prefix.
+
+### Objective-C methods
 
 - Use descriptive names with clear intent
 - Follow Apple's naming conventions
@@ -111,7 +127,7 @@ For C interface objects:
 - Use `autorelease` for return values
 
 ```objc
-OverlayWindow createOverlayWindow(void) {
+OverlayWindow NeruCreateOverlayWindow(void) {
     OverlayWindowController *controller = [[OverlayWindowController alloc] init];
     [controller retain];
     return (void *)controller;

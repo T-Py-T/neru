@@ -114,7 +114,7 @@ extern void handleScreenParametersChanged(void);
 			});
 		}
 
-		updateMissionControlState();
+		NeruUpdateMissionControlState();
 	}
 }
 
@@ -140,7 +140,7 @@ extern void handleScreenParametersChanged(void);
 			free(bundleIDCopy);
 		});
 
-		updateMissionControlState();
+		NeruUpdateMissionControlState();
 	}
 }
 
@@ -195,7 +195,7 @@ static AppWatcherDelegate *delegate = nil;
 static dispatch_queue_t watcherQueue = nil;
 
 /// Start the application watcher
-void startAppWatcher(void) {
+void NeruStartAppWatcher(void) {
 	static dispatch_once_t onceToken;
 	dispatch_once(&onceToken, ^{
 		watcherQueue = dispatch_queue_create("com.neru.appwatcher", DISPATCH_QUEUE_SERIAL);
@@ -245,14 +245,14 @@ void startAppWatcher(void) {
 		// Synchronize the cached Mission Control state at startup.
 		// If detection is disabled (the default), this is a cheap no-op that
 		// resets the cache to false.  When detection is later enabled via
-		// setDetectMissionControlEnabled, the queue, timer, and space-change
+		// NeruSetDetectMissionControlEnabled, the queue, timer, and space-change
 		// observer are initialized lazily at that point.
-		updateMissionControlState();
+		NeruUpdateMissionControlState();
 	});
 }
 
 /// Stop the application watcher
-void stopAppWatcher(void) {
+void NeruStopAppWatcher(void) {
 	if (watcherQueue == nil)
 		return;
 
