@@ -11,6 +11,7 @@
 ![Windows Support](https://img.shields.io/badge/Windows-Foundations-lightgrey?style=flat-square&logo=windows)
 ![Go Version](https://img.shields.io/github/go-mod/go-version/y3owk1n/neru?style=flat-square&logo=go)
 [![Latest Release](https://img.shields.io/github/v/release/y3owk1n/neru?style=flat-square)](https://github.com/y3owk1n/neru/releases)
+[![Discord](https://img.shields.io/discord/1502261043701874698?style=flat-square)](https://discord.gg/KZwnwr9dz6)
 [![License](https://img.shields.io/github/license/y3owk1n/neru?style=flat-square)](LICENSE)
 
 </div>
