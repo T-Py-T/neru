@@ -22,7 +22,7 @@ This guide covers installation methods for Neru, with the most complete support 
 
 ## Requirements
 
-- macOS 11.0 or later
+- macOS 14.0 or later
 - Accessibility permissions (granted during setup)
 
 ---
