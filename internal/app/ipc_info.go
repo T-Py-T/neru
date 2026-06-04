@@ -377,9 +377,12 @@ func capabilitiesMap(capabilities ports.PlatformCapabilities) map[string]any {
 	// Surface dark-mode Detail as a sibling field so `neru doctor` can render
 	// the current live state (e.g. "current state: dark (source=xdg-portal)")
 	// without having to expand FeatureCapability into its own structured map.
-	// Adapters that don't populate Detail (currently Darwin/Windows) just won't
-	// include the key.
-	if detail := capabilities.DarkModeDetection.Detail; detail != "" {
+	// Every platform preset fills Detail, but only Linux probes it into a live
+	// runtime state; Darwin/Windows leave a static capability description there,
+	// which is not a state and must not leak into the dark-mode line. Gate on
+	// the Linux platform prefix (e.g. "linux/wayland-kde", "linux/x11").
+	if detail := capabilities.DarkModeDetection.Detail; detail != "" &&
+		strings.HasPrefix(capabilities.Platform, "linux") {
 		out["dark_mode_detection_detail"] = detail
 	}
 
