@@ -3,11 +3,13 @@ package services
 import (
 	"context"
 	"image"
+	"slices"
 	"strings"
+	"sync"
 
 	"go.uber.org/zap"
 
-	"github.com/y3owk1n/neru/internal/core"
+	"github.com/y3owk1n/neru/internal/config"
 	"github.com/y3owk1n/neru/internal/core/domain/action"
 	"github.com/y3owk1n/neru/internal/core/domain/element"
 	derrors "github.com/y3owk1n/neru/internal/core/errors"
@@ -18,7 +20,9 @@ import (
 type ActionService struct {
 	BaseService
 
-	logger *zap.Logger
+	configMu sync.RWMutex
+	config   config.MouseActionConfig
+	logger   *zap.Logger
 }
 
 // NewActionService creates a new action service.
@@ -28,10 +32,23 @@ func NewActionService(
 	system ports.SystemPort,
 	logger *zap.Logger,
 ) *ActionService {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
 	return &ActionService{
 		BaseService: NewBaseService(accessibility, overlay, system),
-		logger:      logger,
+		config:      config.DefaultConfig().MouseAction,
+		logger:      logger.Named("service.action"),
 	}
+}
+
+// UpdateConfig updates the mouse action indicator configuration.
+func (s *ActionService) UpdateConfig(cfg config.MouseActionConfig) {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+
+	s.config = cfg
 }
 
 // ExecuteAction performs the specified action on the given element.
@@ -40,7 +57,7 @@ func (s *ActionService) ExecuteAction(
 	element *element.Element,
 	actionType action.Type,
 ) error {
-	s.logger.Info("Executing action",
+	s.logger.Debug("Executing action",
 		zap.String("action", actionType.String()),
 		zap.String("element_id", string(element.ID())),
 		zap.String("element_role", string(element.Role())))
@@ -51,10 +68,10 @@ func (s *ActionService) ExecuteAction(
 			zap.Error(performActionErr),
 			zap.String("action", actionType.String()))
 
-		return core.WrapActionFailed(performActionErr, actionType.String())
+		return derrors.WrapActionFailed(performActionErr, actionType.String())
 	}
 
-	s.logger.Info("Action executed successfully",
+	s.logger.Debug("Action executed successfully",
 		zap.String("action", actionType.String()))
 
 	return nil
@@ -71,10 +88,10 @@ func (s *ActionService) PerformActionAtPoint(
 	// Parse action string to domain type
 	actionType, actionTypeErr := action.ParseType(actionString)
 	if actionTypeErr != nil {
-		return core.WrapConfigFailed(actionTypeErr, "validate action type")
+		return derrors.WrapConfigFailed(actionTypeErr, "validate action type")
 	}
 
-	s.logger.Info("Performing action at point",
+	s.logger.Debug("Performing action at point",
 		zap.String("action", actionType.String()),
 		zap.Int("x", point.X),
 		zap.Int("y", point.Y),
@@ -86,22 +103,30 @@ func (s *ActionService) PerformActionAtPoint(
 			zap.Error(performActionErr),
 			zap.String("action", actionType.String()))
 
-		return core.WrapActionFailed(performActionErr, actionType.String()+" at point")
+		return derrors.WrapActionFailed(performActionErr, actionType.String()+" at point")
 	}
 
+	s.drawMouseActionIndicator(point, actionType)
+
 	return nil
+}
+
+func mouseActionIndicatorIncludes(actions []string, actionType action.Type) bool {
+	actionName := actionType.String()
+
+	return slices.Contains(actions, actionName)
 }
 
 // IsFocusedAppExcluded checks if the currently focused application is in the exclusion list.
 func (s *ActionService) IsFocusedAppExcluded(ctx context.Context) (bool, error) {
 	bundleID, bundleIDErr := s.accessibility.FocusedAppBundleID(ctx)
 	if bundleIDErr != nil {
-		return false, core.WrapAccessibilityFailed(bundleIDErr, "get focused app bundle ID")
+		return false, derrors.WrapAccessibilityFailed(bundleIDErr, "get focused app bundle ID")
 	}
 
 	isExcluded := s.accessibility.IsAppExcluded(ctx, bundleID)
 	if isExcluded {
-		s.logger.Info("Focused app is excluded", zap.String("bundle_id", bundleID))
+		s.logger.Debug("Focused app is excluded", zap.String("bundle_id", bundleID))
 	}
 
 	return isExcluded, nil
@@ -110,6 +135,11 @@ func (s *ActionService) IsFocusedAppExcluded(ctx context.Context) (bool, error) 
 // FocusedAppBundleID returns the bundle ID of the currently focused application.
 func (s *ActionService) FocusedAppBundleID(ctx context.Context) (string, error) {
 	return s.accessibility.FocusedAppBundleID(ctx)
+}
+
+// IsAppExcluded checks if the given bundle ID is in the exclusion list.
+func (s *ActionService) IsAppExcluded(ctx context.Context, bundleID string) bool {
+	return s.accessibility.IsAppExcluded(ctx, bundleID)
 }
 
 // MoveCursorToElement moves the cursor to the center of the specified element.
@@ -167,7 +197,7 @@ func (s *ActionService) MoveMouseTo(
 	if err != nil {
 		s.logger.Error("Failed to get screen bounds", zap.Error(err))
 
-		return core.WrapAccessibilityFailed(err, "get screen bounds")
+		return derrors.WrapAccessibilityFailed(err, "get screen bounds")
 	}
 
 	shouldBypass := len(bypassSmooth) > 0 && bypassSmooth[0]
@@ -191,7 +221,7 @@ func (s *ActionService) MoveMouseRelative(
 	if err != nil {
 		s.logger.Error("Failed to get cursor position", zap.Error(err))
 
-		return core.WrapAccessibilityFailed(err, "get cursor position")
+		return derrors.WrapAccessibilityFailed(err, "get cursor position")
 	}
 
 	shouldBypass := len(bypassSmooth) > 0 && bypassSmooth[0]
@@ -217,7 +247,7 @@ func (s *ActionService) MoveMouseToCenter(ctx context.Context, offsetX, offsetY 
 	if err != nil {
 		s.logger.Error("Failed to get screen bounds", zap.Error(err))
 
-		return core.WrapAccessibilityFailed(err, "get screen bounds")
+		return derrors.WrapAccessibilityFailed(err, "get screen bounds")
 	}
 
 	centerX := screenBounds.Min.X + screenBounds.Dx()/2 //nolint:mnd
@@ -248,7 +278,7 @@ func (s *ActionService) MoveMouseToCenterOfMonitor(
 	if err != nil {
 		s.logger.Error("Failed to get screen bounds by name", zap.Error(err))
 
-		return core.WrapAccessibilityFailed(err, "get screen bounds by name")
+		return derrors.WrapAccessibilityFailed(err, "get screen bounds by name")
 	}
 
 	if !found {
@@ -297,7 +327,7 @@ func (s *ActionService) MoveMouseToCenterOfWindow(
 	if err != nil {
 		s.logger.Error("Failed to get focused window bounds", zap.Error(err))
 
-		return core.WrapAccessibilityFailed(err, "get focused window bounds")
+		return derrors.WrapAccessibilityFailed(err, "get focused window bounds")
 	}
 
 	if !found {
@@ -321,6 +351,44 @@ func (s *ActionService) MoveMouseToCenterOfWindow(
 	)
 }
 
+func (s *ActionService) drawMouseActionIndicator(point image.Point, actionType action.Type) {
+	cfg := s.mouseActionConfig()
+	if !cfg.Enabled || !mouseActionIndicatorIncludes(cfg.Actions, actionType) {
+		return
+	}
+
+	style := ports.MouseActionIndicatorStyle{
+		Size:        cfg.UI.Size,
+		BorderWidth: cfg.UI.BorderWidth,
+		BackgroundColor: cfg.UI.BackgroundColor.ForTheme(
+			s.system,
+			config.MouseActionBackgroundColorLight,
+			config.MouseActionBackgroundColorDark,
+		),
+		BorderColor: cfg.UI.BorderColor.ForTheme(
+			s.system,
+			config.MouseActionBorderColorLight,
+			config.MouseActionBorderColorDark,
+		),
+		Shape:        cfg.UI.Shape,
+		DurationMS:   cfg.Animation.DurationMS,
+		StartScale:   cfg.Animation.StartScale,
+		EndScale:     cfg.Animation.EndScale,
+		StartOpacity: cfg.Animation.StartOpacity,
+		EndOpacity:   cfg.Animation.EndOpacity,
+		Easing:       cfg.Animation.Easing,
+	}
+
+	s.overlay.DrawMouseActionIndicator(point, style)
+}
+
+func (s *ActionService) mouseActionConfig() config.MouseActionConfig {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+
+	return s.config
+}
+
 // moveMouseWithBounds clamps target to the given screen bounds and moves the cursor.
 // This is the shared implementation used by MoveMouseTo and MoveMouseToCenter to
 // avoid duplicating clamp-and-move logic.
@@ -341,7 +409,7 @@ func (s *ActionService) moveMouseWithBounds(
 		zap.Bool("bypassSmooth", bypassSmooth),
 	)
 	logFields = append(logFields, fields...)
-	s.logger.Info("Moving mouse cursor", logFields...)
+	s.logger.Debug("Moving mouse cursor", logFields...)
 
 	err := s.system.MoveCursorToPoint(ctx, clamped, bypassSmooth)
 	if err != nil {

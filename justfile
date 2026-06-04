@@ -162,7 +162,8 @@ fmt-check:
     echo "Checking Objective-C file formatting..."
     EXIT_CODE=0
     while IFS= read -r -d '' file; do
-        OUTPUT=$(clang-format --dry-run -Werror --style=file --assume-filename=file.m "$file" 2>&1)
+        case "$file" in *.c) af=file.c;; *) af=file.m;; esac
+        OUTPUT=$(clang-format --dry-run -Werror --style=file --assume-filename="$af" "$file" 2>&1)
         RESULT=$?
         # Filter out the "does not support C++" warnings
         FILTERED=$(echo "$OUTPUT" | grep -v "Configuration file(s) do(es) not support C++")
@@ -172,12 +173,18 @@ fmt-check:
         if [ $RESULT -ne 0 ] && [ -n "$FILTERED" ]; then
             EXIT_CODE=1
         fi
-    done < <(find internal/core/infra \( -name "*.h" -o -name "*.m" \) -print0)
+    done < <(find internal/core/infra \( -name "*.h" -o -name "*.m" -o -name "*.c" \) -print0)
     if [ $EXIT_CODE -ne 0 ]; then
         echo "Some Objective-C files are not properly formatted. Run 'just fmt' to fix them."
         exit 1
     fi
     echo "✓ All Objective-C files are properly formatted"
+
+# Generate man pages
+genman OUTPUT_DIR="build/man":
+    @echo "Generating man pages..."
+    go run ./cmd/genman {{ OUTPUT_DIR }}
+    @echo "✓ Man pages generated in {{ OUTPUT_DIR }}/"
 
 # Clean build artifacts
 clean:
@@ -193,7 +200,7 @@ fmt:
     golangci-lint fmt
     golangci-lint run --fix
     @echo "Formatting Objective-C files..."
-    @find internal/core/infra \( -name "*.h" -o -name "*.m" \) -exec clang-format -i --style=file --assume-filename=file.m {} \;
+    @find internal/core/infra \( -name "*.h" -o -name "*.m" -o -name "*.c" \) -exec sh -c 'case "$1" in *.c) af=file.c;; *) af=file.m;; esac; clang-format -i --style=file --assume-filename="$af" "$1"' _ {} \;
     @echo "✓ Format complete"
 
 # Lint code

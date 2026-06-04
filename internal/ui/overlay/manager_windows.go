@@ -116,11 +116,27 @@ func (m *Manager) DrawHintsWithStyle(_ []*hints.Hint, _ hints.StyleMode) error {
 	return derrors.New(derrors.CodeNotSupported, "overlay hints not implemented on windows")
 }
 
+// DrawHintSearchInput draws the hints search input (Windows stub).
+func (m *Manager) DrawHintSearchInput(
+	_ string,
+	_ int,
+	_ hints.SearchInputFrame,
+	_ hints.SearchInputStyle,
+) error {
+	return nil
+}
+
+// HideHintSearchInput hides the hints search input (Windows stub).
+func (m *Manager) HideHintSearchInput() {}
+
 // DrawModeIndicator draws the mode indicator (Windows stub).
 func (m *Manager) DrawModeIndicator(_, _ int) {}
 
 // DrawStickyModifiersIndicator draws the sticky modifiers indicator (Windows stub).
 func (m *Manager) DrawStickyModifiersIndicator(_, _ int, _ string) {}
+
+// DrawMouseActionIndicator draws a mouse action indicator (Windows stub).
+func (m *Manager) DrawMouseActionIndicator(_ image.Point, _ ports.MouseActionIndicatorStyle) {}
 
 // DrawGrid draws the grid (Windows stub).
 func (m *Manager) DrawGrid(_ *domainGrid.Grid, _ string, _ grid.Style) error {

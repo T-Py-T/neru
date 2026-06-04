@@ -9,11 +9,28 @@ import (
 // ActionCmd is the CLI action command for performing immediate actions.
 var ActionCmd = &cobra.Command{
 	Use:   "action",
-	Short: "Perform immediate mouse and scroll actions",
-	Long: `Perform immediate mouse and scroll actions.
+	Short: "Perform immediate mouse, scroll, and keyboard actions",
+	Long: `Perform immediate mouse, scroll, and keyboard actions without entering a mode.
 
 Point-targeted actions use the active mode selection when one exists. Use
---bare to force current-cursor targeting.`,
+--bare to force current-cursor targeting. Most click and scroll actions
+support --modifier to hold modifier keys during the action.
+
+Available subcommands:
+  Click actions:    left_click, right_click, middle_click, mouse_down, mouse_up
+  Scroll actions:   scroll_up, scroll_down, scroll_left, scroll_right,
+                    go_top, go_bottom, page_up, page_down
+  Mouse movement:   move_mouse, move_mouse_relative, move_monitor
+  Mode control:     reset, backspace, wait_for_mode_exit, cycle_hint
+  Window control:   focus_window
+  Cursor saving:    save_cursor_pos, restore_cursor_pos
+  Key injection:    feed
+
+Examples:
+  neru action left_click                        Click at current cursor
+  neru action scroll_down --steps 5             Scroll down 5 steps
+  neru action move_mouse --x 1920 --y 1080      Move to absolute position
+  neru action feed ctrl+c                        Send Ctrl+C keystroke`,
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		return requiresRunningInstance()
 	},
@@ -29,7 +46,11 @@ Point-targeted actions use the active mode selection when one exists. Use
 var ActionLeftClickCmd = BuildActionCommand(
 	"left_click",
 	"Perform left click",
-	`Execute a left click at the active selection when available, otherwise at the current cursor location.`,
+	`Execute a left click.
+
+Targets the active mode selection when one exists, otherwise clicks at
+the current cursor location. Use --modifier to hold modifier keys
+(e.g. --modifier shift for Shift+click).`,
 	[]string{"left_click"},
 	true,
 )
@@ -38,7 +59,11 @@ var ActionLeftClickCmd = BuildActionCommand(
 var ActionRightClickCmd = BuildActionCommand(
 	"right_click",
 	"Perform right click",
-	`Execute a right click at the active selection when available, otherwise at the current cursor location.`,
+	`Execute a right click.
+
+Targets the active mode selection when one exists, otherwise clicks at
+the current cursor location. Use --modifier to hold modifier keys
+(e.g. --modifier option for Option+click).`,
 	[]string{"right_click"},
 	true,
 )
@@ -47,7 +72,10 @@ var ActionRightClickCmd = BuildActionCommand(
 var ActionMouseUpCmd = BuildActionCommand(
 	"mouse_up",
 	"Release mouse button",
-	`Release the left mouse button at the active selection when available, otherwise at the current cursor location.`,
+	`Release the left mouse button.
+
+Useful for drag-and-drop workflows with mouse_down. Targets the active
+mode selection when one exists, otherwise the current cursor location.`,
 	[]string{"mouse_up"},
 	true,
 )
@@ -56,7 +84,11 @@ var ActionMouseUpCmd = BuildActionCommand(
 var ActionMouseDownCmd = BuildActionCommand(
 	"mouse_down",
 	"Press mouse button",
-	`Press and hold the left mouse button at the active selection when available, otherwise at the current cursor location.`,
+	`Press and hold the left mouse button.
+
+Intended for drag operations: use mouse_down at the start point, move
+the cursor, then mouse_up at the destination. Targets the active mode
+selection when one exists, otherwise the current cursor location.`,
 	[]string{"mouse_down"},
 	true,
 )
@@ -65,7 +97,10 @@ var ActionMouseDownCmd = BuildActionCommand(
 var ActionMiddleClickCmd = BuildActionCommand(
 	"middle_click",
 	"Perform middle click",
-	`Execute a middle click at the active selection when available, otherwise at the current cursor location.`,
+	`Execute a middle click (useful for opening links in new tabs).
+
+Targets the active mode selection when one exists, otherwise clicks at
+the current cursor location. Use --modifier to hold modifier keys.`,
 	[]string{"middle_click"},
 	true,
 )
@@ -128,57 +163,95 @@ var ActionRestoreCursorPosCmd = BuildActionCommand(
 var ActionScrollUpCmd = BuildScrollActionCommand(
 	"scroll_up",
 	"Scroll up",
-	`Scroll up at the active selection when available, otherwise at the current cursor location.`,
+	`Scroll up by a configurable step amount.
+
+Use --steps to override the step size (in pixels). Targets the active
+mode selection when one exists, otherwise scrolls at the cursor location.`,
+	true,
 )
 
 // ActionScrollDownCmd scrolls down at the current cursor position.
 var ActionScrollDownCmd = BuildScrollActionCommand(
 	"scroll_down",
 	"Scroll down",
-	`Scroll down at the active selection when available, otherwise at the current cursor location.`,
+	`Scroll down by a configurable step amount.
+
+Use --steps to override the step size (in pixels). Targets the active
+mode selection when one exists, otherwise scrolls at the cursor location.`,
+	true,
 )
 
 // ActionScrollLeftCmd scrolls left at the current cursor position.
 var ActionScrollLeftCmd = BuildScrollActionCommand(
 	"scroll_left",
 	"Scroll left",
-	`Scroll left at the active selection when available, otherwise at the current cursor location.`,
+	`Scroll left by a configurable step amount.
+
+Use --steps to override the step size (in pixels). Targets the active
+mode selection when one exists, otherwise scrolls at the cursor location.`,
+	true,
 )
 
 // ActionScrollRightCmd scrolls right at the current cursor position.
 var ActionScrollRightCmd = BuildScrollActionCommand(
 	"scroll_right",
 	"Scroll right",
-	`Scroll right at the active selection when available, otherwise at the current cursor location.`,
+	`Scroll right by a configurable step amount.
+
+Use --steps to override the step size (in pixels). Targets the active
+mode selection when one exists, otherwise scrolls at the cursor location.`,
+	true,
 )
 
 // ActionGoTopCmd scrolls to the top of the page.
 var ActionGoTopCmd = BuildScrollActionCommand(
 	"go_top",
 	"Scroll to top of page",
-	`Scroll to the top of the page at the active selection when available, otherwise at the current cursor location.`,
+	`Scroll to the top of the page.
+
+Targets the active mode selection when one exists, otherwise scrolls
+at the current cursor location.`,
+	false,
 )
 
 // ActionGoBottomCmd scrolls to the bottom of the page.
 var ActionGoBottomCmd = BuildScrollActionCommand(
 	"go_bottom",
 	"Scroll to bottom of page",
-	`Scroll to the bottom of the page at the active selection when available, otherwise at the current cursor location.`,
+	`Scroll to the bottom of the page.
+
+Targets the active mode selection when one exists, otherwise scrolls
+at the current cursor location.`,
+	false,
 )
 
 // ActionPageUpCmd scrolls up by half a page.
 var ActionPageUpCmd = BuildScrollActionCommand(
 	"page_up",
 	"Scroll up by half page",
-	`Scroll up by half a page at the active selection when available, otherwise at the current cursor location.`,
+	`Scroll up by approximately half the visible page height.
+
+Targets the active mode selection when one exists, otherwise scrolls
+at the current cursor location.`,
+	false,
 )
 
 // ActionPageDownCmd scrolls down by half a page.
 var ActionPageDownCmd = BuildScrollActionCommand(
 	"page_down",
 	"Scroll down by half page",
-	`Scroll down by half a page at the active selection when available, otherwise at the current cursor location.`,
+	`Scroll down by approximately half the visible page height.
+
+Targets the active mode selection when one exists, otherwise scrolls
+at the current cursor location.`,
+	false,
 )
+
+// ActionFocusWindowCmd cycles window focus on the active space.
+var ActionFocusWindowCmd = BuildFocusWindowCommand()
+
+// ActionCycleHintCmd cycles through visible hints in hints mode.
+var ActionCycleHintCmd = BuildCycleHintCommand()
 
 func init() {
 	ActionCmd.AddCommand(ActionLeftClickCmd)
@@ -203,6 +276,8 @@ func init() {
 	ActionCmd.AddCommand(ActionGoBottomCmd)
 	ActionCmd.AddCommand(ActionPageUpCmd)
 	ActionCmd.AddCommand(ActionPageDownCmd)
+	ActionCmd.AddCommand(ActionCycleHintCmd)
+	ActionCmd.AddCommand(ActionFocusWindowCmd)
 
 	RootCmd.AddCommand(ActionCmd)
 }

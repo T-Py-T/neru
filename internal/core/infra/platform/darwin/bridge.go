@@ -6,33 +6,28 @@ package darwin
 #include "hotkeys.h"
 #include "theme.h"
 #include "appwatcher.h"
+#include "accessibility.h"
 #include <stdlib.h>
 
-extern void hotkeyCallbackBridge(int hotkeyId, void* userData);
-
-void startAppWatcher();
-void stopAppWatcher();
+extern void hotkeyCallbackBridge(int hotkeyId, int eventKind, void* userData);
 */
 import "C"
 
 import (
-	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"go.uber.org/zap"
 )
 
 var (
-	appWatcher   AppWatcherInterface
-	appWatcherMu sync.RWMutex
+	appWatcherSlot     cgoSlot[AppWatcherInterface]
+	mcDetectionEnabled atomic.Bool
 )
 
 // AppWatcher returns the global application watcher instance.
 func AppWatcher() AppWatcherInterface {
-	appWatcherMu.RLock()
-	defer appWatcherMu.RUnlock()
-
-	return appWatcher
+	return appWatcherSlot.Get()
 }
 
 // RegisterHotkey registers a global hotkey on macOS.
@@ -47,7 +42,7 @@ func RegisterHotkey(
 		zap.Int("modifiers", modifiers),
 		zap.Int("hotkey_id", hotkeyID))
 
-	result := C.registerHotkey(
+	result := C.NeruRegisterHotkey(
 		C.int(keyCode),
 		C.int(modifiers),
 		C.int(hotkeyID),
@@ -68,12 +63,12 @@ func UnregisterHotkey(hotkeyID int) {
 	log := getLogger()
 	log.Debug("Darwin: Unregistering hotkey", zap.Int("hotkey_id", hotkeyID))
 
-	C.unregisterHotkey(C.int(hotkeyID))
+	C.NeruUnregisterHotkey(C.int(hotkeyID))
 }
 
 // UnregisterAllHotkeys unregisters all global hotkeys on macOS.
 func UnregisterAllHotkeys() {
-	C.unregisterAllHotkeys()
+	C.NeruUnregisterAllHotkeys()
 }
 
 // ParseKeyString parses a key string into a key code and modifiers on macOS.
@@ -86,7 +81,7 @@ func ParseKeyString(keyString string) (int, int, bool) {
 
 	var keyCode C.int
 	var modifiers C.int
-	result := C.parseKeyString(cKeyString, &keyCode, &modifiers)
+	result := C.NeruParseKeyString(cKeyString, &keyCode, &modifiers)
 
 	log.Debug("Darwin: Parse key string result",
 		zap.Int("key_code", int(keyCode)),
@@ -98,19 +93,24 @@ func ParseKeyString(keyString string) (int, int, bool) {
 	return int(keyCode), int(modifiers), success
 }
 
-// HotkeyHandler defines the signature for hotkey event handlers.
-type HotkeyHandler func(hotkeyID int)
+// HotkeyEventKind describes whether a global hotkey was pressed or released.
+type HotkeyEventKind int
 
-var (
-	hotkeyHandler   HotkeyHandler
-	hotkeyHandlerMu sync.RWMutex
+const (
+	// HotkeyEventPressed is emitted when a registered hotkey is pressed.
+	HotkeyEventPressed HotkeyEventKind = 1
+	// HotkeyEventReleased is emitted when a registered hotkey is released.
+	HotkeyEventReleased HotkeyEventKind = 2
 )
+
+// HotkeyHandler defines the signature for hotkey event handlers.
+type HotkeyHandler func(hotkeyID int, eventKind HotkeyEventKind)
+
+var hotkeyHandlerSlot cgoSlot[HotkeyHandler]
 
 // SetHotkeyHandler sets the global hotkey event handler.
 func SetHotkeyHandler(handler HotkeyHandler) {
-	hotkeyHandlerMu.Lock()
-	defer hotkeyHandlerMu.Unlock()
-	hotkeyHandler = handler
+	hotkeyHandlerSlot.Set(handler)
 }
 
 // GetHotkeyCallbackBridge returns a pointer to the C hotkey callback bridge function.
@@ -121,14 +121,12 @@ func GetHotkeyCallbackBridge() unsafe.Pointer {
 }
 
 //export hotkeyCallbackBridge
-func hotkeyCallbackBridge(hotkeyID C.int, _ unsafe.Pointer) {
-	hotkeyHandlerMu.RLock()
-	handler := hotkeyHandler
-	hotkeyHandlerMu.RUnlock()
-
-	if handler != nil {
-		handler(int(hotkeyID))
-	}
+func hotkeyCallbackBridge(hotkeyID C.int, eventKind C.int, _ unsafe.Pointer) {
+	id := int(hotkeyID)
+	kind := HotkeyEventKind(eventKind)
+	hotkeyHandlerSlot.withValid(func(handler HotkeyHandler) {
+		handler(id, kind)
+	})
 }
 
 // SetAppWatcher configures the application watcher implementation.
@@ -136,111 +134,146 @@ func SetAppWatcher(watcher AppWatcherInterface) {
 	log := getLogger()
 	log.Debug("Darwin: Setting app watcher")
 
-	appWatcherMu.Lock()
-	defer appWatcherMu.Unlock()
+	appWatcherSlot.Set(watcher)
+}
 
-	appWatcher = watcher
+// SetDetectMissionControlEnabled enables or disables Mission Control detection.
+// When disabled, the entire detection pipeline is gated at the ObjC level —
+// no timer, no window scans, and no callbacks to the Go bridge.
+func SetDetectMissionControlEnabled(enabled bool) {
+	mcDetectionEnabled.Store(enabled)
+	C.NeruSetDetectMissionControlEnabled(C.bool(enabled))
 }
 
 // StartAppWatcher begins monitoring application lifecycle events.
 func StartAppWatcher() {
 	log := getLogger()
 	log.Debug("Darwin: Starting app watcher")
-	C.startAppWatcher()
+	C.NeruStartAppWatcher()
 }
 
 // StopAppWatcher ceases monitoring application lifecycle events.
 func StopAppWatcher() {
 	log := getLogger()
 	log.Debug("Darwin: Stopping app watcher")
-	C.stopAppWatcher()
+	C.NeruStopAppWatcher()
+}
+
+func dispatchAppWatcherAppEvent(
+	handlerName, forwardMsg string,
+	appName, bundleID *C.char,
+	forward func(AppWatcherInterface, string, string),
+) {
+	log := getLogger()
+	log.Debug("Darwin: " + handlerName + " called")
+
+	appWatcherSlot.withValid(func(watcher AppWatcherInterface) {
+		name := C.GoString(appName)
+		bundleIDValue := C.GoString(bundleID)
+		log.Debug("Darwin: "+forwardMsg,
+			zap.String("app_name", name),
+			zap.String("bundle_id", bundleIDValue))
+		forward(watcher, name, bundleIDValue)
+	})
+}
+
+func dispatchAppWatcherVoidEvent(
+	handlerName, forwardMsg string,
+	async bool,
+	forward func(AppWatcherInterface),
+) {
+	log := getLogger()
+	log.Debug("Darwin: " + handlerName + " called")
+
+	dispatch := func(watcher AppWatcherInterface) {
+		log.Debug("Darwin: " + forwardMsg)
+		forward(watcher)
+	}
+
+	if async {
+		appWatcherSlot.withValidAsync(dispatch)
+
+		return
+	}
+
+	appWatcherSlot.withValid(dispatch)
 }
 
 //export handleAppLaunch
 func handleAppLaunch(appName *C.char, bundleID *C.char) {
-	log := getLogger()
-	log.Debug("Darwin: handleAppLaunch called")
-
-	appWatcherMu.RLock()
-	watcher := appWatcher
-	appWatcherMu.RUnlock()
-
-	if watcher != nil {
-		log.Debug("Darwin: Forwarding app launch event",
-			zap.String("app_name", C.GoString(appName)),
-			zap.String("bundle_id", C.GoString(bundleID)))
-
-		watcher.HandleLaunch(C.GoString(appName), C.GoString(bundleID))
-	}
+	dispatchAppWatcherAppEvent("handleAppLaunch", "Forwarding app launch event", appName, bundleID,
+		func(w AppWatcherInterface, name, id string) { w.HandleLaunch(name, id) })
 }
 
 //export handleAppTerminate
 func handleAppTerminate(appName *C.char, bundleID *C.char) {
-	log := getLogger()
-	log.Debug("Darwin: handleAppTerminate called")
-
-	appWatcherMu.RLock()
-	watcher := appWatcher
-	appWatcherMu.RUnlock()
-
-	if watcher != nil {
-		log.Debug("Darwin: Forwarding app termination event",
-			zap.String("app_name", C.GoString(appName)),
-			zap.String("bundle_id", C.GoString(bundleID)))
-
-		watcher.HandleTerminate(C.GoString(appName), C.GoString(bundleID))
-	}
+	dispatchAppWatcherAppEvent(
+		"handleAppTerminate",
+		"Forwarding app termination event",
+		appName,
+		bundleID,
+		func(w AppWatcherInterface, name, id string) { w.HandleTerminate(name, id) },
+	)
 }
 
 //export handleAppActivate
 func handleAppActivate(appName *C.char, bundleID *C.char) {
-	log := getLogger()
-	log.Debug("Darwin: handleAppActivate called")
-
-	appWatcherMu.RLock()
-	watcher := appWatcher
-	appWatcherMu.RUnlock()
-
-	if watcher != nil {
-		log.Debug("Darwin: Forwarding app activation event",
-			zap.String("app_name", C.GoString(appName)),
-			zap.String("bundle_id", C.GoString(bundleID)))
-
-		watcher.HandleActivate(C.GoString(appName), C.GoString(bundleID))
-	}
+	dispatchAppWatcherAppEvent(
+		"handleAppActivate",
+		"Forwarding app activation event",
+		appName,
+		bundleID,
+		func(w AppWatcherInterface, name, id string) { w.HandleActivate(name, id) },
+	)
 }
 
 //export handleAppDeactivate
 func handleAppDeactivate(appName *C.char, bundleID *C.char) {
-	log := getLogger()
-	log.Debug("Darwin: handleAppDeactivate called")
-
-	appWatcherMu.RLock()
-	watcher := appWatcher
-	appWatcherMu.RUnlock()
-
-	if watcher != nil {
-		log.Debug("Darwin: Forwarding app deactivation event",
-			zap.String("app_name", C.GoString(appName)),
-			zap.String("bundle_id", C.GoString(bundleID)))
-
-		watcher.HandleDeactivate(C.GoString(appName), C.GoString(bundleID))
-	}
+	dispatchAppWatcherAppEvent(
+		"handleAppDeactivate",
+		"Forwarding app deactivation event",
+		appName,
+		bundleID,
+		func(w AppWatcherInterface, name, id string) { w.HandleDeactivate(name, id) },
+	)
 }
 
 //export handleScreenParametersChanged
 func handleScreenParametersChanged() {
-	log := getLogger()
-	log.Debug("Darwin: handleScreenParametersChanged called")
+	dispatchAppWatcherVoidEvent(
+		"handleScreenParametersChanged",
+		"Forwarding screen parameters changed event",
+		true,
+		func(w AppWatcherInterface) { w.HandleScreenParametersChanged() },
+	)
+}
 
-	appWatcherMu.RLock()
-	watcher := appWatcher
-	appWatcherMu.RUnlock()
-
-	if watcher != nil {
-		log.Debug("Darwin: Forwarding screen parameters changed event")
-		go watcher.HandleScreenParametersChanged()
+//export handleMissionControlActivated
+func handleMissionControlActivated() {
+	if !mcDetectionEnabled.Load() {
+		return
 	}
+
+	dispatchAppWatcherVoidEvent(
+		"handleMissionControlActivated",
+		"Forwarding Mission Control activated event",
+		true,
+		func(w AppWatcherInterface) { w.HandleMissionControlActivated() },
+	)
+}
+
+//export handleMissionControlDeactivated
+func handleMissionControlDeactivated() {
+	if !mcDetectionEnabled.Load() {
+		return
+	}
+
+	dispatchAppWatcherVoidEvent(
+		"handleMissionControlDeactivated",
+		"Forwarding Mission Control deactivated event",
+		true,
+		func(w AppWatcherInterface) { w.HandleMissionControlDeactivated() },
+	)
 }
 
 // HandleAppLaunch simulates an app launch event for testing.
@@ -286,4 +319,14 @@ func HandleAppDeactivate(appName, bundleID string) {
 // HandleScreenParametersChanged simulates a screen parameters changed event for testing.
 func HandleScreenParametersChanged() {
 	handleScreenParametersChanged()
+}
+
+// HandleMissionControlActivated simulates a Mission Control activation event for testing.
+func HandleMissionControlActivated() {
+	handleMissionControlActivated()
+}
+
+// HandleMissionControlDeactivated simulates a Mission Control deactivation event for testing.
+func HandleMissionControlDeactivated() {
+	handleMissionControlDeactivated()
 }

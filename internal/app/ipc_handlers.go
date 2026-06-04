@@ -2,11 +2,14 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/app/modes"
+	"github.com/y3owk1n/neru/internal/app/services"
+	"github.com/y3owk1n/neru/internal/config"
 	"github.com/y3owk1n/neru/internal/core/domain"
 	"github.com/y3owk1n/neru/internal/core/domain/action"
 	"github.com/y3owk1n/neru/internal/core/domain/state"
@@ -145,10 +148,12 @@ func (h *IPCControllerModes) modesUnavailableResponse() ipc.Response {
 // ModeActivationOptions holds the parsed options for activating a navigation mode.
 type ModeActivationOptions struct {
 	Action                *string
-	Repeat                bool
+	Repeat                *bool
 	CursorFollowSelection *bool
 	FilterRoles           []string
 	FilterTextContains    []string
+	Search                *bool
+	Strategy              *string
 }
 
 // extractModeOptions extracts and validates the optional action and repeat
@@ -182,7 +187,11 @@ func (h *IPCControllerModes) extractModeOptions(
 
 		switch {
 		case arg == "--repeat" || arg == "-r":
-			opts.Repeat = true
+			repeatTrue := true
+			opts.Repeat = &repeatTrue
+		case arg == "--search" || arg == "-s":
+			searchTrue := true
+			opts.Search = &searchTrue
 		case strings.HasPrefix(arg, "--action="):
 			actionArg := strings.TrimPrefix(arg, "--action=")
 			opts.Action = &actionArg
@@ -277,6 +286,44 @@ func (h *IPCControllerModes) extractModeOptions(
 			startIdx++
 			texts := parseCSV(cmd.Args[startIdx])
 			opts.FilterTextContains = append(opts.FilterTextContains, texts...)
+		case strings.HasPrefix(arg, "--strategy="):
+			strategyVal := strings.TrimPrefix(arg, "--strategy=")
+			if !isValidStrategy(strategyVal) {
+				resp := ipc.Response{
+					Success: false,
+					Message: "invalid --strategy value: must be 'axtree' or 'vision'",
+					Code:    ipc.CodeInvalidInput,
+				}
+
+				return opts, &resp
+			}
+
+			opts.Strategy = &strategyVal
+		case arg == "--strategy":
+			if startIdx+1 >= len(cmd.Args) {
+				resp := ipc.Response{
+					Success: false,
+					Message: "--strategy requires a value: axtree or vision",
+					Code:    ipc.CodeInvalidInput,
+				}
+
+				return opts, &resp
+			}
+
+			startIdx++
+
+			strategyVal := cmd.Args[startIdx]
+			if !isValidStrategy(strategyVal) {
+				resp := ipc.Response{
+					Success: false,
+					Message: "invalid --strategy value: must be 'axtree' or 'vision'",
+					Code:    ipc.CodeInvalidInput,
+				}
+
+				return opts, &resp
+			}
+
+			opts.Strategy = &strategyVal
 		case opts.Action == nil:
 			actionArg := arg
 			opts.Action = &actionArg
@@ -298,8 +345,12 @@ func (h *IPCControllerModes) extractModeOptions(
 		if !action.IsKnownName(action.Name(*opts.Action)) {
 			resp := ipc.Response{
 				Success: false,
-				Message: "invalid action: " + *opts.Action + ". Supported actions: " + action.SupportedNamesString(),
-				Code:    ipc.CodeInvalidInput,
+				Message: fmt.Sprintf(
+					"invalid action: %s. Supported actions: %s",
+					*opts.Action,
+					action.SupportedNamesString(),
+				),
+				Code: ipc.CodeInvalidInput,
 			}
 
 			return opts, &resp
@@ -311,8 +362,12 @@ func (h *IPCControllerModes) extractModeOptions(
 		if action.IsScrollSubAction(*opts.Action) {
 			resp := ipc.Response{
 				Success: false,
-				Message: "scroll sub-action \"" + *opts.Action + "\" cannot be used as a mode action; use 'action " + *opts.Action + "' instead",
-				Code:    ipc.CodeInvalidInput,
+				Message: fmt.Sprintf(
+					"scroll sub-action %q cannot be used as a mode action; use 'action %s' instead",
+					*opts.Action,
+					*opts.Action,
+				),
+				Code: ipc.CodeInvalidInput,
 			}
 
 			return opts, &resp
@@ -325,15 +380,19 @@ func (h *IPCControllerModes) extractModeOptions(
 			action.IsRestoreCursorPosAction(*opts.Action) {
 			resp := ipc.Response{
 				Success: false,
-				Message: "mode action \"" + *opts.Action + "\" is not allowed; use 'action " + *opts.Action + "' instead",
-				Code:    ipc.CodeInvalidInput,
+				Message: fmt.Sprintf(
+					"mode action %q is not allowed; use 'action %s' instead",
+					*opts.Action,
+					*opts.Action,
+				),
+				Code: ipc.CodeInvalidInput,
 			}
 
 			return opts, &resp
 		}
 	}
 
-	if opts.Repeat && opts.Action == nil {
+	if opts.Repeat != nil && *opts.Repeat && opts.Action == nil {
 		resp := ipc.Response{
 			Success: false,
 			Message: "--repeat requires an action",
@@ -362,6 +421,8 @@ func (h *IPCControllerModes) handleHints(_ context.Context, cmd ipc.Command) ipc
 		CursorFollowSelection: opts.CursorFollowSelection,
 		FilterRoles:           opts.FilterRoles,
 		FilterTextContains:    opts.FilterTextContains,
+		Search:                opts.Search,
+		Strategy:              opts.Strategy,
 	})
 
 	return ipc.Response{Success: true, Message: "hints mode activated", Code: ipc.CodeOK}
@@ -454,6 +515,12 @@ func (h *IPCControllerModes) handleToggleCursorFollowSelection(
 	}
 }
 
+// isValidStrategy checks that the given strategy value is one of the accepted
+// values: "axtree" (default), "vision".
+func isValidStrategy(v string) bool {
+	return v == config.StrategyAXTree || v == config.StrategyVision
+}
+
 // IPCControllerOverlay handles overlay-related IPC commands.
 type IPCControllerOverlay struct {
 	appState *state.AppState
@@ -492,5 +559,56 @@ func (h *IPCControllerOverlay) handleToggleScreenShare(
 		Message: "screen share visibility: " + status,
 		Code:    ipc.CodeOK,
 		Data:    map[string]bool{"hidden": newState},
+	}
+}
+
+// IPCControllerScroll handles scroll-related IPC commands.
+type IPCControllerScroll struct {
+	appState      *state.AppState
+	scrollService *services.ScrollService
+	logger        *zap.Logger
+}
+
+// NewIPCControllerScroll creates a new scroll command handler.
+func NewIPCControllerScroll(
+	appState *state.AppState,
+	scrollService *services.ScrollService,
+	logger *zap.Logger,
+) *IPCControllerScroll {
+	return &IPCControllerScroll{
+		appState:      appState,
+		scrollService: scrollService,
+		logger:        logger,
+	}
+}
+
+// RegisterHandlers registers scroll command handlers.
+func (h *IPCControllerScroll) RegisterHandlers(
+	handlers map[string]func(context.Context, ipc.Command) ipc.Response,
+) {
+	handlers[domain.CommandToggleScrollInvert] = h.handleToggleScrollInvert
+}
+
+func (h *IPCControllerScroll) handleToggleScrollInvert(
+	_ context.Context,
+	_ ipc.Command,
+) ipc.Response {
+	// Atomically toggle to avoid check-then-act race
+	newState := h.appState.ToggleScrollInverted()
+
+	if h.scrollService != nil {
+		h.scrollService.SetInvertScroll(newState)
+	}
+
+	status := "off"
+	if newState {
+		status = "on"
+	}
+
+	return ipc.Response{
+		Success: true,
+		Message: "scroll invert: " + status,
+		Code:    ipc.CodeOK,
+		Data:    map[string]bool{"inverted": newState},
 	}
 }

@@ -1,7 +1,6 @@
 package modes
 
 import (
-	"context"
 	"image"
 	"strings"
 
@@ -18,18 +17,19 @@ import (
 // activateGridModeWithAction activates grid mode with optional action parameter.
 func (h *Handler) activateGridModeWithAction(
 	actionStr *string,
-	repeat bool,
+	repeat *bool,
 	cursorFollowSelection *bool,
 ) {
 	// Detect refresh before validation so we can do partial cleanup on re-activation.
 	isRefresh := h.appState.CurrentMode() == domain.ModeGrid
 
-	actionEnum, ok := h.activateModeBase(
+	actionEnum, activated := h.activateModeBase(
 		domain.ModeNameGrid,
 		h.config.Grid.Enabled,
 		action.TypeMoveMouse,
+		"",
 	)
-	if !ok {
+	if !activated {
 		if isRefresh {
 			h.exitModeLocked()
 		}
@@ -82,23 +82,40 @@ func (h *Handler) activateGridModeWithAction(
 		return
 	}
 
+	h.overlayManager.ResizeToActiveScreen()
+
 	// Show the overlay (the grid is already drawn with proper style)
 	h.overlayManager.Show()
 
 	// Store pending action and repeat flag if provided
-	h.grid.Context.SetPendingAction(actionStr)
-	h.grid.Context.SetRepeat(repeat)
-	h.grid.Context.SetCursorFollowSelection(resolveCursorFollowSelection(
-		domain.ModeGrid,
-		cursorFollowSelection,
-	))
+	if isRefresh {
+		if actionStr != nil {
+			h.grid.Context.SetPendingAction(actionStr)
+		}
+
+		if repeat != nil {
+			h.grid.Context.SetRepeat(*repeat)
+		}
+
+		if cursorFollowSelection != nil {
+			h.grid.Context.SetCursorFollowSelection(*cursorFollowSelection)
+		}
+	} else {
+		h.grid.Context.SetPendingAction(actionStr)
+		h.grid.Context.SetRepeat(repeat != nil && *repeat)
+		h.grid.Context.SetCursorFollowSelection(resolveCursorFollowSelection(
+			domain.ModeGrid,
+			cursorFollowSelection,
+		))
+	}
+
 	h.grid.Context.ClearSelectionPoint()
 	h.refreshGridVirtualPointerLocked()
 
 	if actionStr != nil {
-		h.logger.Info("Grid mode activated with pending action",
+		h.logger.Debug("Grid mode activated with pending action",
 			zap.String("action", *actionStr),
-			zap.Bool("repeat", repeat))
+			zap.Bool("repeat", repeat != nil && *repeat))
 	}
 
 	// Only set mode and enable event tap on initial activation;
@@ -108,7 +125,6 @@ func (h *Handler) activateGridModeWithAction(
 	}
 
 	h.logger.Info("Grid mode activated", zap.String("action", actionString))
-	h.logger.Info("Type a grid label to select a location")
 
 	h.startIndicatorPolling(domain.ModeGrid)
 }
@@ -118,7 +134,7 @@ func (h *Handler) createGridInstance() *domainGrid.Grid {
 	var screenBounds image.Rectangle
 
 	if h.system != nil {
-		b, err := h.system.ScreenBounds(context.Background())
+		b, err := h.system.ScreenBounds(h.ctx)
 		if err == nil {
 			screenBounds = b
 		} else if !derrors.IsNotSupported(err) {
@@ -169,7 +185,7 @@ func (h *Handler) initializeGridManager(gridInstance *domainGrid.Grid) {
 		var screenBounds image.Rectangle
 
 		if h.system != nil {
-			b, err := h.system.ScreenBounds(context.Background())
+			b, err := h.system.ScreenBounds(h.ctx)
 			if err == nil {
 				screenBounds = b
 			} else if !derrors.IsNotSupported(err) {
@@ -258,7 +274,7 @@ func (h *Handler) initializeGridManager(gridInstance *domainGrid.Grid) {
 			}
 
 			// Move mouse to center of cell before showing subgrid for better UX
-			ctx := context.Background()
+			ctx := h.ctx
 
 			// Convert cell center from window-local to screen-absolute coordinates
 			absoluteCenter := coordinates.ConvertToAbsoluteCoordinates(

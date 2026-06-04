@@ -89,9 +89,10 @@ func (h *Handler) activateModeBase(
 	modeName string,
 	enabled bool,
 	actionEnum action.Type,
+	bundleID string,
 ) (action.Type, bool) {
 	// Validate mode activation
-	err := h.validateModeActivation(modeName, enabled)
+	err := h.validateModeActivation(bundleID, modeName, enabled)
 	if err != nil {
 		h.logger.Warn(modeName+" mode activation failed", zap.Error(err))
 
@@ -102,7 +103,7 @@ func (h *Handler) activateModeBase(
 	h.prepareForModeActivation()
 
 	actionString := domain.ActionString(actionEnum)
-	h.logger.Info("Activating "+modeName+" mode", zap.String("action", actionString))
+	h.logger.Debug("Activating "+modeName+" mode", zap.String("action", actionString))
 
 	// Always resize overlay to the active screen
 	if h.overlayManager != nil {

@@ -1,7 +1,6 @@
 package modes
 
 import (
-	"context"
 	"image"
 
 	"go.uber.org/zap"
@@ -19,18 +18,19 @@ import (
 // activateRecursiveGridModeWithAction activates recursive-grid mode with optional action parameter.
 func (h *Handler) activateRecursiveGridModeWithAction(
 	actionStr *string,
-	repeat bool,
+	repeat *bool,
 	cursorFollowSelection *bool,
 ) {
 	// Detect refresh before validation so we can do partial cleanup on re-activation.
 	isRefresh := h.appState.CurrentMode() == domain.ModeRecursiveGrid
 
-	actionEnum, ok := h.activateModeBase(
+	actionEnum, activated := h.activateModeBase(
 		domain.ModeNameRecursiveGrid,
 		h.config.RecursiveGrid.Enabled,
 		action.TypeMoveMouse,
+		"",
 	)
-	if !ok {
+	if !activated {
 		if isRefresh {
 			h.exitModeLocked()
 		}
@@ -59,7 +59,7 @@ func (h *Handler) activateRecursiveGridModeWithAction(
 	var screenBounds image.Rectangle
 
 	if h.system != nil {
-		b, err := h.system.ScreenBounds(context.Background())
+		b, err := h.system.ScreenBounds(h.ctx)
 		if err == nil {
 			screenBounds = b
 		} else if !derrors.IsNotSupported(err) {
@@ -73,10 +73,15 @@ func (h *Handler) activateRecursiveGridModeWithAction(
 	// Initialize recursive-grid manager
 	h.initializeRecursiveGridManager(normalizedBounds)
 
-	cursorShouldFollow := resolveCursorFollowSelection(
-		domain.ModeRecursiveGrid,
-		cursorFollowSelection,
-	)
+	var cursorShouldFollow bool
+	if isRefresh && cursorFollowSelection == nil && h.recursiveGrid.Context != nil {
+		cursorShouldFollow = h.recursiveGrid.Context.CursorFollowSelection()
+	} else {
+		cursorShouldFollow = resolveCursorFollowSelection(
+			domain.ModeRecursiveGrid,
+			cursorFollowSelection,
+		)
+	}
 
 	// Move cursor to center of initial grid
 	if h.recursiveGrid.Manager != nil {
@@ -88,7 +93,7 @@ func (h *Handler) activateRecursiveGridModeWithAction(
 		}
 
 		if cursorShouldFollow {
-			err := h.actionService.MoveCursorToPoint(context.Background(), absoluteCenter)
+			err := h.actionService.MoveCursorToPoint(h.ctx, absoluteCenter)
 			if err != nil {
 				h.logger.Warn("Failed to move cursor to initial center", zap.Error(err))
 			}
@@ -98,21 +103,36 @@ func (h *Handler) activateRecursiveGridModeWithAction(
 	// Draw initial recursive-grid
 	// Store pending action and repeat flag if provided
 	if h.recursiveGrid.Context != nil {
-		h.recursiveGrid.Context.SetPendingAction(actionStr)
-		h.recursiveGrid.Context.SetRepeat(repeat)
-		h.recursiveGrid.Context.SetCursorFollowSelection(cursorShouldFollow)
+		if isRefresh {
+			if actionStr != nil {
+				h.recursiveGrid.Context.SetPendingAction(actionStr)
+			}
+
+			if repeat != nil {
+				h.recursiveGrid.Context.SetRepeat(*repeat)
+			}
+
+			if cursorFollowSelection != nil {
+				h.recursiveGrid.Context.SetCursorFollowSelection(*cursorFollowSelection)
+			}
+		} else {
+			h.recursiveGrid.Context.SetPendingAction(actionStr)
+			h.recursiveGrid.Context.SetRepeat(repeat != nil && *repeat)
+			h.recursiveGrid.Context.SetCursorFollowSelection(cursorShouldFollow)
+		}
 	}
 
 	// Draw initial recursive-grid
 	h.updateRecursiveGridOverlay()
 
+	h.overlayManager.ResizeToActiveScreen()
 	h.overlayManager.Show()
 
 	if actionStr != nil {
-		h.logger.Info(
+		h.logger.Debug(
 			"Recursive-grid mode activated with pending action",
 			zap.String("action", *actionStr),
-			zap.Bool("repeat", repeat),
+			zap.Bool("repeat", repeat != nil && *repeat),
 		)
 	}
 
@@ -123,7 +143,6 @@ func (h *Handler) activateRecursiveGridModeWithAction(
 	}
 
 	h.logger.Info("Recursive-grid mode activated", zap.String("action", actionString))
-	h.logger.Info("Press u/i/j/k to select cells, backspace to backtrack, escape to exit")
 
 	h.startIndicatorPolling(domain.ModeRecursiveGrid)
 }
@@ -170,7 +189,7 @@ func (h *Handler) initializeRecursiveGridManager(screenBounds image.Rectangle) {
 		},
 		// Complete callback
 		func(point image.Point) {
-			h.logger.Info("Recursive-grid selection complete",
+			h.logger.Debug("Recursive-grid selection complete",
 				zap.Int("x", point.X),
 				zap.Int("y", point.Y))
 		},
@@ -180,7 +199,7 @@ func (h *Handler) initializeRecursiveGridManager(screenBounds image.Rectangle) {
 
 // handleRecursiveGridKey handles key processing for recursive-grid mode.
 func (h *Handler) handleRecursiveGridKey(key string) {
-	ctx := context.Background()
+	ctx := h.ctx
 
 	if h.recursiveGrid == nil || h.recursiveGrid.Manager == nil {
 		h.logger.Warn("Recursive-grid manager is nil - ignoring key press")
@@ -214,7 +233,7 @@ func (h *Handler) handleRecursiveGridKey(key string) {
 			func() {
 				h.activateRecursiveGridModeWithAction(
 					pendingAction,
-					repeat,
+					&repeat,
 					&cursorFollowSelection,
 				)
 			},

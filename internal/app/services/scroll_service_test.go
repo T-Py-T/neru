@@ -13,11 +13,13 @@ import (
 
 func TestScrollService_Scroll(t *testing.T) {
 	tests := []struct {
-		name       string
-		direction  services.ScrollDirection
-		amount     services.ScrollAmount
-		setupMocks func(*mocks.MockAccessibilityPort)
-		wantErr    bool
+		name         string
+		direction    services.ScrollDirection
+		amount       services.ScrollAmount
+		stepOverride int
+		setupMocks   func(*mocks.MockAccessibilityPort)
+		setupConfig  func(*config.ScrollConfig)
+		wantErr      bool
 	}{
 		{
 			name:      "scroll down char",
@@ -127,18 +129,224 @@ func TestScrollService_Scroll(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name:         "step override down",
+			direction:    services.ScrollDirectionDown,
+			amount:       services.ScrollAmountChar,
+			stepOverride: 99,
+			setupMocks: func(acc *mocks.MockAccessibilityPort) {
+				acc.ScrollFunc = func(_ context.Context, _, deltaY int) error {
+					if deltaY != -99 {
+						t.Errorf("Expected deltaY -99 for step override down, got %d", deltaY)
+					}
+
+					return nil
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name:         "step override up",
+			direction:    services.ScrollDirectionUp,
+			amount:       services.ScrollAmountChar,
+			stepOverride: 77,
+			setupMocks: func(acc *mocks.MockAccessibilityPort) {
+				acc.ScrollFunc = func(_ context.Context, _, deltaY int) error {
+					if deltaY != 77 {
+						t.Errorf("Expected deltaY 77 for step override up, got %d", deltaY)
+					}
+
+					return nil
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name:         "step override left",
+			direction:    services.ScrollDirectionLeft,
+			amount:       services.ScrollAmountChar,
+			stepOverride: 42,
+			setupMocks: func(acc *mocks.MockAccessibilityPort) {
+				acc.ScrollFunc = func(_ context.Context, deltaX, _ int) error {
+					if deltaX != 42 {
+						t.Errorf("Expected deltaX 42 for step override left, got %d", deltaX)
+					}
+
+					return nil
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name:         "step override right",
+			direction:    services.ScrollDirectionRight,
+			amount:       services.ScrollAmountChar,
+			stepOverride: 33,
+			setupMocks: func(acc *mocks.MockAccessibilityPort) {
+				acc.ScrollFunc = func(_ context.Context, deltaX, _ int) error {
+					if deltaX != -33 {
+						t.Errorf("Expected deltaX -33 for step override right, got %d", deltaX)
+					}
+
+					return nil
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name:         "step override takes precedence over half page config",
+			direction:    services.ScrollDirectionDown,
+			amount:       services.ScrollAmountHalfPage,
+			stepOverride: 5,
+			setupMocks: func(acc *mocks.MockAccessibilityPort) {
+				acc.ScrollFunc = func(_ context.Context, _, deltaY int) error {
+					// Should use stepOverride (5), not config.ScrollStepHalf (30)
+					if deltaY != -5 {
+						t.Errorf("Expected deltaY -5 for step override, got %d", deltaY)
+					}
+
+					return nil
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name:         "step override takes precedence over full page config",
+			direction:    services.ScrollDirectionUp,
+			amount:       services.ScrollAmountEnd,
+			stepOverride: 8,
+			setupMocks: func(acc *mocks.MockAccessibilityPort) {
+				acc.ScrollFunc = func(_ context.Context, _, deltaY int) error {
+					// Should use stepOverride (8), not config.ScrollStepFull (50)
+					if deltaY != 8 {
+						t.Errorf("Expected deltaY 8 for step override, got %d", deltaY)
+					}
+
+					return nil
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name:      "invert scroll down becomes up",
+			direction: services.ScrollDirectionDown,
+			amount:    services.ScrollAmountChar,
+			setupConfig: func(c *config.ScrollConfig) {
+				c.InvertScroll = true
+			},
+			setupMocks: func(acc *mocks.MockAccessibilityPort) {
+				acc.ScrollFunc = func(_ context.Context, _, deltaY int) error {
+					if deltaY <= 0 {
+						t.Errorf("Expected positive deltaY (inverted from down), got %d", deltaY)
+					}
+
+					return nil
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name:      "invert scroll up becomes down",
+			direction: services.ScrollDirectionUp,
+			amount:    services.ScrollAmountChar,
+			setupConfig: func(c *config.ScrollConfig) {
+				c.InvertScroll = true
+			},
+			setupMocks: func(acc *mocks.MockAccessibilityPort) {
+				acc.ScrollFunc = func(_ context.Context, _, deltaY int) error {
+					if deltaY >= 0 {
+						t.Errorf("Expected negative deltaY (inverted from up), got %d", deltaY)
+					}
+
+					return nil
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name:      "invert scroll left becomes right",
+			direction: services.ScrollDirectionLeft,
+			amount:    services.ScrollAmountChar,
+			setupConfig: func(c *config.ScrollConfig) {
+				c.InvertScroll = true
+			},
+			setupMocks: func(acc *mocks.MockAccessibilityPort) {
+				acc.ScrollFunc = func(_ context.Context, deltaX, _ int) error {
+					if deltaX >= 0 {
+						t.Errorf("Expected negative deltaX (inverted from left), got %d", deltaX)
+					}
+
+					return nil
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name:      "invert scroll right becomes left",
+			direction: services.ScrollDirectionRight,
+			amount:    services.ScrollAmountChar,
+			setupConfig: func(c *config.ScrollConfig) {
+				c.InvertScroll = true
+			},
+			setupMocks: func(acc *mocks.MockAccessibilityPort) {
+				acc.ScrollFunc = func(_ context.Context, deltaX, _ int) error {
+					if deltaX <= 0 {
+						t.Errorf("Expected positive deltaX (inverted from right), got %d", deltaX)
+					}
+
+					return nil
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name:      "scroll down with app override",
+			direction: services.ScrollDirectionDown,
+			amount:    services.ScrollAmountChar,
+			setupConfig: func(c *config.ScrollConfig) {
+				step := 25
+				half := 200
+				full := 1000
+				c.AppConfigs = []config.AppConfig{
+					{
+						BundleID:       "com.apple.Safari",
+						ScrollStep:     &step,
+						ScrollStepHalf: &half,
+						ScrollStepFull: &full,
+					},
+				}
+			},
+			setupMocks: func(acc *mocks.MockAccessibilityPort) {
+				acc.FocusedAppBundleIDFunc = func(_ context.Context) (string, error) {
+					return "com.apple.Safari", nil
+				}
+				acc.ScrollFunc = func(_ context.Context, _, deltaY int) error {
+					// Safari scroll_step is overridden to 25, so Down is -25
+					if deltaY != -25 {
+						t.Errorf("Expected deltaY -25 for Safari app override, got %d", deltaY)
+					}
+
+					return nil
+				}
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			mockAcc := &mocks.MockAccessibilityPort{}
 			mockOverlay := &mocks.MockOverlayPort{}
-			config := config.ScrollConfig{
+			cfg := config.ScrollConfig{
 				ScrollStep:     10,
 				ScrollStepHalf: 30,
 				ScrollStepFull: 50,
 			}
 			logger := logger.Get()
+
+			if testCase.setupConfig != nil {
+				testCase.setupConfig(&cfg)
+			}
 
 			if testCase.setupMocks != nil {
 				testCase.setupMocks(mockAcc)
@@ -147,13 +355,18 @@ func TestScrollService_Scroll(t *testing.T) {
 			service := services.NewScrollService(
 				mockAcc,
 				mockOverlay,
-				&mocks.SystemMock{},
-				config,
+				&mocks.MockSystemPort{},
+				cfg,
 				logger,
 			)
 			ctx := context.Background()
 
-			scrollErr := service.Scroll(ctx, testCase.direction, testCase.amount)
+			scrollErr := service.Scroll(
+				ctx,
+				testCase.direction,
+				testCase.amount,
+				testCase.stepOverride,
+			)
 
 			if (scrollErr != nil) != testCase.wantErr {
 				t.Errorf("Scroll() error = %v, wantErr %v", scrollErr, testCase.wantErr)
@@ -205,7 +418,7 @@ func TestScrollService_Hide(t *testing.T) {
 			service := services.NewScrollService(
 				mockAcc,
 				mockOverlay,
-				&mocks.SystemMock{},
+				&mocks.MockSystemPort{},
 				config,
 				logger,
 			)
@@ -236,7 +449,7 @@ func TestScrollService_UpdateConfig(t *testing.T) {
 	service := services.NewScrollService(
 		mockAcc,
 		mockOverlay,
-		&mocks.SystemMock{},
+		&mocks.MockSystemPort{},
 		initialConfig,
 		logger,
 	)

@@ -798,6 +798,38 @@ static void handleKeyboardLayoutChanged(
 /// Flag for tracking layout maps initialization status (atomic for thread safety)
 static atomic_bool gLayoutMapsInitialized = false;
 
+/// Waiters block here until the first layout map build completes (main thread).
+static NSCondition *gLayoutInitCondition = nil;
+
+static void markLayoutMapsInitialized(void) {
+	if (atomic_exchange_explicit(&gLayoutMapsInitialized, true, memory_order_acq_rel)) {
+		return;
+	}
+	[gLayoutInitCondition lock];
+	[gLayoutInitCondition broadcast];
+	[gLayoutInitCondition unlock];
+}
+
+static void waitForLayoutMapsInitialized(NSTimeInterval timeoutSeconds) {
+	if (atomic_load_explicit(&gLayoutMapsInitialized, memory_order_acquire)) {
+		return;
+	}
+
+	NSCAssert(gLayoutInitCondition != nil, @"waitForLayoutMapsInitialized called before initializeKeyMaps");
+	if (!gLayoutInitCondition) {
+		return;
+	}
+
+	NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeoutSeconds];
+	[gLayoutInitCondition lock];
+	while (!atomic_load_explicit(&gLayoutMapsInitialized, memory_order_acquire)) {
+		if (![gLayoutInitCondition waitUntilDate:deadline]) {
+			break;
+		}
+	}
+	[gLayoutInitCondition unlock];
+}
+
 /// Register notification observer (called once from initializeKeyMaps)
 static void registerLayoutChangeObserver(void) {
 	CFNotificationCenterAddObserver(
@@ -809,6 +841,7 @@ static void initializeKeyMaps(void) {
 	static dispatch_once_t onceToken;
 	dispatch_once(&onceToken, ^{
 		gKeymapLock = [[NSLock alloc] init];
+		gLayoutInitCondition = [[NSCondition alloc] init];
 
 		initializeSpecialKeyMaps();
 
@@ -830,14 +863,14 @@ static void ensureLayoutMapsInitialized(void) {
 	dispatch_once(&layoutOnceToken, ^{
 		if ([NSThread isMainThread]) {
 			buildLayoutMaps();
-			atomic_store_explicit(&gLayoutMapsInitialized, true, memory_order_release);
+			markLayoutMapsInitialized();
 		} else {
 			// Dispatch to main thread to build layout maps
 			dispatch_async(dispatch_get_main_queue(), ^{
 				// Guard against double execution if the main thread already ran it
 				if (!atomic_load_explicit(&gLayoutMapsInitialized, memory_order_acquire)) {
 					buildLayoutMaps();
-					atomic_store_explicit(&gLayoutMapsInitialized, true, memory_order_release);
+					markLayoutMapsInitialized();
 				}
 			});
 		}
@@ -847,25 +880,16 @@ static void ensureLayoutMapsInitialized(void) {
 	// to avoid deadlock (the async block is queued behind us).
 	if (!atomic_load_explicit(&gLayoutMapsInitialized, memory_order_acquire) && [NSThread isMainThread]) {
 		buildLayoutMaps();
-		atomic_store_explicit(&gLayoutMapsInitialized, true, memory_order_release);
+		markLayoutMapsInitialized();
 		return;
 	}
 
-	// Poll with timeout for all waiters.
-	// Allows multiple concurrent background threads to proceed once
-	// initialization is complete, rather than timing out individually.
-	dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC);
-	while (!atomic_load_explicit(&gLayoutMapsInitialized, memory_order_acquire)) {
-		if (dispatch_time(DISPATCH_TIME_NOW, 0) >= timeout) {
-			break;  // Timeout reached
-		}
-		[NSThread sleepForTimeInterval:0.001];  // 1ms sleep to avoid busy-wait
-	}
+	waitForLayoutMapsInitialized(5.0);
 }
 
 #pragma mark - Public Functions
 
-NSDictionary<NSString *, NSNumber *> *keyNameToCodeMap(void) {
+NSDictionary<NSString *, NSNumber *> *NeruKeyNameToCodeMap(void) {
 	initializeKeyMaps();
 	ensureLayoutMapsInitialized();
 
@@ -876,7 +900,7 @@ NSDictionary<NSString *, NSNumber *> *keyNameToCodeMap(void) {
 	return map;
 }
 
-NSDictionary<NSNumber *, NSString *> *keyCodeToNameMap(void) {
+NSDictionary<NSNumber *, NSString *> *NeruKeyCodeToNameMap(void) {
 	initializeKeyMaps();
 	ensureLayoutMapsInitialized();
 
@@ -887,7 +911,7 @@ NSDictionary<NSNumber *, NSString *> *keyCodeToNameMap(void) {
 	return map;
 }
 
-CGKeyCode keyNameToCode(NSString *keyName) {
+CGKeyCode NeruKeyNameToCode(NSString *keyName) {
 	if (!keyName || keyName.length == 0) {
 		return 0xFFFF;
 	}
@@ -908,7 +932,7 @@ CGKeyCode keyNameToCode(NSString *keyName) {
 	return code ? code.unsignedShortValue : 0xFFFF;
 }
 
-NSString *keyCodeToName(CGKeyCode keyCode) {
+NSString *NeruKeyCodeToName(CGKeyCode keyCode) {
 	initializeKeyMaps();
 	ensureLayoutMapsInitialized();
 
@@ -919,7 +943,7 @@ NSString *keyCodeToName(CGKeyCode keyCode) {
 	return map[@(keyCode)];
 }
 
-NSString *keyCodeToCharacter(CGKeyCode keyCode, CGEventFlags flags) {
+NSString *NeruKeyCodeToCharacter(CGKeyCode keyCode, CGEventFlags flags) {
 	initializeKeyMaps();
 	ensureLayoutMapsInitialized();
 
@@ -1031,7 +1055,7 @@ NSString *keyCodeToCharacter(CGKeyCode keyCode, CGEventFlags flags) {
 	return keyCodeToCharacterQWERTY(keyCode, flags);
 }
 
-void refreshKeyboardLayoutMaps(void) {
+void NeruRefreshKeyboardLayoutMaps(void) {
 	void (^cancelAndRebuild)(void) = ^{
 		// Cancel any pending debounce rebuild before running synchronously
 		if (gLayoutChangeDebounceBlock) {
@@ -1061,7 +1085,7 @@ void refreshKeyboardLayoutMaps(void) {
 	}
 }
 
-int setReferenceKeyboardLayout(const char *inputSourceID) {
+int NeruSetReferenceKeyboardLayout(const char *inputSourceID) {
 	// Normalise input — treat empty string as nil (auto-detect)
 	NSString *trimmedInputSourceID = nil;
 	if (inputSourceID) {
@@ -1083,7 +1107,7 @@ int setReferenceKeyboardLayout(const char *inputSourceID) {
 		[gKeymapLock unlock];
 
 		buildLayoutMaps();
-		atomic_store_explicit(&gLayoutMapsInitialized, true, memory_order_release);
+		markLayoutMapsInitialized();
 
 		[gKeymapLock lock];
 		configuredResolved = gConfiguredInputSourceResolved;
@@ -1138,6 +1162,6 @@ int setReferenceKeyboardLayout(const char *inputSourceID) {
 	return configuredResolved ? 1 : 0;
 }
 
-void setKeymapLayoutChangeCallback(KeymapLayoutChangeCallback callback) {
+void NeruSetKeymapLayoutChangeCallback(KeymapLayoutChangeCallback callback) {
 	atomic_store(&gLayoutChangeCallback, callback);
 }

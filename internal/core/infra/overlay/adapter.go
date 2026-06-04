@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"context"
+	"image"
 
 	"go.uber.org/zap"
 
@@ -30,11 +31,15 @@ func NewAdapter(
 	system ports.SystemPort,
 	logger *zap.Logger,
 ) *Adapter {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
 	return &Adapter{
 		manager: manager,
 		theme:   theme,
 		system:  system,
-		logger:  logger,
+		logger:  logger.Named("overlay"),
 	}
 }
 
@@ -81,7 +86,7 @@ func (a *Adapter) ShowHints(ctx context.Context, hints []*hint.Interface) error 
 		return derrors.Wrap(drawHintsErr, derrors.CodeOverlayFailed, "failed to draw hints")
 	}
 
-	a.logger.Info("Hints overlay displayed", zap.Int("count", len(hints)))
+	a.logger.Debug("Hints overlay displayed", zap.Int("count", len(hints)))
 
 	return nil
 }
@@ -131,6 +136,14 @@ func (a *Adapter) DrawStickyModifiersIndicator(x, y int, symbols string) {
 	a.manager.DrawStickyModifiersIndicator(x, y, symbols)
 }
 
+// DrawMouseActionIndicator draws a transient mouse action indicator.
+func (a *Adapter) DrawMouseActionIndicator(
+	point image.Point,
+	style ports.MouseActionIndicatorStyle,
+) {
+	a.manager.DrawMouseActionIndicator(point, style)
+}
+
 // Hide removes all overlays from the screen.
 func (a *Adapter) Hide(ctx context.Context) error {
 	// Check context
@@ -143,7 +156,7 @@ func (a *Adapter) Hide(ctx context.Context) error {
 	a.logger.Debug("Hiding overlay")
 	a.manager.Hide()
 	a.manager.SwitchTo("idle")
-	a.logger.Info("Overlay hidden")
+	a.logger.Debug("Overlay hidden")
 
 	return nil
 }
@@ -164,7 +177,7 @@ func (a *Adapter) Refresh(ctx context.Context) error {
 
 	a.logger.Debug("Refreshing overlay")
 	a.manager.ResizeToActiveScreen()
-	a.logger.Info("Overlay refreshed")
+	a.logger.Debug("Overlay refreshed")
 
 	return nil
 }

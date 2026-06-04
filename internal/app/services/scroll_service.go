@@ -7,7 +7,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/config"
-	"github.com/y3owk1n/neru/internal/core"
+	derrors "github.com/y3owk1n/neru/internal/core/errors"
 	"github.com/y3owk1n/neru/internal/core/ports"
 )
 
@@ -54,22 +54,26 @@ func NewScrollService(
 	config config.ScrollConfig,
 	logger *zap.Logger,
 ) *ScrollService {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
 	return &ScrollService{
 		BaseService: NewBaseService(accessibility, overlay, system),
 		config:      config,
-		logger:      logger,
+		logger:      logger.Named("service.scroll"),
 	}
 }
 
 // Scroll performs a scrolling operation in the specified direction and magnitude.
+// If stepOverride is > 0, it overrides the configured scroll step for this invocation.
 func (s *ScrollService) Scroll(
 	ctx context.Context,
 	direction ScrollDirection,
 	amount ScrollAmount,
+	stepOverride int,
 ) error {
-	s.mu.RLock()
-	deltaX, deltaY := s.calculateDelta(direction, amount)
-	s.mu.RUnlock()
+	deltaX, deltaY := s.calculateDelta(ctx, direction, amount, stepOverride)
 
 	s.logger.Debug("Scrolling",
 		zap.Int("dir", int(direction)),
@@ -79,7 +83,7 @@ func (s *ScrollService) Scroll(
 
 	scrollErr := s.accessibility.Scroll(ctx, deltaX, deltaY)
 	if scrollErr != nil {
-		return core.WrapActionFailed(scrollErr, "scroll")
+		return derrors.WrapActionFailed(scrollErr, "scroll")
 	}
 
 	return nil
@@ -98,25 +102,83 @@ func (s *ScrollService) UpdateConfig(config config.ScrollConfig) {
 
 	s.config = config
 
-	s.logger.Info("Scroll configuration updated",
+	s.logger.Debug("Scroll configuration updated",
 		zap.Int("scroll_step", config.ScrollStep),
 		zap.Int("scroll_step_full", config.ScrollStepFull))
 }
 
+// IsScrollInverted returns whether scroll direction inversion is currently enabled.
+func (s *ScrollService) IsScrollInverted() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.config.InvertScroll
+}
+
+// SetInvertScroll sets the scroll direction inversion state.
+func (s *ScrollService) SetInvertScroll(inverted bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.config.InvertScroll = inverted
+	s.logger.Debug("Scroll invert set", zap.Bool("invert_scroll", s.config.InvertScroll))
+}
+
 // calculateDelta computes the scroll delta values based on direction and magnitude.
-func (s *ScrollService) calculateDelta(direction ScrollDirection, amount ScrollAmount) (int, int) {
+// If stepOverride is > 0, it takes precedence over the configured value.
+func (s *ScrollService) calculateDelta(
+	ctx context.Context,
+	direction ScrollDirection,
+	amount ScrollAmount,
+	stepOverride int,
+) (int, int) {
 	var (
 		deltaX, deltaY int
 		baseScroll     int
+		invertScroll   bool
 	)
 
-	switch amount {
-	case ScrollAmountChar:
-		baseScroll = s.config.ScrollStep
-	case ScrollAmountHalfPage:
-		baseScroll = s.config.ScrollStepHalf
-	case ScrollAmountEnd:
-		baseScroll = s.config.ScrollStepFull
+	// Snapshot config under lock, then release before IPC call
+	s.mu.RLock()
+	scrollStep := s.config.ScrollStep
+	scrollStepHalf := s.config.ScrollStepHalf
+	scrollStepFull := s.config.ScrollStepFull
+	invertScroll = s.config.InvertScroll
+	configSnapshot := s.config
+	s.mu.RUnlock()
+
+	if stepOverride > 0 {
+		baseScroll = stepOverride
+	} else {
+		// Only perform IPC lookup if there are app-specific overrides configured
+		if len(configSnapshot.AppConfigs) > 0 {
+			bundleID, err := s.accessibility.FocusedAppBundleID(ctx)
+
+			if err == nil && bundleID != "" {
+				if appConfig := configSnapshot.AppConfigForBundleID(bundleID); appConfig != nil {
+					if appConfig.ScrollStep != nil {
+						scrollStep = *appConfig.ScrollStep
+					}
+
+					if appConfig.ScrollStepHalf != nil {
+						scrollStepHalf = *appConfig.ScrollStepHalf
+					}
+
+					if appConfig.ScrollStepFull != nil {
+						scrollStepFull = *appConfig.ScrollStepFull
+					}
+				}
+			}
+		}
+
+		switch amount {
+		case ScrollAmountChar:
+			baseScroll = scrollStep
+		case ScrollAmountHalfPage:
+			baseScroll = scrollStepHalf
+		case ScrollAmountEnd:
+			baseScroll = scrollStepFull
+		}
 	}
 
 	switch direction {
@@ -128,6 +190,11 @@ func (s *ScrollService) calculateDelta(direction ScrollDirection, amount ScrollA
 		deltaX = baseScroll
 	case ScrollDirectionRight:
 		deltaX = -baseScroll
+	}
+
+	if invertScroll {
+		deltaX = -deltaX
+		deltaY = -deltaY
 	}
 
 	return deltaX, deltaY

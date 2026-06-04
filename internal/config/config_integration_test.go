@@ -40,7 +40,6 @@ func TestConfigFileOperationsIntegration(t *testing.T) {
 		// Create a test config file with custom settings
 		configContent := `
 [general]
-accessibility_check_on_start = false
 excluded_apps = ["com.apple.finder", "com.test.app"]
 
 [hints]
@@ -174,6 +173,60 @@ bundle_id = "com.apple.Safari"
 		}
 	})
 
+	t.Run("Scroll App Config Overrides Loading", func(t *testing.T) {
+		configContent := `
+[scroll]
+scroll_step = 100
+
+[[scroll.app_configs]]
+bundle_id = "com.apple.Safari"
+scroll_step = 25
+scroll_step_half = 200
+scroll_step_full = 1000
+
+[scroll.app_configs.hotkeys]
+"Return" = ["action scroll_down"]
+"k" = "__disabled__"
+`
+
+		writeConfigFile(t, configPath, configContent, 0o644)
+
+		service := config.NewService(config.DefaultConfig(), "", zap.NewNop(), nil)
+
+		loadResult := service.LoadWithValidation(configPath)
+		if loadResult.ValidationError != nil {
+			t.Fatalf("Config validation failed: %v", loadResult.ValidationError)
+		}
+
+		cfg := loadResult.Config
+
+		appCfg := cfg.Scroll.AppConfigForBundleID("com.apple.Safari")
+		if appCfg == nil {
+			t.Fatal("expected Safari app config to be present")
+		}
+
+		if appCfg.ScrollStep == nil || *appCfg.ScrollStep != 25 {
+			t.Errorf("expected app scroll_step override 25, got %v", appCfg.ScrollStep)
+		}
+
+		if appCfg.ScrollStepHalf == nil || *appCfg.ScrollStepHalf != 200 {
+			t.Errorf("expected app scroll_step_half override 200, got %v", appCfg.ScrollStepHalf)
+		}
+
+		if appCfg.ScrollStepFull == nil || *appCfg.ScrollStepFull != 1000 {
+			t.Errorf("expected app scroll_step_full override 1000, got %v", appCfg.ScrollStepFull)
+		}
+
+		got := cfg.HotkeysForModeAndApp("scroll", "com.apple.Safari")
+		if actions := got["Return"]; len(actions) != 1 || actions[0] != "action scroll_down" {
+			t.Fatalf("expected app-specific Return override, got %v", actions)
+		}
+
+		if _, exists := got["k"]; exists {
+			t.Fatal("expected app-specific __disabled__ to remove inherited k binding")
+		}
+	})
+
 	t.Run("Global Hotkey Rebind Replaces Default Launcher", func(t *testing.T) {
 		configContent := `
 [hotkeys]
@@ -263,6 +316,88 @@ bundle_id = "com.apple.Safari"
 		if !defaultExists || len(defaultActions) != 1 || defaultActions[0] != hintsCommand {
 			t.Fatalf(
 				"expected default hints hotkey to remain, got %v",
+				loadResult.Config.Hotkeys.Bindings,
+			)
+		}
+	})
+
+	t.Run("Disabled Mode Removes Default Launcher", func(t *testing.T) {
+		configContent := `
+[hints]
+enabled = false
+`
+
+		writeConfigFile(t, configPath, configContent, 0o644)
+
+		service := config.NewService(config.DefaultConfig(), "", zap.NewNop(), nil)
+
+		loadResult := service.LoadWithValidation(configPath)
+		if loadResult.ValidationError != nil {
+			t.Fatalf("Config validation failed: %v", loadResult.ValidationError)
+		}
+
+		if _, exists := loadResult.Config.Hotkeys.Bindings["Primary+Shift+Space"]; exists {
+			t.Fatal("expected hints launcher to be removed when hints is disabled")
+		}
+
+		if _, exists := loadResult.Config.Hotkeys.Bindings["Primary+Shift+G"]; !exists {
+			t.Fatal("expected unrelated launcher hotkeys to remain")
+		}
+	})
+
+	t.Run("Multiple Disabled Modes Remove Launchers", func(t *testing.T) {
+		configContent := `
+[hints]
+enabled = false
+
+[grid]
+enabled = false
+`
+
+		writeConfigFile(t, configPath, configContent, 0o644)
+
+		service := config.NewService(config.DefaultConfig(), "", zap.NewNop(), nil)
+
+		loadResult := service.LoadWithValidation(configPath)
+		if loadResult.ValidationError != nil {
+			t.Fatalf("Config validation failed: %v", loadResult.ValidationError)
+		}
+
+		if _, exists := loadResult.Config.Hotkeys.Bindings["Primary+Shift+Space"]; exists {
+			t.Fatal("expected hints launcher to be removed when hints is disabled")
+		}
+
+		if _, exists := loadResult.Config.Hotkeys.Bindings["Primary+Shift+G"]; exists {
+			t.Fatal("expected grid launcher to be removed when grid is disabled")
+		}
+
+		if _, exists := loadResult.Config.Hotkeys.Bindings["Primary+Shift+C"]; !exists {
+			t.Fatal("expected unrelated launcher hotkeys to remain")
+		}
+	})
+
+	t.Run("Disabled Mode With Rebound Launcher", func(t *testing.T) {
+		configContent := `
+[hints]
+enabled = false
+
+[hotkeys]
+"Primary+Shift+Space" = "grid"
+`
+
+		writeConfigFile(t, configPath, configContent, 0o644)
+
+		service := config.NewService(config.DefaultConfig(), "", zap.NewNop(), nil)
+
+		loadResult := service.LoadWithValidation(configPath)
+		if loadResult.ValidationError != nil {
+			t.Fatalf("Config validation failed: %v", loadResult.ValidationError)
+		}
+
+		actions, exists := loadResult.Config.Hotkeys.Bindings["Primary+Shift+Space"]
+		if !exists || len(actions) != 1 || actions[0] != "grid" {
+			t.Fatalf(
+				"expected rebound launcher to replace disabled mode launcher, got %v",
 				loadResult.Config.Hotkeys.Bindings,
 			)
 		}

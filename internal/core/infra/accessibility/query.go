@@ -1,17 +1,22 @@
 package accessibility
 
 import (
+	"context"
+	"slices"
+
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/config"
+	"github.com/y3owk1n/neru/internal/core/domain/element"
 )
 
 // MenuBarClickableElements retrieves clickable UI elements from the focused application's menu bar.
+// If maxDepth is > 0, it overrides the configured tree depth.
 func MenuBarClickableElements(
+	ctx context.Context,
 	logger *zap.Logger,
-	cache *InfoCache,
 	configProvider config.Provider,
-	strictFiltering bool,
+	maxDepth int,
 ) ([]*TreeNode, error) {
 	logger.Debug("Getting clickable elements for menu bar")
 
@@ -32,16 +37,18 @@ func MenuBarClickableElements(
 	defer menubar.Release()
 
 	opts := DefaultTreeOptions(logger)
-	opts.SetCache(cache)
-	opts.SetStrictFiltering(strictFiltering)
-	opts.SetIncludeOutOfBounds(!strictFiltering)
+	opts.SetConfigProvider(configProvider)
 
 	if cfg := currentConfig(configProvider); cfg != nil {
-		opts.SetMaxDepth(cfg.Hints.MaxDepth)
-		opts.SetParallelThreshold(cfg.Hints.ParallelThreshold)
+		depth := cfg.Hints.MaxDepth
+		if maxDepth > 0 {
+			depth = maxDepth
+		}
+
+		opts.SetMaxDepth(depth)
 	}
 
-	tree, err := BuildTree(menubar, opts)
+	tree, err := BuildTree(ctx, menubar, opts)
 	if err != nil {
 		logger.Error("Failed to build tree for menu bar", zap.Error(err))
 
@@ -64,12 +71,22 @@ func MenuBarClickableElements(
 	}
 
 	// Add menubar specific role
-	allowedRoles["AXMenuBarItem"] = struct{}{}
+	allowedRoles[string(element.RoleMenuBarItem)] = struct{}{}
 
-	elements := tree.FindClickableElements(allowedRoles, cache, configProvider)
+	ignoreClickableCheck := false
+	if cfg := currentConfig(configProvider); cfg != nil {
+		focusedBundleID := app.BundleIdentifier()
+		ignoreClickableCheck = cfg.ShouldIgnoreClickableCheckForApp(focusedBundleID)
+	}
+
+	elements := tree.FindClickableElements(
+		allowedRoles,
+		configProvider,
+		ignoreClickableCheck,
+	)
 
 	// Release tree nodes that are not part of the result to avoid
-	// leaking CFRetain'd AXUIElementRefs from getChildren/getVisibleRows.
+	// leaking CFRetain'd AXUIElementRefs from NeruGetChildren/NeruGetVisibleRows.
 	releaseTreeExcept(tree, elements)
 
 	logger.Debug("Found menu bar clickable elements", zap.Int("count", len(elements)))
@@ -78,13 +95,14 @@ func MenuBarClickableElements(
 }
 
 // ClickableElementsFromBundleID retrieves clickable UI elements from the application identified by bundle ID.
+// If maxDepth is > 0, it overrides the configured tree depth (useful for flat supplementary sources).
 func ClickableElementsFromBundleID(
+	ctx context.Context,
 	bundleID string,
 	roles []string,
 	logger *zap.Logger,
-	cache *InfoCache,
 	configProvider config.Provider,
-	strictFiltering bool,
+	maxDepth int,
 ) ([]*TreeNode, error) {
 	logger.Debug("Getting clickable elements for bundle ID",
 		zap.String("bundle_id", bundleID),
@@ -99,16 +117,22 @@ func ClickableElementsFromBundleID(
 	defer app.Release()
 
 	opts := DefaultTreeOptions(logger)
-	opts.SetCache(cache)
-	opts.SetStrictFiltering(strictFiltering)
-	opts.SetIncludeOutOfBounds(!strictFiltering)
+	opts.SetConfigProvider(configProvider)
 
-	if cfg := currentConfig(configProvider); cfg != nil {
-		opts.SetMaxDepth(cfg.Hints.MaxDepth)
-		opts.SetParallelThreshold(cfg.Hints.ParallelThreshold)
+	if slices.Contains(roles, string(element.RoleMenuBarItem)) {
+		opts.SetFilterFunc(isAdditionalMenuBarElement)
 	}
 
-	tree, err := BuildTree(app, opts)
+	if cfg := currentConfig(configProvider); cfg != nil {
+		depth := cfg.Hints.MaxDepth
+		if maxDepth > 0 {
+			depth = maxDepth
+		}
+
+		opts.SetMaxDepth(depth)
+	}
+
+	tree, err := BuildTree(ctx, app, opts)
 	if err != nil {
 		logger.Error("Failed to build tree for application",
 			zap.String("bundle_id", bundleID),
@@ -131,10 +155,19 @@ func ClickableElementsFromBundleID(
 		}
 	}
 
-	elements := tree.FindClickableElements(allowedRoles, cache, configProvider)
+	ignoreClickableCheck := false
+	if cfg := currentConfig(configProvider); cfg != nil {
+		ignoreClickableCheck = cfg.ShouldIgnoreClickableCheckForApp(bundleID)
+	}
+
+	elements := tree.FindClickableElements(
+		allowedRoles,
+		configProvider,
+		ignoreClickableCheck,
+	)
 
 	// Release tree nodes that are not part of the result to avoid
-	// leaking CFRetain'd AXUIElementRefs from getChildren/getVisibleRows.
+	// leaking CFRetain'd AXUIElementRefs from NeruGetChildren/NeruGetVisibleRows.
 	releaseTreeExcept(tree, elements)
 
 	logger.Debug("Found clickable elements for application",
@@ -144,9 +177,21 @@ func ClickableElementsFromBundleID(
 	return elements, nil
 }
 
+func isAdditionalMenuBarElement(info *ElementInfo) bool {
+	//nolint:exhaustive
+	switch element.Role(info.Role()) {
+	case element.RoleMenuBar, element.RoleMenu, element.RoleMenuItem:
+		return true
+	case element.RoleMenuBarItem:
+		return info.Subrole() == string(element.SubroleMenuExtra)
+	default:
+		return false
+	}
+}
+
 // releaseTreeExcept releases all AXUIElementRefs in the tree except those
 // belonging to the keep list. This prevents leaking CFRetain'd refs from
-// getChildren/getVisibleRows that are stored in tree nodes but never returned
+// NeruGetChildren/NeruGetVisibleRows that are stored in tree nodes but never returned
 // to callers.
 func releaseTreeExcept(tree *TreeNode, keep []*TreeNode) {
 	keepSet := make(map[*Element]struct{}, len(keep))

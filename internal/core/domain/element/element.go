@@ -22,16 +22,52 @@ const (
 	RoleCheckBox           Role = "AXCheckBox"
 	RoleRadioButton        Role = "AXRadioButton"
 	RoleMenuItem           Role = "AXMenuItem"
+	RoleMenuButton         Role = "AXMenuButton"
 	RolePopUpButton        Role = "AXPopUpButton"
 	RoleTabButton          Role = "AXTabButton"
 	RoleSlider             Role = "AXSlider"
 	RoleSwitch             Role = "AXSwitch"
 	RoleDisclosureTriangle Role = "AXDisclosureTriangle"
 	RoleTextArea           Role = "AXTextArea"
+	RoleComboBox           Role = "AXComboBox"
+	RolePopover            Role = "AXPopover"
+	RoleSheet              Role = "AXSheet"
+	RoleMenu               Role = "AXMenu"
+	RoleSGTMenu            Role = "SGTMenu"
+	RoleList               Role = "AXList"
+	RoleHeading            Role = "AXHeading"
+	RoleMenuBarItem        Role = "AXMenuBarItem"
+	RoleMenuBar            Role = "AXMenuBar"
+	RoleCell               Role = "AXCell"
+	RoleRow                Role = "AXRow"
+	RoleDockItem           Role = "AXDockItem"
+	RoleIncrementor        Role = "AXIncrementor"
+	RoleColorWell          Role = "AXColorWell"
+	RoleSearchField        Role = "AXSearchField"
+	RoleToolbarButton      Role = "AXToolbarButton"
+	RoleToggle             Role = "AXToggle"
+	RoleTable              Role = "AXTable"
+	RoleOutline            Role = "AXOutline"
+	RoleApplication        Role = "AXApplication"
+	RoleWindow             Role = "AXWindow"
+	RoleTabGroup           Role = "AXTabGroup"
+	RoleGroup              Role = "AXGroup"
+	RoleScrollArea         Role = "AXScrollArea"
+	RoleSplitGroup         Role = "AXSplitGroup"
+	RoleUnknown            Role = "AXUnknown"
+	RoleGenericElement     Role = "AXGenericElement"
 )
 
-// Element represents a UI element in the accessibility tree.
-// It is immutable after creation to ensure thread safety.
+// Subrole represents the accessibility subrole of an element.
+type Subrole string
+
+// Common accessibility subroles.
+const (
+	SubroleMenuExtra Subrole = "AXMenuExtra"
+)
+
+// Element represents a UI element in the accessibility tree (or detected
+// via vision). It is immutable after creation to ensure thread safety.
 type Element struct {
 	id          ID
 	bounds      image.Rectangle
@@ -40,6 +76,8 @@ type Element struct {
 	title       string
 	description string
 	value       string
+	searchText  string
+	visionOnly  bool
 }
 
 // NewElement creates a new element with validation.
@@ -97,6 +135,22 @@ func WithValue(val string) Option {
 	}
 }
 
+// WithSearchText sets additional searchable text associated with the element.
+func WithSearchText(text string) Option {
+	return func(e *Element) {
+		e.searchText = text
+	}
+}
+
+// WithVisionOnly marks the element as detected via vision rather than
+// the accessibility tree. Vision-only elements have no AX reference and
+// actions must always use coordinate-based clicks (PerformActionAtPoint).
+func WithVisionOnly() Option {
+	return func(e *Element) {
+		e.visionOnly = true
+	}
+}
+
 // ID returns the element ID.
 func (e *Element) ID() ID {
 	return e.id
@@ -130,6 +184,18 @@ func (e *Element) Description() string {
 // Value returns the element value.
 func (e *Element) Value() string {
 	return e.value
+}
+
+// SearchText returns additional searchable text associated with the element.
+func (e *Element) SearchText() string {
+	return e.searchText
+}
+
+// IsVisionOnly returns true if the element was detected via vision rather
+// than the accessibility tree. Vision-only elements have no AX reference;
+// actions must use coordinate-based clicks (PerformActionAtPoint).
+func (e *Element) IsVisionOnly() bool {
+	return e.visionOnly
 }
 
 // Center returns the center point of the element.

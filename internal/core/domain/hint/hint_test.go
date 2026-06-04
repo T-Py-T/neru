@@ -160,6 +160,54 @@ func TestHint_Methods(t *testing.T) {
 	}
 }
 
+func TestCollection_FilterByText_Normalizes(t *testing.T) {
+	cafeElem, _ := element.NewElement(
+		"cafe",
+		image.Rect(10, 10, 50, 50),
+		element.RoleButton,
+		element.WithTitle("Café"),
+	)
+	cafeHint, _ := hint.NewHint("AA", cafeElem, image.Point{X: 30, Y: 30})
+
+	cjkElem, _ := element.NewElement(
+		"cjk",
+		image.Rect(10, 10, 50, 50),
+		element.RoleButton,
+		element.WithTitle("你好"), //nolint:gosmopolitan
+	)
+	cjkHint, _ := hint.NewHint("AB", cjkElem, image.Point{X: 30, Y: 30})
+
+	collection := hint.NewCollection([]*hint.Interface{cafeHint, cjkHint})
+
+	if got := collection.FilterByText("cafe").Count(); got != 1 {
+		t.Fatalf("FilterByText(%q) = %d, want 1", "cafe", got)
+	}
+
+	if got := collection.FilterByText("CAFÉ").Count(); got != 1 {
+		t.Fatalf("FilterByText(%q) = %d, want 1", "CAFÉ", got)
+	}
+
+	if got := collection.FilterByText("你好").Count(); got != 1 { //nolint:gosmopolitan
+		t.Fatalf("FilterByText(%q) = %d, want 1", "你好", got) //nolint:gosmopolitan
+	}
+}
+
+func TestCollection_FilterByText_SearchesAdditionalText(t *testing.T) {
+	rowElem, _ := element.NewElement(
+		"note-row",
+		image.Rect(10, 10, 100, 50),
+		element.Role("AXRow"),
+		element.WithSearchText("Quarterly planning notes"),
+	)
+	rowHint, _ := hint.NewHint("AA", rowElem, image.Point{X: 30, Y: 30})
+
+	collection := hint.NewCollection([]*hint.Interface{rowHint})
+
+	if got := collection.FilterByText("planning").Count(); got != 1 {
+		t.Fatalf("FilterByText(%q) = %d, want 1", "planning", got)
+	}
+}
+
 func TestAlphabetGenerator_Generate(t *testing.T) {
 	generator, generatorErr := hint.NewAlphabetGenerator("asdf")
 	if generatorErr != nil {
@@ -237,23 +285,36 @@ func TestAlphabetGenerator_MaxHints(t *testing.T) {
 }
 
 func TestAlphabetGenerator_TooManyElements(t *testing.T) {
-	generator, _ := hint.NewAlphabetGenerator("as") // Max 6 hints (2 + 2*2)
+	generator, _ := hint.NewAlphabetGenerator("as") // Max 8 hints (2^3)
 
-	// Try to generate 10 hints
+	// Try to generate more hints than the key combinations can label.
 	elements := make([]*element.Element, 10)
 	for index := range elements {
 		elements[index], _ = element.NewElement(
 			element.ID("elem-"+string(rune('0'+index))),
-			image.Rect(0, 0, 50, 50),
+			image.Rect(index*10, index*10, index*10+50, index*10+50),
 			element.RoleButton,
 		)
 	}
 
 	ctx := context.Background()
 
-	_, generateErr := generator.Generate(ctx, elements)
-	if generateErr == nil {
-		t.Error("Generate() expected error for too many elements, got nil")
+	hints, generateErr := generator.Generate(ctx, elements)
+	if generateErr != nil {
+		t.Fatalf("Generate() unexpected error for too many elements: %v", generateErr)
+	}
+
+	if len(hints) != generator.MaxHints() {
+		t.Fatalf("Generate() returned %d hints, want max %d", len(hints), generator.MaxHints())
+	}
+
+	for _, generatedHint := range hints {
+		if generatedHint.Element().ID() == "elem-8" || generatedHint.Element().ID() == "elem-9" {
+			t.Fatalf(
+				"Generate() included an element beyond max hint capacity: %s",
+				generatedHint.Element().ID(),
+			)
+		}
 	}
 }
 
@@ -326,6 +387,66 @@ func TestCollection_FilterByPrefix(t *testing.T) {
 					len(filtered),
 					testCase.want,
 				)
+			}
+		})
+	}
+}
+
+func TestCollection_FilterByText(t *testing.T) {
+	saveButton, _ := element.NewElement(
+		"save",
+		image.Rect(0, 0, 50, 50),
+		element.RoleButton,
+		element.WithTitle("Save Document"),
+	)
+	searchField, _ := element.NewElement(
+		"search",
+		image.Rect(0, 60, 50, 110),
+		element.RoleTextField,
+		element.WithDescription("Project finder"),
+		element.WithValue("Neru"),
+	)
+	cancelButton, _ := element.NewElement(
+		"cancel",
+		image.Rect(0, 120, 50, 170),
+		element.RoleButton,
+		element.WithTitle("Cancel"),
+	)
+
+	collection := hint.NewCollection([]*hint.Interface{
+		mustNewHint("AA", saveButton),
+		mustNewHint("AS", searchField),
+		mustNewHint("AD", cancelButton),
+	})
+
+	tests := []struct {
+		name  string
+		query string
+		want  []string
+	}{
+		{name: "matches title case-insensitive", query: "save", want: []string{"AA"}},
+		{name: "matches description", query: "finder", want: []string{"AS"}},
+		{name: "matches value", query: "NER", want: []string{"AS"}},
+		{name: "empty query returns all", query: "", want: []string{"AA", "AS", "AD"}},
+		{name: "no matches", query: "missing", want: []string{}},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			filtered := collection.FilterByText(testCase.query)
+			if filtered.Count() != len(testCase.want) {
+				t.Fatalf(
+					"FilterByText(%q) count = %d, want %d",
+					testCase.query,
+					filtered.Count(),
+					len(testCase.want),
+				)
+			}
+
+			for _, label := range testCase.want {
+				if filtered.FindByLabel(label) == nil {
+					t.Fatalf("FilterByText(%q) missing label %q", testCase.query, label)
+				}
 			}
 		})
 	}

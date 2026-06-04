@@ -1,13 +1,18 @@
 package app
 
 import (
+	"context"
+
+	"go.uber.org/zap"
+
 	"github.com/y3owk1n/neru/internal/config"
 )
 
 // New creates a new App instance with the provided options.
 // It applies sensible defaults and allows customization through functional options.
 func New(opts ...Option) (*App, error) {
-	app := &App{}
+	ctx, cancel := context.WithCancel(context.Background())
+	app := &App{ctx: ctx, cancel: cancel}
 
 	// Apply all options
 	for _, opt := range opts {
@@ -41,12 +46,19 @@ func New(opts ...Option) (*App, error) {
 func initializeApp(app *App) (*App, error) {
 	var initializedPhases []func() // Cleanup functions for successful phases
 
-	var initializationFailed bool
+	var (
+		initializationFailed bool
+		failurePhase         string
+		failureErr           error
+	)
 
 	// Cleanup function that runs on failure to prevent resource leaks
+
 	defer func() {
 		if initializationFailed {
-			app.logger.Info("Initialization failed, cleaning up partially allocated resources")
+			app.logger.Error("Initialization failed, cleaning up partially allocated resources",
+				zap.String("phase", failurePhase),
+				zap.Error(failureErr))
 			// Run cleanup functions in reverse order (LIFO)
 			for i := len(initializedPhases) - 1; i >= 0; i-- {
 				initializedPhases[i]()
@@ -58,6 +70,8 @@ func initializeApp(app *App) (*App, error) {
 	err := initializeInfrastructure(app)
 	if err != nil {
 		initializationFailed = true
+		failurePhase = "infrastructure"
+		failureErr = err
 
 		return nil, err
 	}
@@ -70,6 +84,8 @@ func initializeApp(app *App) (*App, error) {
 	err = initializeServicesAndAdapters(app)
 	if err != nil {
 		initializationFailed = true
+		failurePhase = "services"
+		failureErr = err
 
 		return nil, err
 	}
@@ -82,10 +98,15 @@ func initializeApp(app *App) (*App, error) {
 	initializeApplicationState(app)
 	// Application state doesn't need cleanup as it's just in-memory objects
 
+	// Sync initial config values to AppState
+	syncInitialConfigToAppState(app)
+
 	// Phase 4: Initialize UI components
 	err = initializeUIComponents(app)
 	if err != nil {
 		initializationFailed = true
+		failurePhase = "ui_components"
+		failureErr = err
 
 		return nil, err
 	}
@@ -131,6 +152,8 @@ func initializeApp(app *App) (*App, error) {
 	err = initializeEventTapAndIPC(app)
 	if err != nil {
 		initializationFailed = true
+		failurePhase = "eventtap_ipc"
+		failureErr = err
 
 		return nil, err
 	}

@@ -1,5 +1,197 @@
 # Changelog
 
+## [1.42.0](https://github.com/y3owk1n/neru/compare/v1.41.0...v1.42.0) (2026-05-30)
+
+
+### Features
+
+* add cobra generated man pages ([#876](https://github.com/y3owk1n/neru/issues/876)) ([aa20dc9](https://github.com/y3owk1n/neru/commit/aa20dc95ff3ff275af0969bc224cab2dbc7f00c7))
+
+
+### Bug Fixes
+
+* ensure screen capture permission flow consistency ([#875](https://github.com/y3owk1n/neru/issues/875)) ([920d85d](https://github.com/y3owk1n/neru/commit/920d85d587dfb1a3df2d4e961125505033b9f0d6))
+* **hotkeys:** ensure consistent initialdelay with interval for repeat ([#872](https://github.com/y3owk1n/neru/issues/872)) ([caf1177](https://github.com/y3owk1n/neru/commit/caf1177294f6e57c4e6118db92bdef865e4a23ee))
+
+
+### Documentation
+
+* **installation:** add nightly homebrew `install` and `upgrade` guide ([#878](https://github.com/y3owk1n/neru/issues/878)) ([40dfe49](https://github.com/y3owk1n/neru/commit/40dfe49944022f3524660e9410f8eb7a723811d8))
+* make documenation richer for cli for better man generation ([#879](https://github.com/y3owk1n/neru/issues/879)) ([ddcd631](https://github.com/y3owk1n/neru/commit/ddcd63117f1ceaf9a0efed7c729919f2a0ff82bb))
+
+## [1.41.0](https://github.com/y3owk1n/neru/compare/v1.40.1...v1.41.0) (2026-05-28)
+
+
+### Features
+
+* **hints,vision:** make vision options fully configurable ([#869](https://github.com/y3owk1n/neru/issues/869)) ([68c590f](https://github.com/y3owk1n/neru/commit/68c590fb9389f9f63235fbe1ad33e356e8288cf9))
+* **hints:** add `vision` detection strategy ([#867](https://github.com/y3owk1n/neru/issues/867)) ([6fe14f4](https://github.com/y3owk1n/neru/commit/6fe14f45568a3232cfa2d46c054a0788380878a3))
+
+
+### Bug Fixes
+
+* **hints,vision:** use `ScreenCaptureKit` for modern macOS ([#868](https://github.com/y3owk1n/neru/issues/868)) ([785f95b](https://github.com/y3owk1n/neru/commit/785f95b8fd65c64b93908cd93a4e7aae1f0fc148))
+* reduce log noise and remove `structured_logging` config option ([#864](https://github.com/y3owk1n/neru/issues/864)) ([ebadd9b](https://github.com/y3owk1n/neru/commit/ebadd9b127c6e2cbe682d41e9d75b6c755236b7a))
+* show `output` in log when `exec` failes in hotkey ([#866](https://github.com/y3owk1n/neru/issues/866)) ([4aa3b95](https://github.com/y3owk1n/neru/commit/4aa3b95c38e799fe5709ee58d2c7abb6e1af2610))
+
+## [1.40.1](https://github.com/y3owk1n/neru/compare/v1.40.0...v1.40.1) (2026-05-26)
+
+
+### Bug Fixes
+
+* retrigger github action due to outage during v1.40 release ([8f4800e](https://github.com/y3owk1n/neru/commit/8f4800e53ae99c99a143f1b9c0ce096d26ab4f5b))
+
+## [1.40.0](https://github.com/y3owk1n/neru/compare/v1.39.0...v1.40.0) (2026-05-26)
+
+
+### Features
+
+* **scroll:** add similar `<mode>.app_configs` with overridables ([#849](https://github.com/y3owk1n/neru/issues/849)) ([1b0de2e](https://github.com/y3owk1n/neru/commit/1b0de2e1ae21a52c8088c0f4747c06894b26e638))
+
+
+### Bug Fixes
+
+* **cli:** expose missing `--role` and `--text` flag on cli ([#846](https://github.com/y3owk1n/neru/issues/846)) ([a5e61a8](https://github.com/y3owk1n/neru/commit/a5e61a835d1184638e6d4b27d39d3393d3e30ae7))
+* **darwin:** harden CGo callback singletons with generation-stamped slots ([#862](https://github.com/y3owk1n/neru/issues/862)) ([0ec420a](https://github.com/y3owk1n/neru/commit/0ec420aaa9e24373fe017a9c9b5215b6a2e0b834))
+* **darwin:** protect clickState `performLeftClickAtPosition` ([#853](https://github.com/y3owk1n/neru/issues/853)) ([a8bdc48](https://github.com/y3owk1n/neru/commit/a8bdc482c5f37847520a476be6cc7bb38fdfabfb))
+* **linux,overlay,wayland:** add `MAP_FAILED` check after mmap in overlay buffer setup ([9ebd520](https://github.com/y3owk1n/neru/commit/9ebd52035dd14ed9fceccb73fd4d930eb1d4bf03))
+* **linux,overlay,wayland:** add `xkb_state_unref` and `xkb_context_unref` to overlay destroy ([9ebd520](https://github.com/y3owk1n/neru/commit/9ebd52035dd14ed9fceccb73fd4d930eb1d4bf03))
+* **linux,overlay,wayland:** embed key ring in `NeruWaylandOverlay` instead of file-scope singleton ([9ebd520](https://github.com/y3owk1n/neru/commit/9ebd52035dd14ed9fceccb73fd4d930eb1d4bf03))
+* **linux,overlay,x11:** add null-check after calloc in `x11_overlay_new` ([9ebd520](https://github.com/y3owk1n/neru/commit/9ebd52035dd14ed9fceccb73fd4d930eb1d4bf03))
+* **linux,overlay:** close keymap fd outside format check to prevent leak ([9ebd520](https://github.com/y3owk1n/neru/commit/9ebd52035dd14ed9fceccb73fd4d930eb1d4bf03))
+* **linux,scroll:** ensure `__keyup_<key>` on release just like darwin variant ([9ebd520](https://github.com/y3owk1n/neru/commit/9ebd52035dd14ed9fceccb73fd4d930eb1d4bf03))
+* prevent goroutine leak on context cancellation in `processClickableNodesConcurrent` ([#852](https://github.com/y3owk1n/neru/issues/852)) ([f76b4a7](https://github.com/y3owk1n/neru/commit/f76b4a727092c5f9c52ccff1c1ba1bc7da812506))
+* rename variable to ctx to avoid package shadowing ([#851](https://github.com/y3owk1n/neru/issues/851)) ([cabc51d](https://github.com/y3owk1n/neru/commit/cabc51da66415d3bdd712ac0e90a8b78baedf3aa))
+
+
+### Performance Improvements
+
+* **darwin:** replace layout map init busy-wait with NSCondition ([#856](https://github.com/y3owk1n/neru/issues/856)) ([4cffc9a](https://github.com/y3owk1n/neru/commit/4cffc9af018122ab98a07bfa691a326066c6a390))
+
+
+### Documentation
+
+* better and concise write-ups for docs ([#848](https://github.com/y3owk1n/neru/issues/848)) ([452785d](https://github.com/y3owk1n/neru/commit/452785ddec0edc0d667aa6ddc009e9b1e25289ff))
+
+## [1.39.0](https://github.com/y3owk1n/neru/compare/v1.38.1...v1.39.0) (2026-05-23)
+
+
+### Features
+
+* **hints:** configurable visibility check for noise reduction ([#844](https://github.com/y3owk1n/neru/issues/844)) ([48b3ff7](https://github.com/y3owk1n/neru/commit/48b3ff739f2c4919ec62fc4e4be1c14efe68dd50))
+* **hints:** mission control notifications and actions ([#842](https://github.com/y3owk1n/neru/issues/842)) ([2218dd2](https://github.com/y3owk1n/neru/commit/2218dd232adfdfbe8ae9787e1c99c92b023aca2f))
+
+
+### Bug Fixes
+
+* **hints:** ensure ctx cancellation for chaining calls ([#839](https://github.com/y3owk1n/neru/issues/839)) ([c413124](https://github.com/y3owk1n/neru/commit/c413124826801a38c7b51344389d2e8d9a04a548))
+* **hints:** reverse hints label to prevent prefix cluster ([#845](https://github.com/y3owk1n/neru/issues/845)) ([7781e24](https://github.com/y3owk1n/neru/commit/7781e24b915951e3f54202d813fac1c4f7ea9a2c))
+* preserve mode flags on mode refresh ([#843](https://github.com/y3owk1n/neru/issues/843)) ([5e63847](https://github.com/y3owk1n/neru/commit/5e6384745bf5b59bd443c3b8517f38973aa22d95))
+
+
+### Performance Improvements
+
+* **hints:** skip AX hit tests for webkit apps ([#841](https://github.com/y3owk1n/neru/issues/841)) ([3646c88](https://github.com/y3owk1n/neru/commit/3646c887fdcc7d8f91cff0be8608b340fcda057f))
+
+## [1.38.1](https://github.com/y3owk1n/neru/compare/v1.38.0...v1.38.1) (2026-05-21)
+
+
+### Bug Fixes
+
+* ensure retry to set electron and chromium attrs ([#834](https://github.com/y3owk1n/neru/issues/834)) ([a4f4047](https://github.com/y3owk1n/neru/commit/a4f4047fe856694a88f596c291b1695515ff3f53))
+* **overlay:** ensure modes overlay resized properly before showing ([#835](https://github.com/y3owk1n/neru/issues/835)) ([9d77d15](https://github.com/y3owk1n/neru/commit/9d77d154da6511267a0bb89588d44736c56060a0))
+* resolve memory leaks in animations, overlays and indicators ([#831](https://github.com/y3owk1n/neru/issues/831)) ([09181b1](https://github.com/y3owk1n/neru/commit/09181b1041fcfac06ab260b5873432ca5f1cd632))
+
+
+### Performance Improvements
+
+* eliminate thread explosion ([#829](https://github.com/y3owk1n/neru/issues/829)) ([052418b](https://github.com/y3owk1n/neru/commit/052418be454117a6fa11f56eeda9b5aef7f5902d))
+* **hints:** early exit on out of bounds child on chromium or electron ([#836](https://github.com/y3owk1n/neru/issues/836)) ([cc39c82](https://github.com/y3owk1n/neru/commit/cc39c82953ae5caa1bfa1007cc047f8956260b80))
+* **hints:** optimize hint generation and filtering performance ([#833](https://github.com/y3owk1n/neru/issues/833)) ([6818af6](https://github.com/y3owk1n/neru/commit/6818af663fed877687d50047b1fda6562911c982))
+* optimize overlays memory usage ([#832](https://github.com/y3owk1n/neru/issues/832)) ([8e85dfe](https://github.com/y3owk1n/neru/commit/8e85dfe3b5c17911f6b809fed351e34fd0d4da20))
+
+## [1.38.0](https://github.com/y3owk1n/neru/compare/v1.37.0...v1.38.0) (2026-05-19)
+
+
+### Features
+
+* **hints:** add `AXGenericElement` to default clickable role ([#810](https://github.com/y3owk1n/neru/issues/810)) ([f7196c7](https://github.com/y3owk1n/neru/commit/f7196c7149df2d0d11b1701a026f5423cfe6991f))
+* **hints:** add neru own bundle to menubar targets ([#802](https://github.com/y3owk1n/neru/issues/802)) ([df4c515](https://github.com/y3owk1n/neru/commit/df4c51507b5e652b8b52f796ace7634db068fa41))
+* **hints:** add support for screen capture thumbnail ([#800](https://github.com/y3owk1n/neru/issues/800)) ([1c2146c](https://github.com/y3owk1n/neru/commit/1c2146cbd91f807703f30996f1dc3f16070e5d16))
+* **hotkey:** repeat global hotkey actions while held automatically ([#817](https://github.com/y3owk1n/neru/issues/817)) ([1e0429e](https://github.com/y3owk1n/neru/commit/1e0429ef44fe069aab26ca420a3df1ea3af554ef))
+* **scroll,cli:** add `--steps` flag for overrides ([#824](https://github.com/y3owk1n/neru/issues/824)) ([e5cee80](https://github.com/y3owk1n/neru/commit/e5cee80e685728dcacb4b942418706d51f9e11ac))
+
+
+### Bug Fixes
+
+* **hints:** add explicit `includeOutOfBounds` ([#813](https://github.com/y3owk1n/neru/issues/813)) ([b55ec1d](https://github.com/y3owk1n/neru/commit/b55ec1d64db3de51e013efdb1fce6fe01d781d2c))
+* **hints:** add popovers, sheets and menus into interactive leaf elements ([#805](https://github.com/y3owk1n/neru/issues/805)) ([582523b](https://github.com/y3owk1n/neru/commit/582523be4027f3c9591f8682f1b2c2e2d563ec5f))
+* **hints:** allow links in textarea ([#828](https://github.com/y3owk1n/neru/issues/828)) ([6c2c919](https://github.com/y3owk1n/neru/commit/6c2c919b9a3675062253659f2d981610e9b5d901))
+* **hints:** better clickaction heuristic detection ([#812](https://github.com/y3owk1n/neru/issues/812)) ([8ec5b1b](https://github.com/y3owk1n/neru/commit/8ec5b1b679417b3bc5277dd48f463b21fc8da9bd))
+* **hints:** better widget detection ([#814](https://github.com/y3owk1n/neru/issues/814)) ([9bd59cd](https://github.com/y3owk1n/neru/commit/9bd59cd59e6f45436e0ca4dfa8cda1bbe6f5c1e1))
+* **hints:** eliminate hidden elements and simplify filtering ([#821](https://github.com/y3owk1n/neru/issues/821)) ([fc57e51](https://github.com/y3owk1n/neru/commit/fc57e516f9a336ce3d94165cfc23ddc74ade3e34))
+* **hints:** ensure menubar elements include out of bounds ([#815](https://github.com/y3owk1n/neru/issues/815)) ([4a147b3](https://github.com/y3owk1n/neru/commit/4a147b33309123370f5aa08ad8f5e8fdeb549ed4))
+* **hints:** filter zero-sized elements during tree build ([#825](https://github.com/y3owk1n/neru/issues/825)) ([7853065](https://github.com/y3owk1n/neru/commit/7853065afd3c78115e8f8e201c88139e6c5c98a8))
+* **hints:** improve mission control detection ([#807](https://github.com/y3owk1n/neru/issues/807)) ([5ae21e2](https://github.com/y3owk1n/neru/commit/5ae21e2e9b7c04e77d83a30d5aefb5d78fca3f83))
+* **hints:** improve notification center hints ([#808](https://github.com/y3owk1n/neru/issues/808)) ([01a670a](https://github.com/y3owk1n/neru/commit/01a670a8dc1150b67dae627a699b9c5cc6bb2a9f))
+* **hotkey:** eliminate initial repeat delay for held-key actions ([#819](https://github.com/y3owk1n/neru/issues/819)) ([ad88403](https://github.com/y3owk1n/neru/commit/ad884032e4b97d3fc2137c1ee662bc3f520816c6))
+
+
+### Performance Improvements
+
+* **hints:** add `max_parallel_depth` option and bump to 10 ([#826](https://github.com/y3owk1n/neru/issues/826)) ([d62d723](https://github.com/y3owk1n/neru/commit/d62d723663aa82f2d323a295e9a8f7f429f150ec))
+* **hints:** faster hints activation ([#822](https://github.com/y3owk1n/neru/issues/822)) ([0f1afcb](https://github.com/y3owk1n/neru/commit/0f1afcb1a7e44bce4d9f60238ecbc0465ae43e0c))
+* **hints:** improve hint visibility checking ([#818](https://github.com/y3owk1n/neru/issues/818)) ([f2be692](https://github.com/y3owk1n/neru/commit/f2be692f37567041292b44f4935f2afac67d3134))
+* **hints:** more parallelizing for element collection ([#803](https://github.com/y3owk1n/neru/issues/803)) ([3d9480e](https://github.com/y3owk1n/neru/commit/3d9480efd45690525e763229f808e1c51784decb))
+* **hints:** optimise AX API calls ([#804](https://github.com/y3owk1n/neru/issues/804)) ([a8476d3](https://github.com/y3owk1n/neru/commit/a8476d3b2ec9f363e7d0cccdae533db032d03d59))
+* **hints:** reduce AX roundtrips plus parallel tree workers ([#827](https://github.com/y3owk1n/neru/issues/827)) ([82e0629](https://github.com/y3owk1n/neru/commit/82e06297c12e791907507033d299d061592476e7))
+
+## [1.37.0](https://github.com/y3owk1n/neru/compare/v1.36.0...v1.37.0) (2026-05-13)
+
+
+### Features
+
+* add mouse action indicator ([#791](https://github.com/y3owk1n/neru/issues/791)) ([ae285d2](https://github.com/y3owk1n/neru/commit/ae285d2a5f3c97bc1357e6eb40b339b7fe2f4d75))
+* **hints:** add boundary highlights for targeted elements ([#793](https://github.com/y3owk1n/neru/issues/793)) ([8d05247](https://github.com/y3owk1n/neru/commit/8d0524775ecf027fc0ac8cb8b35f56f7136c57a4))
+* **hints:** add native PIP support for mac ([#795](https://github.com/y3owk1n/neru/issues/795)) ([0651fee](https://github.com/y3owk1n/neru/commit/0651fee44518d4f680ecf0795625044c1d7a1e94))
+* **hints:** add simple hints placement customisation ([#797](https://github.com/y3owk1n/neru/issues/797)) ([48de8a8](https://github.com/y3owk1n/neru/commit/48de8a8c10a0e498e4ea3de1e54214d2f14c8472))
+
+
+### Bug Fixes
+
+* **config:** remove default launcher keybinds if mode is disabled ([#788](https://github.com/y3owk1n/neru/issues/788)) ([68040c4](https://github.com/y3owk1n/neru/commit/68040c40016ba41d16fc81f7781ba4ac4b8eec89))
+* **hints:** add capability to search text on subtree ([#792](https://github.com/y3owk1n/neru/issues/792)) ([f694847](https://github.com/y3owk1n/neru/commit/f694847c6cd4521768e651176628aeab502bec05))
+* **hints:** cap hint generation when elements exceed key combinations ([#794](https://github.com/y3owk1n/neru/issues/794)) ([0305936](https://github.com/y3owk1n/neru/commit/0305936750a97c67d4432616f1ee5932aae60f54))
+
+
+### Performance Improvements
+
+* **hints:** reduce AX work during hints activation ([#796](https://github.com/y3owk1n/neru/issues/796)) ([3240e0f](https://github.com/y3owk1n/neru/commit/3240e0f9d025e090e7412f282b3c99b2a5b6b8c8))
+
+## [1.36.0](https://github.com/y3owk1n/neru/compare/v1.35.0...v1.36.0) (2026-05-10)
+
+
+### Features
+
+* add smooth scroll animation ([#779](https://github.com/y3owk1n/neru/issues/779)) ([7050362](https://github.com/y3owk1n/neru/commit/7050362971ed207638fe2a71274ce49e44ada771))
+* **hints,action:** add `cycle_hint` action ([#783](https://github.com/y3owk1n/neru/issues/783)) ([aff245b](https://github.com/y3owk1n/neru/commit/aff245ba0e3ed4e059d52c3d668610f74a2769ec))
+* **hints,cli:** add `--search` flag to show search input upon activation ([#785](https://github.com/y3owk1n/neru/issues/785)) ([cc14b02](https://github.com/y3owk1n/neru/commit/cc14b02b07f8de3b4337705cfe3689c12e25e7c1))
+* **hints:** add `--role` and `--text` filter flags ([#772](https://github.com/y3owk1n/neru/issues/772)) ([142940f](https://github.com/y3owk1n/neru/commit/142940f3121bc5e472095617686a61f0361e500c))
+* **hints:** add `search` capability similar to homerow ([#784](https://github.com/y3owk1n/neru/issues/784)) ([bdb1046](https://github.com/y3owk1n/neru/commit/bdb1046f62ae8bbda343b29433e37a9748b44ef3))
+* **hints:** add native IME text input session plus improvements ([#786](https://github.com/y3owk1n/neru/issues/786)) ([a226c54](https://github.com/y3owk1n/neru/commit/a226c54a9f76d9d21fb957009ee7721471e679b0))
+
+
+### Bug Fixes
+
+* **cli:** properly support comma-separated values for `--role` and `--text` flags ([#773](https://github.com/y3owk1n/neru/issues/773)) ([0b6b338](https://github.com/y3owk1n/neru/commit/0b6b33843867fc0c26aaf2fe65900a312ff4830b))
+* **config:** replace default launcher hotkeys on rebind ([#778](https://github.com/y3owk1n/neru/issues/778)) ([7486c19](https://github.com/y3owk1n/neru/commit/7486c19b1e34e13f8351bb577e48dfc36142ee42))
+* **hints:** ensure menubar item adhere to strictFiltering ([#767](https://github.com/y3owk1n/neru/issues/767)) ([41e9ba8](https://github.com/y3owk1n/neru/commit/41e9ba86e997ab6abac3f0a84172cfb0e2168038))
+* **hints:** include `AXPopover` windows ([#769](https://github.com/y3owk1n/neru/issues/769)) ([7cc4b28](https://github.com/y3owk1n/neru/commit/7cc4b28ee7997fb884bad954c72b99dc5296f01a))
+* **hints:** remove `AXTextField` from leaf roles so that finder search works ([#770](https://github.com/y3owk1n/neru/issues/770)) ([7ebaa82](https://github.com/y3owk1n/neru/commit/7ebaa8235640ace43fe8607ad41aa909caa4283b))
+* **linux,wayland:** do not fallback evdev on first grab fail, try others ([#781](https://github.com/y3owk1n/neru/issues/781)) ([83bb7d7](https://github.com/y3owk1n/neru/commit/83bb7d7d2473488096d90ae3f2676eb200d5968d))
+* **linux,wayland:** explicitly enable keyboard interactivity on overlay when evdev fallback ([#780](https://github.com/y3owk1n/neru/issues/780)) ([732f876](https://github.com/y3owk1n/neru/commit/732f876835e613aa491e6e0c722f4052e7941529))
+* **linux,wlroots:** filter out uinput virtual keyboard devices from evdev capture ([#776](https://github.com/y3owk1n/neru/issues/776)) ([4850af2](https://github.com/y3owk1n/neru/commit/4850af2a905fd540c59b9f652beb78f9660ece15))
+
 ## [1.35.0](https://github.com/y3owk1n/neru/compare/v1.34.0...v1.35.0) (2026-05-06)
 
 

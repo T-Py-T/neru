@@ -5,6 +5,12 @@ import (
 	"image"
 	"sort"
 	"strings"
+	"unicode"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/runes"
+	"golang.org/x/text/transform"
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/y3owk1n/neru/internal/core/domain/element"
 	derrors "github.com/y3owk1n/neru/internal/core/errors"
@@ -19,6 +25,7 @@ const (
 // Hints are immutable after creation.
 type Interface struct {
 	label         string
+	labelUpper    string
 	element       *element.Element
 	position      image.Point
 	matchedPrefix string
@@ -35,9 +42,10 @@ func NewHint(label string, element *element.Element, position image.Point) (*Int
 	}
 
 	return &Interface{
-		label:    label,
-		element:  element,
-		position: position,
+		label:      label,
+		labelUpper: strings.ToUpper(label),
+		element:    element,
+		position:   position,
 	}, nil
 }
 
@@ -65,6 +73,7 @@ func (h *Interface) MatchedPrefix() string {
 func (h *Interface) WithMatchedPrefix(prefix string) *Interface {
 	return &Interface{
 		label:         h.label,
+		labelUpper:    h.labelUpper,
 		element:       h.element,
 		position:      h.position,
 		matchedPrefix: prefix,
@@ -132,7 +141,7 @@ func NewTrie() *Trie {
 
 // Insert adds a hint to the trie.
 func (t *Trie) Insert(hint *Interface) {
-	label := strings.ToUpper(hint.Label()) // Pre-normalize to uppercase
+	label := hint.labelUpper
 	node := t.root
 
 	for _, char := range label {
@@ -263,6 +272,50 @@ func (c *Collection) FilterByPrefix(prefix string) []*Interface {
 
 	// Use trie for efficient prefix matching
 	return c.trie.FindByPrefix(prefix)
+}
+
+// FilterByText returns hints whose element text contains query.
+func (c *Collection) FilterByText(query string) *Collection {
+	if query == "" {
+		return c
+	}
+
+	normalizedQuery := normalizeForSearch(query)
+	filtered := make([]*Interface, 0, len(c.hints))
+
+	for _, hint := range c.hints {
+		elem := hint.Element()
+		if elem == nil {
+			continue
+		}
+
+		if strings.Contains(normalizeForSearch(elem.Title()), normalizedQuery) ||
+			strings.Contains(normalizeForSearch(elem.Description()), normalizedQuery) ||
+			strings.Contains(normalizeForSearch(elem.Value()), normalizedQuery) ||
+			strings.Contains(normalizeForSearch(elem.SearchText()), normalizedQuery) {
+			filtered = append(filtered, hint)
+		}
+	}
+
+	return NewCollection(filtered)
+}
+
+func normalizeForSearch(text string) string {
+	if text == "" {
+		return ""
+	}
+
+	searchCaser := cases.Fold()
+	folded := searchCaser.String(text)
+
+	searchTransformer := transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)), norm.NFC)
+
+	normalized, _, err := transform.String(searchTransformer, folded)
+	if err != nil {
+		return folded
+	}
+
+	return normalized
 }
 
 // Count returns the number of hints in the collection.

@@ -142,6 +142,7 @@ func NewOverlay(config config.GridConfig, logger *zap.Logger) (*Overlay, error) 
 	if err != nil {
 		return nil, err
 	}
+	base.CallbackManager.SetComponent("grid")
 	initGridPools()
 	chars := config.Characters
 
@@ -172,6 +173,7 @@ func NewOverlayWithWindow(
 		go domainGrid.Prewarm(chars, getCommonGridSizes())
 	}
 	base := overlayutil.NewBaseOverlayWithWindow(logger, windowPtr)
+	base.CallbackManager.SetComponent("grid")
 
 	return &Overlay{
 		window:          (C.OverlayWindow)(base.Window),
@@ -859,24 +861,16 @@ func (o *Overlay) freeLabelCacheLocked() {
 			C.free(unsafe.Pointer(cStr))
 		}
 	}
-	// Re-initialize map to clear references
 	o.cachedLabels = make(map[string]*C.char)
 }
 
 // getOrCacheLabel returns a cached C string for the label, creating it if needed.
+// Labels are retained until Clear() or Destroy() to avoid dangling pointers in the
+// C overlay, which stores label pointers between draws for incremental updates.
 func (o *Overlay) getOrCacheLabel(label string) *C.char {
-	o.labelCacheMu.RLock()
-	if cStr, ok := o.cachedLabels[label]; ok {
-		o.labelCacheMu.RUnlock()
-
-		return cStr
-	}
-	o.labelCacheMu.RUnlock()
-
 	o.labelCacheMu.Lock()
 	defer o.labelCacheMu.Unlock()
 
-	// Double-check
 	if cStr, ok := o.cachedLabels[label]; ok {
 		return cStr
 	}

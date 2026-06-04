@@ -51,6 +51,8 @@ func (m *GenericMode) Activate(opts ModeActivationOptions) {
 				opts.CursorFollowSelection,
 				opts.FilterRoles,
 				opts.FilterTextContains,
+				opts.Search,
+				opts.Strategy,
 			)
 		case domain.ModeGrid:
 			m.handler.activateGridModeWithAction(

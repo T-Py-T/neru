@@ -5,6 +5,7 @@
 //  Copyright © 2025 Neru. All rights reserved.
 //
 
+#import "accessibility.h"
 #import "appwatcher.h"
 
 #import <Cocoa/Cocoa.h>
@@ -112,6 +113,8 @@ extern void handleScreenParametersChanged(void);
 				free(bundleIDCopy);
 			});
 		}
+
+		NeruUpdateMissionControlState();
 	}
 }
 
@@ -136,6 +139,8 @@ extern void handleScreenParametersChanged(void);
 			free(appNameCopy);
 			free(bundleIDCopy);
 		});
+
+		NeruUpdateMissionControlState();
 	}
 }
 
@@ -190,7 +195,7 @@ static AppWatcherDelegate *delegate = nil;
 static dispatch_queue_t watcherQueue = nil;
 
 /// Start the application watcher
-void startAppWatcher(void) {
+void NeruStartAppWatcher(void) {
 	static dispatch_once_t onceToken;
 	dispatch_once(&onceToken, ^{
 		watcherQueue = dispatch_queue_create("com.neru.appwatcher", DISPATCH_QUEUE_SERIAL);
@@ -236,11 +241,18 @@ void startAppWatcher(void) {
 		                                         selector:@selector(screenParametersDidChange:)
 		                                             name:NSApplicationDidChangeScreenParametersNotification
 		                                           object:nil];
+
+		// Synchronize the cached Mission Control state at startup.
+		// If detection is disabled (the default), this is a cheap no-op that
+		// resets the cache to false.  When detection is later enabled via
+		// NeruSetDetectMissionControlEnabled, the queue, timer, and space-change
+		// observer are initialized lazily at that point.
+		NeruUpdateMissionControlState();
 	});
 }
 
 /// Stop the application watcher
-void stopAppWatcher(void) {
+void NeruStopAppWatcher(void) {
 	if (watcherQueue == nil)
 		return;
 

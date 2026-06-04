@@ -4,7 +4,9 @@ import (
 	"context"
 	"image"
 	"runtime"
+	"strings"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -27,8 +29,12 @@ const (
 	// contextCheckInterval is the interval for checking context cancellation.
 	contextCheckInterval = 100
 
-	// maxConcurrentWorkers is the maximum number of workers for concurrent processing.
+	// maxConcurrentWorkers is the maximum number of workers for processing.
 	maxConcurrentWorkers = 8
+
+	// maxConcurrentWindows caps goroutines spawned for per-window processing
+	// to prevent thread explosion when many windows are open.
+	maxConcurrentWindows = 4
 )
 
 // elementSlicePool is a pool of element slices for temporary use.
@@ -96,16 +102,38 @@ func (a *Adapter) ClickableElements(
 		return nil, err
 	}
 
-	a.logger.Debug("Getting clickable elements", zap.Any("filter", filter))
-
-	// Use bounded concurrency for parallel queries
-	const maxConcurrency = 3 // Limit concurrent queries to avoid overwhelming the system
-
-	semaphore := make(chan struct{}, maxConcurrency)
-	// Initialize semaphore with tokens
-	for range maxConcurrency {
-		semaphore <- struct{}{}
+	// Pre-lowercase filter strings once to avoid repeating strings.ToLower on hot paths
+	if filter.TitleContains != "" {
+		filter.TitleContains = strings.ToLower(filter.TitleContains)
 	}
+
+	if filter.DescriptionContains != "" {
+		filter.DescriptionContains = strings.ToLower(filter.DescriptionContains)
+	}
+
+	if filter.ValueContains != "" {
+		filter.ValueContains = strings.ToLower(filter.ValueContains)
+	}
+
+	if len(filter.TextContainsList) > 0 {
+		loweredList := make([]string, len(filter.TextContainsList))
+		for i, text := range filter.TextContainsList {
+			loweredList[i] = strings.ToLower(text)
+		}
+
+		filter.TextContainsList = loweredList
+	}
+
+	a.logger.Debug("Getting clickable elements",
+		zap.Int("role_count", len(filter.Roles)),
+		zap.Bool("include_menubar", filter.IncludeMenubar),
+		zap.Bool("include_dock", filter.IncludeDock),
+		zap.Bool("include_notification_center", filter.IncludeNotificationCenter),
+		zap.Bool("include_stage_manager", filter.IncludeStageManager),
+		zap.Bool("include_pip", filter.IncludePIP),
+		zap.Bool("include_screen_capture", filter.IncludeScreenCapture))
+
+	adapterStart := time.Now()
 
 	var (
 		waitGroup sync.WaitGroup
@@ -124,15 +152,16 @@ func (a *Adapter) ClickableElements(
 		missionControlActive = a.client.IsMissionControlActive()
 	}
 
-	// Function to collect elements from a source
+	// Function to collect elements from a source — all sources fan out
+	// at the same level for maximum parallelism.
 	collectElements := func(sourceName string, queryFunc func() ([]*element.Element, error)) {
 		defer waitGroup.Done()
 
-		<-semaphore // Acquire semaphore
-
-		defer func() {
-			semaphore <- struct{}{} // Release semaphore
-		}()
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 
 		elements, err := queryFunc()
 		if err != nil {
@@ -157,53 +186,49 @@ func (a *Adapter) ClickableElements(
 		a.logger.Debug("Collected elements from "+sourceName, zap.Int("count", len(elements)))
 	}
 
-	if !missionControlActive {
-		// Query frontmost window AND popover windows (not all windows)
-		// AXPopover windows are siblings to the main window, so we need to get them separately
+	if !missionControlActive && !filter.SkipWindowElements {
+		// Query frontmost window AND popover windows
 		waitGroup.Add(1)
 
 		go func() {
 			collectElements("windows", func() ([]*element.Element, error) {
-				// Get frontmost window (the main/focused window)
-				frontmost, frontmostErr := a.client.FrontmostWindow()
-				if frontmostErr != nil {
-					return nil, frontmostErr
+				windowsToProcess, windowsErr := a.client.FrontmostAndPopoverWindows(ctx)
+				if windowsErr != nil {
+					return nil, windowsErr
 				}
 
-				// Get all windows to find popovers
-				allWindows, allWindowsErr := a.client.AllWindows()
-				if allWindowsErr != nil {
-					frontmost.Release()
-
-					return nil, allWindowsErr
-				}
-
-				// Collect windows to process: frontmost + any AXPopover
-				var windowsToProcess []AXWindow
-
-				windowsToProcess = append(windowsToProcess, frontmost)
-
-				// Add popover windows (siblings to the main window)
-				// Release non-popover windows to avoid leaks
-				for _, w := range allWindows {
-					if w.Role() == "AXPopover" {
-						windowsToProcess = append(windowsToProcess, w)
-					} else {
-						w.Release()
+				if len(windowsToProcess) == 0 {
+					frontmost, frontmostErr := a.client.FrontmostWindow(ctx)
+					if frontmostErr != nil {
+						return nil, frontmostErr
 					}
+
+					windowsToProcess = []AXWindow{frontmost}
 				}
 
 				var allElements []*element.Element
-				for _, window := range windowsToProcess {
+
+				var windowsWg sync.WaitGroup
+
+				var windowsMutex sync.Mutex
+
+				// Semaphore to cap concurrent window processing goroutines
+				windowSem := make(chan struct{}, maxConcurrentWindows)
+
+				processWindow := func(window AXWindow) {
+					defer windowsWg.Done()
+					defer func() { <-windowSem }()
+
 					clickableNodes, clickableNodesErr := a.client.ClickableNodes(
+						ctx,
 						window,
-						filter.IncludeOffscreen,
 						stringRoles(filter.Roles),
+						0,
 					)
 					if clickableNodesErr != nil {
 						window.Release()
 
-						continue
+						return
 					}
 
 					windowElements, processErr := a.processClickableNodes(
@@ -214,40 +239,110 @@ func (a *Adapter) ClickableElements(
 					if processErr != nil {
 						window.Release()
 
-						continue
+						return
 					}
 
+					windowsMutex.Lock()
+
 					allElements = append(allElements, windowElements...)
+					windowsMutex.Unlock()
 
 					window.Release()
 				}
+
+				for _, window := range windowsToProcess {
+					windowSem <- struct{}{}
+
+					windowsWg.Add(1)
+
+					go processWindow(window)
+				}
+
+				windowsWg.Wait()
 
 				return allElements, nil
 			})
 		}()
 	}
 
-	// Query supplementary elements in parallel
-	// AdditionalMenubarTargets only produces elements when IncludeMenubar is true
-	hasAdditionalTargets := filter.IncludeMenubar && len(filter.AdditionalMenubarTargets) > 0
-	if filter.IncludeMenubar || filter.IncludeDock || filter.IncludeStageManager ||
-		filter.IncludeNotificationCenter || hasAdditionalTargets {
+	// Menubar elements
+	if !missionControlActive && filter.IncludeMenubar {
 		waitGroup.Add(1)
 
 		go func() {
-			collectElements("supplementary sources", func() ([]*element.Element, error) {
-				return a.addSupplementaryElements(
-					ctx,
-					[]*element.Element{},
-					filter,
-					missionControlActive,
-				), nil
+			collectElements("menubar", func() ([]*element.Element, error) {
+				return a.addMenubarElements(ctx, nil, filter), nil
 			})
 		}()
 	}
 
-	// Wait for all queries to complete
-	waitGroup.Wait()
+	// Dock elements
+	if filter.IncludeDock {
+		waitGroup.Add(1)
+
+		go func() {
+			collectElements("dock", func() ([]*element.Element, error) {
+				return a.addDockElements(ctx, nil), nil
+			})
+		}()
+	}
+
+	// Notification Center
+	if !missionControlActive && filter.IncludeNotificationCenter {
+		waitGroup.Add(1)
+
+		go func() {
+			collectElements("notification_center", func() ([]*element.Element, error) {
+				return a.addNotificationCenterElements(ctx, nil), nil
+			})
+		}()
+	}
+
+	// Stage Manager
+	if !missionControlActive && filter.IncludeStageManager {
+		waitGroup.Add(1)
+
+		go func() {
+			collectElements("stage_manager", func() ([]*element.Element, error) {
+				return a.addStageManagerElements(ctx, nil), nil
+			})
+		}()
+	}
+
+	// PIP
+	if !missionControlActive && filter.IncludePIP {
+		waitGroup.Add(1)
+
+		go func() {
+			collectElements("pip", func() ([]*element.Element, error) {
+				return a.addPIPElements(ctx, nil), nil
+			})
+		}()
+	}
+
+	// Screen Capture
+	if !missionControlActive && filter.IncludeScreenCapture {
+		waitGroup.Add(1)
+
+		go func() {
+			collectElements("screen_capture", func() ([]*element.Element, error) {
+				return a.addScreenCaptureElements(ctx, nil), nil
+			})
+		}()
+	}
+
+	// Wait for all queries to complete or context to be canceled
+	done := make(chan struct{})
+	go func() {
+		waitGroup.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return nil, derrors.Wrap(ctx.Err(), derrors.CodeContextCanceled, "operation canceled")
+	}
 
 	if firstError != nil {
 		return nil, firstError
@@ -261,7 +356,18 @@ func (a *Adapter) ClickableElements(
 		)
 	}
 
-	a.logger.Info("Total elements collected", zap.Int("count", len(allElements)))
+	elapsed := time.Since(adapterStart)
+	a.logger.Debug("Total elements collected",
+		zap.Int("count", len(allElements)),
+		zap.Duration("total", elapsed))
+
+	// Log warning if collection took too long
+	if elapsed > 2*time.Second {
+		a.logger.Warn("Clickable element collection was slow",
+			zap.Duration("elapsed", elapsed),
+			zap.Int("element_count", len(allElements)),
+		)
+	}
 
 	return allElements, nil
 }
@@ -292,7 +398,7 @@ func (a *Adapter) PerformAction(
 	default:
 	}
 
-	a.logger.Info("Performing action",
+	a.logger.Debug("Performing action",
 		zap.String("action", actionType.String()),
 		zap.String("element_id", string(element.ID())))
 
@@ -320,7 +426,7 @@ func (a *Adapter) PerformActionAtPoint(
 		return err
 	}
 
-	a.logger.Info("Performing action at point",
+	a.logger.Debug("Performing action at point",
 		zap.String("action", actionType.String()),
 		zap.Int("x", point.X),
 		zap.Int("y", point.Y),
@@ -363,7 +469,7 @@ func (a *Adapter) FocusedAppBundleID(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	focusedApp, focusedAppErr := a.client.FocusedApplication()
+	focusedApp, focusedAppErr := a.client.FocusedApplication(ctx)
 	if focusedAppErr != nil {
 		return "", derrors.New(derrors.CodeAccessibilityFailed, "failed to get focused application")
 	}
@@ -398,24 +504,16 @@ func (a *Adapter) Health(ctx context.Context) error {
 	return nil
 }
 
-// ClearCache removes all cached element information from the accessibility cache.
-// This ensures fresh position data is fetched on the next query, which is
-// necessary after the user scrolls (element positions change but cached
-// ElementInfo still holds the pre-scroll coordinates).
-func (a *Adapter) ClearCache() {
-	a.client.ClearCache()
-}
-
 // UpdateClickableRoles updates the list of clickable roles.
 func (a *Adapter) UpdateClickableRoles(roles []string) {
-	a.logger.Info("Updating clickable roles", zap.Int("count", len(roles)))
+	a.logger.Debug("Updating clickable roles", zap.Int("count", len(roles)))
 	a.clickableRoles = roles
 	a.client.SetClickableRoles(roles)
 }
 
 // UpdateExcludedBundles updates the list of excluded bundle IDs.
 func (a *Adapter) UpdateExcludedBundles(bundles []string) {
-	a.logger.Info("Updating excluded bundles", zap.Int("count", len(bundles)))
+	a.logger.Debug("Updating excluded bundles", zap.Int("count", len(bundles)))
 
 	a.excludedBundles = make(map[string]bool, len(bundles))
 	for _, bundle := range bundles {
@@ -454,6 +552,14 @@ func (a *Adapter) processClickableNodes(
 		}
 
 		elementSlicePool.Put(elementsPtr)
+	}()
+
+	processStart := time.Now()
+	defer func() {
+		a.logger.Debug("TIMING: processClickableNodes",
+			zap.Duration("elapsed", time.Since(processStart)),
+			zap.Int("node_count", len(clickableNodes)),
+		)
 	}()
 
 	// Concurrent processing for large number of nodes
@@ -517,7 +623,6 @@ func (a *Adapter) processClickableNodesConcurrent(
 
 	type result struct {
 		elements []*element.Element
-		err      error
 	}
 
 	results := make(chan result, numWorkers)
@@ -551,8 +656,6 @@ func (a *Adapter) processClickableNodesConcurrent(
 						remaining.Release()
 					}
 
-					results <- result{err: ctx.Err()}
-
 					return
 				}
 
@@ -585,11 +688,11 @@ func (a *Adapter) processClickableNodesConcurrent(
 	allElements := make([]*element.Element, 0, len(nodes)/EstimatedFilteringRatio)
 
 	for res := range results {
-		if res.err != nil {
-			return nil, res.err
-		}
-
 		allElements = append(allElements, res.elements...)
+	}
+
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 
 	return allElements, nil

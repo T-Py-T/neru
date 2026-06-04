@@ -18,10 +18,15 @@ type HotkeyID int
 // Callback defines the function signature for hotkey event handlers.
 type Callback func()
 
+type callbackPair struct {
+	press   Callback
+	release Callback
+}
+
 // Manager handles the registration, unregistration, and dispatching of global hotkeys.
 // It maintains a mapping of hotkey IDs to their corresponding callback functions.
 type Manager struct {
-	callbacks map[HotkeyID]Callback
+	callbacks map[HotkeyID]callbackPair
 	mu        sync.RWMutex
 	logger    *zap.Logger
 	nextID    HotkeyID
@@ -30,9 +35,13 @@ type Manager struct {
 // NewManager creates and initializes a new hotkey manager instance.
 // The manager is ready to register hotkeys immediately after creation.
 func NewManager(logger *zap.Logger) *Manager {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
 	manager := &Manager{
-		callbacks: make(map[HotkeyID]Callback),
-		logger:    logger,
+		callbacks: make(map[HotkeyID]callbackPair),
+		logger:    logger.Named("hotkeys"),
 		nextID:    1,
 	}
 
@@ -43,8 +52,15 @@ func NewManager(logger *zap.Logger) *Manager {
 // The keyString parameter should follow the format "Cmd+Shift+X" or similar modifier combinations.
 // Returns the assigned HotkeyID and an error if registration fails.
 func (m *Manager) Register(keyString string, callback Callback) (HotkeyID, error) {
-	m.logger.Debug("Registering hotkey", zap.String("key", keyString))
+	return m.RegisterWithRelease(keyString, callback, nil)
+}
 
+// RegisterWithRelease adds a new global hotkey with press and optional release callbacks.
+func (m *Manager) RegisterWithRelease(
+	keyString string,
+	pressCallback Callback,
+	releaseCallback Callback,
+) (HotkeyID, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -64,12 +80,6 @@ func (m *Manager) Register(keyString string, callback Callback) (HotkeyID, error
 	hotkeyID := m.nextID
 	m.nextID++
 
-	m.logger.Debug("Parsed key string",
-		zap.String("key", keyString),
-		zap.Int("key_code", keyCode),
-		zap.Int("modifiers", modifiers),
-		zap.Int("id", int(hotkeyID)))
-
 	// Register hotkey
 	success := darwin.RegisterHotkey(keyCode, modifiers, int(hotkeyID),
 		darwin.GetHotkeyCallbackBridge(), nil)
@@ -85,10 +95,15 @@ func (m *Manager) Register(keyString string, callback Callback) (HotkeyID, error
 	}
 
 	// Store callback
-	m.callbacks[hotkeyID] = callback
+	m.callbacks[hotkeyID] = callbackPair{
+		press:   pressCallback,
+		release: releaseCallback,
+	}
 
-	m.logger.Info("Registered hotkey",
+	m.logger.Debug("Registered hotkey",
 		zap.String("key", keyString),
+		zap.Int("key_code", keyCode),
+		zap.Int("modifiers", modifiers),
 		zap.Int("id", int(hotkeyID)))
 
 	return hotkeyID, nil
@@ -105,7 +120,7 @@ func (m *Manager) Unregister(hotkeyID HotkeyID) {
 	darwin.UnregisterHotkey(int(hotkeyID))
 	delete(m.callbacks, hotkeyID)
 
-	m.logger.Info("Unregistered hotkey", zap.Int("id", int(hotkeyID)))
+	m.logger.Debug("Unregistered hotkey", zap.Int("id", int(hotkeyID)))
 }
 
 // UnregisterAll removes all currently registered hotkeys.
@@ -118,25 +133,37 @@ func (m *Manager) UnregisterAll() {
 
 	darwin.UnregisterAllHotkeys()
 
-	m.callbacks = make(map[HotkeyID]Callback)
+	m.callbacks = make(map[HotkeyID]callbackPair)
 
-	m.logger.Info("Unregistered all hotkeys")
+	m.logger.Debug("Unregistered all hotkeys")
 }
 
 // handleCallback processes hotkey events received from the C callback darwin.
 // It looks up the appropriate callback function and executes it in a goroutine.
-func (m *Manager) handleCallback(hotkeyID HotkeyID) {
+func (m *Manager) handleCallback(hotkeyID HotkeyID, eventKind darwin.HotkeyEventKind) {
 	m.logger.Debug("Handling hotkey callback", zap.Int("id", int(hotkeyID)))
 
 	m.mu.RLock()
-	callback, ok := m.callbacks[hotkeyID]
+	callbacks, ok := m.callbacks[hotkeyID]
 	m.mu.RUnlock()
 
-	if ok && callback != nil {
-		m.logger.Debug("Hotkey pressed", zap.Int("id", int(hotkeyID)))
-		callback()
-	} else {
+	if !ok {
 		m.logger.Debug("No callback registered for hotkey", zap.Int("id", int(hotkeyID)))
+
+		return
+	}
+
+	switch eventKind {
+	case darwin.HotkeyEventReleased:
+		if callbacks.release != nil {
+			m.logger.Debug("Hotkey released", zap.Int("id", int(hotkeyID)))
+			callbacks.release()
+		}
+	case darwin.HotkeyEventPressed:
+		if callbacks.press != nil {
+			m.logger.Debug("Hotkey pressed", zap.Int("id", int(hotkeyID)))
+			callbacks.press()
+		}
 	}
 }
 
@@ -150,19 +177,20 @@ func SetGlobalManager(manager *Manager) {
 	if manager != nil {
 		manager.logger.Debug("Setting global hotkey manager")
 	} else {
-		// This would be unusual but let's log it
-		logger.Get().Info("Setting global hotkey manager to nil")
+		logger.Get().Named("hotkeys").Debug("Setting global hotkey manager to nil")
 	}
 
 	globalManager = manager
 
 	// Set the handler in the darwin package
 	if manager != nil {
-		darwin.SetHotkeyHandler(func(hotkeyID int) {
+		darwin.SetHotkeyHandler(func(hotkeyID int, eventKind darwin.HotkeyEventKind) {
 			if globalManager != nil {
-				globalManager.logger.Debug("Hotkey callback bridge called", zap.Int("id", hotkeyID))
+				globalManager.logger.Debug("Hotkey callback bridge called",
+					zap.Int("id", hotkeyID),
+					zap.Int("event_kind", int(eventKind)))
 
-				go globalManager.handleCallback(HotkeyID(hotkeyID))
+				go globalManager.handleCallback(HotkeyID(hotkeyID), eventKind)
 			}
 		})
 	} else {

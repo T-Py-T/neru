@@ -400,6 +400,19 @@ func (m *Manager) DrawHintsWithStyle(hintsSlice []*hints.Hint, style hints.Style
 	return derrors.New(derrors.CodeNotSupported, "overlay hints not implemented on linux backend")
 }
 
+// DrawHintSearchInput draws the hints search input using the active Linux backend.
+func (m *Manager) DrawHintSearchInput(
+	_ string,
+	_ int,
+	_ hints.SearchInputFrame,
+	_ hints.SearchInputStyle,
+) error {
+	return nil
+}
+
+// HideHintSearchInput hides the hints search input.
+func (m *Manager) HideHintSearchInput() {}
+
 // DrawModeIndicator draws the mode indicator overlay.
 func (m *Manager) DrawModeIndicator(posX, posY int) {
 	if m.modeIndicatorOverlay == nil {
@@ -604,36 +617,6 @@ func (m *Manager) SetHideUnmatched(hide bool) {
 // SetSharingType is a no-op on Linux.
 func (m *Manager) SetSharingType(_ bool) {}
 
-func (m *Manager) clearStickyBadgeLocked() {
-	if !m.stickyBadgeVisible {
-		return
-	}
-
-	if m.x11 != nil {
-		m.x11.ClearRect(m.stickyBadgeRect)
-	} else if m.wlroots != nil {
-		m.wlroots.ClearRect(m.stickyBadgeRect)
-	}
-
-	m.stickyBadgeVisible = false
-	m.stickyBadgeRect = image.Rectangle{}
-}
-
-func (m *Manager) publish(change StateChange) {
-	m.mu.RLock()
-
-	subs := make([]func(StateChange), 0, len(m.subs))
-	for _, fn := range m.subs {
-		subs = append(subs, fn)
-	}
-
-	m.mu.RUnlock()
-
-	for _, fn := range subs {
-		fn(change)
-	}
-}
-
 // detectLinuxOverlayBackend delegates to the canonical
 // platform.DetectLinuxBackend so that compositor-family detection (GNOME, KDE,
 // wlroots, etc.) is consistent across all layers.
@@ -665,6 +648,39 @@ type overlayBadgeStyle struct {
 	borderWidth float64
 	offsetX     int
 	offsetY     int
+}
+
+// DrawMouseActionIndicator is a macOS-only renderer; Linux currently stubs it.
+func (m *Manager) DrawMouseActionIndicator(_ image.Point, _ ports.MouseActionIndicatorStyle) {}
+
+func (m *Manager) clearStickyBadgeLocked() {
+	if !m.stickyBadgeVisible {
+		return
+	}
+
+	if m.x11 != nil {
+		m.x11.ClearRect(m.stickyBadgeRect)
+	} else if m.wlroots != nil {
+		m.wlroots.ClearRect(m.stickyBadgeRect)
+	}
+
+	m.stickyBadgeVisible = false
+	m.stickyBadgeRect = image.Rectangle{}
+}
+
+func (m *Manager) publish(change StateChange) {
+	m.mu.RLock()
+
+	subs := make([]func(StateChange), 0, len(m.subs))
+	for _, fn := range m.subs {
+		subs = append(subs, fn)
+	}
+
+	m.mu.RUnlock()
+
+	for _, fn := range subs {
+		fn(change)
+	}
 }
 
 func resolveModeIndicatorAppearance(

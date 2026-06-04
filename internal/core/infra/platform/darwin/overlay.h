@@ -16,19 +16,30 @@
 /// Overlay window handle
 typedef void *OverlayWindow;
 
+/// Hint placement constants (must match HintPlacement enum in overlay_darwin.m)
+#define HINT_PLACEMENT_TOP 1
+#define HINT_PLACEMENT_CENTER 2
+#define HINT_PLACEMENT_BOTTOM 3
+
 /// Hint style configuration
 typedef struct {
-	int fontSize;            ///< Font size
-	char *fontFamily;        ///< Font family
-	char *backgroundColor;   ///< Background color
-	char *textColor;         ///< Text color
-	char *matchedTextColor;  ///< Matched text color
-	char *borderColor;       ///< Border color
-	int borderRadius;        ///< Border radius (-1 = auto)
-	int borderWidth;         ///< Border width
-	int paddingX;            ///< Horizontal padding (-1 = auto)
-	int paddingY;            ///< Vertical padding (-1 = auto)
-	int showArrow;           ///< Show arrow (0 = no arrow, 1 = show arrow)
+	int fontSize;                   ///< Font size
+	char *fontFamily;               ///< Font family
+	char *backgroundColor;          ///< Background color
+	char *textColor;                ///< Text color
+	char *matchedTextColor;         ///< Matched text color
+	char *borderColor;              ///< Border color
+	int borderRadius;               ///< Border radius (-1 = auto)
+	int borderWidth;                ///< Border width
+	int paddingX;                   ///< Horizontal padding (-1 = auto)
+	int paddingY;                   ///< Vertical padding (-1 = auto)
+	int showArrow;                  ///< Show arrow (0 = no arrow, 1 = show arrow)
+	int placement;                  ///< Label placement relative to target
+	int boundaryHighlightEnabled;   ///< Draw target boundary highlight (0 = off, 1 = on)
+	int boundaryBorderWidth;        ///< Target boundary border width
+	int boundaryBorderRadius;       ///< Target boundary corner radius
+	char *boundaryBackgroundColor;  ///< Target boundary fill color
+	char *boundaryBorderColor;      ///< Target boundary stroke color
 } HintStyle;
 
 /// Hint data
@@ -38,6 +49,27 @@ typedef struct {
 	CGSize size;              ///< Hint size
 	int matchedPrefixLength;  ///< Number of matched characters to highlight
 } HintData;
+
+/// Hints search input style configuration
+typedef struct {
+	int fontSize;           ///< Font size
+	char *fontFamily;       ///< Font family
+	char *backgroundColor;  ///< Background color
+	char *textColor;        ///< Text color
+	char *borderColor;      ///< Border color
+	int borderRadius;       ///< Border radius (-1 = auto)
+	int borderWidth;        ///< Border width
+	int paddingX;           ///< Horizontal padding (-1 = auto)
+	int paddingY;           ///< Vertical padding (-1 = auto)
+} SearchInputStyle;
+
+/// Hints search input data
+typedef struct {
+	char *query;       ///< Current search query
+	int resultCount;   ///< Current filtered hint count
+	CGPoint position;  ///< Input position in overlay-local coordinates
+	double width;      ///< Input width
+} SearchInputData;
 
 /// Grid cell style configuration
 typedef struct {
@@ -80,6 +112,22 @@ typedef struct {
 	char *fillColor;  ///< Fill color
 } CursorIndicatorStyle;
 
+/// Mouse action indicator style configuration
+typedef struct {
+	int size;               ///< Indicator diameter in points
+	int borderWidth;        ///< Border width in points
+	char *backgroundColor;  ///< Fill color
+	char *borderColor;      ///< Stroke color
+	char *shape;            ///< circle or square
+	int durationMS;         ///< Animation duration in milliseconds
+	double startScale;      ///< Initial transform scale
+	double endScale;        ///< Final transform scale
+	double startOpacity;    ///< Initial opacity
+	double endOpacity;      ///< Final opacity
+	char *easing;           ///< linear, ease_in, ease_out, or ease_in_out
+	int hideInScreenShare;  ///< Hide panel from screen sharing (1 = hidden, 0 = visible)
+} MouseActionIndicatorStyle;
+
 /// Callback type for async operations
 /// @param context Context pointer
 typedef void (*ResizeCompletionCallback)(void *context);
@@ -88,7 +136,7 @@ typedef void (*ResizeCompletionCallback)(void *context);
 
 /// Create overlay window
 /// @return Overlay window handle
-OverlayWindow createOverlayWindow(void);
+OverlayWindow NeruCreateOverlayWindow(void);
 
 /// Destroy overlay window
 /// @param window Overlay window handle
@@ -114,6 +162,16 @@ void NeruClearOverlay(OverlayWindow window);
 /// @param count Number of hints
 /// @param style Hint style
 void NeruDrawHints(OverlayWindow window, HintData *hints, int count, HintStyle style);
+
+/// Draw hints search input
+/// @param window Overlay window handle
+/// @param input Search input data
+/// @param style Search input style
+void NeruDrawHintSearchInput(OverlayWindow window, SearchInputData input, SearchInputStyle style);
+
+/// Hide hints search input
+/// @param window Overlay window handle
+void NeruHideHintSearchInput(OverlayWindow window);
 
 /// Update hint match prefix (incremental update for typing)
 /// @param window Overlay window handle
@@ -208,5 +266,10 @@ void NeruShowCursorIndicator(OverlayWindow window, CGPoint position, CursorIndic
 /// Hide the virtual cursor indicator
 /// @param window Overlay window handle
 void NeruHideCursorIndicator(OverlayWindow window);
+
+/// Show a transient mouse action indicator in its own overlay window.
+/// @param position Global cursor position in Quartz coordinates
+/// @param style Indicator style
+void NeruShowMouseActionIndicator(CGPoint position, MouseActionIndicatorStyle style);
 
 #endif  // OVERLAY_H

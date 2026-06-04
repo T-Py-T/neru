@@ -87,7 +87,7 @@ func (h *Handler) MoveMonitor(
 		return err
 	}
 
-	h.logger.Info("Moved cursor to monitor",
+	h.logger.Debug("Moved cursor to monitor",
 		zap.String("monitor", targetDisplayName),
 		zap.Int("x", center.X),
 		zap.Int("y", center.Y),
@@ -157,7 +157,7 @@ func (h *Handler) MoveMonitorByName(
 		return err
 	}
 
-	h.logger.Info("Moved cursor to monitor by name",
+	h.logger.Debug("Moved cursor to monitor by name",
 		zap.String("monitor", monitorName),
 		zap.Int("x", center.X),
 		zap.Int("y", center.Y),
@@ -375,8 +375,15 @@ func (h *Handler) refreshHintsForMonitorMove(
 
 	filterRoles := h.hints.Context.FilterRoles()
 	filterTextContains := h.hints.Context.FilterTextContains()
+	strategyOverride := h.hints.Context.StrategyOverride()
 
-	domainHints, err := h.hintService.ShowHints(ctx, filterRoles, filterTextContains)
+	domainHints, err := h.hintService.GenerateHints(
+		ctx,
+		filterRoles,
+		filterTextContains,
+		"",
+		strategyOverride,
+	)
 	if err != nil {
 		h.logger.Error(
 			"Failed to refresh hints after monitor move",
@@ -412,7 +419,14 @@ func (h *Handler) refreshHintsForMonitorMove(
 	}
 
 	hintCollection := domainHint.NewCollection(filtered)
-	h.hints.Context.SetHints(hintCollection)
+
+	setHintsErr := h.hints.Context.SetHints(hintCollection)
+	if setHintsErr != nil {
+		h.logger.Error("Failed to set hints after monitor move", zap.Error(setHintsErr))
+		h.exitModeLocked()
+
+		return
+	}
 
 	h.overlayManager.Show()
 }

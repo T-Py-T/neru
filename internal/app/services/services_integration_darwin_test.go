@@ -42,7 +42,6 @@ func TestHintServiceIntegration(t *testing.T) {
 	// Create real adapters (they will be initialized with real infra)
 	cfg := config.DefaultConfig()
 	cfg.Hints.Enabled = true
-	cfg.General.AccessibilityCheckOnStart = false
 
 	// Initialize real adapters like the app does
 	accAdapter, overlay, systemPort := initializeRealAdapters(t, cfg, logger)
@@ -61,6 +60,7 @@ func TestHintServiceIntegration(t *testing.T) {
 		hintGen,
 		cfg.Hints,
 		logger,
+		nil,
 	)
 
 	ctx := context.Background()
@@ -130,7 +130,6 @@ func TestActionServiceIntegration(t *testing.T) {
 	logger := logger.Get()
 
 	cfg := config.DefaultConfig()
-	cfg.General.AccessibilityCheckOnStart = false
 
 	accAdapter, overlayAdapter, systemPort := initializeRealAdapters(t, cfg, logger)
 
@@ -200,7 +199,6 @@ func TestGridServiceIntegration(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.Grid.Enabled = true
-	cfg.General.AccessibilityCheckOnStart = false
 
 	// Initialize real adapters
 	_, overlay, systemPort := initializeRealAdapters(t, cfg, logger)
@@ -234,7 +232,6 @@ func TestScrollServiceIntegration(t *testing.T) {
 	logger := logger.Get()
 
 	cfg := config.DefaultConfig()
-	cfg.General.AccessibilityCheckOnStart = false
 
 	// Initialize real adapters
 	accAdapter, overlay, systemPort := initializeRealAdapters(t, cfg, logger)
@@ -249,6 +246,7 @@ func TestScrollServiceIntegration(t *testing.T) {
 			ctx,
 			services.ScrollDirectionDown,
 			services.ScrollAmountHalfPage,
+			0,
 		)
 		if err != nil {
 			t.Logf("Scroll failed (expected in some environments): %v", err)
@@ -264,9 +262,8 @@ func initializeRealAdapters(
 ) (ports.AccessibilityPort, ports.OverlayPort, ports.SystemPort) {
 	t.Helper()
 
-	// Create infrastructure client (nil cache = use default)
-	axClient := accessibility.NewInfraAXClient(logger, nil, nil)
-	t.Cleanup(func() { axClient.Cache().Stop() })
+	// Create infrastructure client
+	axClient := accessibility.NewInfraAXClient(logger, nil)
 
 	// Create base accessibility adapter
 	accAdapter := accessibility.NewAdapter(

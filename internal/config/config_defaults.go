@@ -11,9 +11,65 @@ const (
 	DefaultHintPaddingX = -1
 	// DefaultHintPaddingY is the default vertical padding for hints (-1 = auto).
 	DefaultHintPaddingY = -1
+	// DefaultHintBoundaryBorderRadius is the default radius for hint target boundaries.
+	DefaultHintBoundaryBorderRadius = -1
+	// DefaultHintBoundaryBorderWidth is the default stroke width for hint target boundaries.
+	DefaultHintBoundaryBorderWidth = 1
+	// DefaultVisionRequestTimeoutMS is the default Vision request timeout.
+	DefaultVisionRequestTimeoutMS = 5000
+	// DefaultVisionMinimumConfidence keeps all Vision observations by default.
+	DefaultVisionMinimumConfidence = 0.0
+	// DefaultVisionMergeIOUThreshold is the default overlap threshold for non-maximum suppression.
+	DefaultVisionMergeIOUThreshold = 0.5
+	// DefaultVisionRectangleMaxCandidates is the default maximum rectangle observations.
+	DefaultVisionRectangleMaxCandidates = 100
+	// DefaultVisionRectangleMinSize is the default minimum normalized rectangle size.
+	DefaultVisionRectangleMinSize = 0.01
+	// DefaultVisionRectangleMinAspect is the default minimum rectangle aspect ratio.
+	DefaultVisionRectangleMinAspect = 0.3
+	// DefaultVisionRectangleMaxAspect is the default maximum rectangle aspect ratio.
+	DefaultVisionRectangleMaxAspect = 10.0
+	// DefaultVisionButtonMinConfidence is the default button confidence threshold.
+	DefaultVisionButtonMinConfidence = 0.3
+	// DefaultVisionButtonMinAspect is the default minimum button aspect ratio.
+	DefaultVisionButtonMinAspect = 0.8
+	// DefaultVisionButtonMaxAspect is the default maximum button aspect ratio.
+	DefaultVisionButtonMaxAspect = 8.0
+	// DefaultVisionButtonIconMaxSize is the default max square button/icon size.
+	DefaultVisionButtonIconMaxSize = 48
+	// DefaultVisionLinkMinAspect is the default minimum link aspect ratio.
+	DefaultVisionLinkMinAspect = 5.0
+	// DefaultVisionLinkMaxHeight is the default maximum link text height.
+	DefaultVisionLinkMaxHeight = 40
+	// DefaultVisionLinkMinWidth is the default minimum link text width.
+	DefaultVisionLinkMinWidth = 50
+	// DefaultVisionImageMinSize is the default minimum size for image classification.
+	DefaultVisionImageMinSize = 48
+	// DefaultVisionCheckboxMaxSize is the default maximum size for checkbox classification.
+	DefaultVisionCheckboxMaxSize = 32
+	// DefaultVisionGenericClickableMinConfidence is the default generic clickable confidence threshold.
+	DefaultVisionGenericClickableMinConfidence = 0.5
+
+	// DefaultSearchInputYOffset is the default Y offset for search input.
+	DefaultSearchInputYOffset = 24
+	// DefaultSearchInputWidth is the default width for search input.
+	DefaultSearchInputWidth = 320
+
+	// DefaultSearchInputMinPaddingY is the minimum padding for search input height.
+	DefaultSearchInputMinPaddingY = 5
+	// DefaultSearchInputPaddingMultiplier is the padding multiplier for search input height.
+	DefaultSearchInputPaddingMultiplier = 2
+	// DefaultSearchInputHeightPadding is the height padding constant for search input.
+	DefaultSearchInputHeightPadding = 6
+
+	// DefaultSearchInputCenterDivisor is the divisor for centering search input horizontally or vertically.
+	DefaultSearchInputCenterDivisor = 2
 
 	// DefaultGridFontSize is the default font size for grid.
 	DefaultGridFontSize = 10
+
+	// DefaultScrollInvert is the default scroll inversion setting.
+	DefaultScrollInvert = false
 
 	// DefaultScrollStep is the default scroll step.
 	DefaultScrollStep = 50
@@ -42,6 +98,13 @@ const (
 	DefaultMaxBackups = 5
 	// DefaultMaxAge is the default max age for logs (30 days).
 	DefaultMaxAge = 30
+
+	// DefaultExecShell is the default shell used for exec commands.
+	DefaultExecShell = "/bin/bash"
+
+	// DefaultExecShellFlag is the shell flag that causes the shell to read
+	// commands from the following string argument (e.g. "-c" or "-lc").
+	DefaultExecShellFlag = "-lc"
 
 	// DefaultSmoothCursorSteps is the default smooth cursor steps.
 	DefaultSmoothCursorSteps = 10
@@ -76,11 +139,6 @@ const (
 	DefaultCallbackMapSize = 8
 	// DefaultSubscriberMapSize is the default subscriber map size.
 	DefaultSubscriberMapSize = 4
-
-	// DefaultParallelThreshold is the default parallel threshold.
-	DefaultParallelThreshold = 20
-	// DefaultMaxParallelDepth is the default max parallel depth.
-	DefaultMaxParallelDepth = 4
 
 	// DefaultMaxDepth is the default max depth for accessibility tree traversal.
 	DefaultMaxDepth = 50
@@ -184,13 +242,27 @@ const (
 	// DefaultRecursiveGridMinTotalCells is the minimum allowed total cells.
 	DefaultRecursiveGridMinTotalCells = 2
 	// DefaultRecursiveGridAnimationDurationMS is the default native recursive-grid transition duration in milliseconds.
-	DefaultRecursiveGridAnimationDurationMS = 180
+	DefaultRecursiveGridAnimationDurationMS = 50
 	// DefaultRecursiveGridLineWidth is the default line width for grid lines.
 	DefaultRecursiveGridLineWidth = 1
 	// DefaultRecursiveGridFontSize is the default font size for cell labels.
 	DefaultRecursiveGridFontSize = 10
 	// DefaultVirtualPointerSize is the default virtual pointer dot radius in points.
 	DefaultVirtualPointerSize = 3
+	// DefaultMouseActionIndicatorSize is the default mouse action indicator diameter in points.
+	DefaultMouseActionIndicatorSize = 36
+	// DefaultMouseActionIndicatorBorderWidth is the default mouse action indicator border width.
+	DefaultMouseActionIndicatorBorderWidth = 2
+	// DefaultMouseActionIndicatorDurationMS is the default mouse action indicator animation duration.
+	DefaultMouseActionIndicatorDurationMS = 260
+	// DefaultMouseActionIndicatorStartScale is the default starting scale for mouse action indicators.
+	DefaultMouseActionIndicatorStartScale = 0.55
+	// DefaultMouseActionIndicatorEndScale is the default ending scale for mouse action indicators.
+	DefaultMouseActionIndicatorEndScale = 1.35
+	// DefaultMouseActionIndicatorStartOpacity is the default starting opacity for mouse action indicators.
+	DefaultMouseActionIndicatorStartOpacity = 0.85
+	// DefaultMouseActionIndicatorEndOpacity is the default ending opacity for mouse action indicators.
+	DefaultMouseActionIndicatorEndOpacity = 0.0
 	// DefaultRecursiveGridLabelBackgroundPaddingX preserves automatic horizontal badge padding.
 	DefaultRecursiveGridLabelBackgroundPaddingX = -1
 	// DefaultRecursiveGridLabelBackgroundPaddingY preserves automatic vertical badge padding.
@@ -233,12 +305,13 @@ func newDefaultConfig() *Config {
 	return &Config{
 		General: GeneralConfig{
 			ExcludedApps:                      []string{},
-			AccessibilityCheckOnStart:         true,
 			PassthroughUnboundedKeys:          false,
 			ShouldExitAfterPassthrough:        false,
 			PassthroughUnboundedKeysBlacklist: []string{},
 			HideOverlayInScreenShare:          false,
 			KBLayoutToUse:                     "",
+			ExecShell:                         DefaultExecShell,
+			ExecShellArgs:                     []string{DefaultExecShellFlag},
 		},
 		Theme: defaultThemeConfig(),
 		Hotkeys: HotkeysConfig{
@@ -250,13 +323,16 @@ func newDefaultConfig() *Config {
 			},
 		},
 		Hints: HintsConfig{
-			Enabled:           true,
-			HintCharacters:    "asdfghjkl",
-			MaxDepth:          DefaultMaxDepth,
-			ParallelThreshold: DefaultParallelThreshold,
+			Enabled:        true,
+			Strategy:       StrategyAXTree,
+			HintCharacters: "asdfghjkl",
+			MaxDepth:       DefaultMaxDepth,
 			Hotkeys: map[string]StringOrStringArray{
 				"Escape":    {"idle"},
+				"/":         {"action search_hints"},
 				"Backspace": {"action backspace"},
+				"Tab":       {"action cycle_hint"},
+				"Shift+Tab": {"action cycle_hint --backward"},
 				"Shift+L":   {"action left_click"},
 				"Shift+R":   {"action right_click"},
 				"Shift+M":   {"action middle_click"},
@@ -275,10 +351,54 @@ func newDefaultConfig() *Config {
 				PaddingX:         DefaultHintPaddingX,
 				PaddingY:         DefaultHintPaddingY,
 				BorderWidth:      1,
+				Placement:        "bottom",
 				BackgroundColor:  Color{},
 				TextColor:        Color{},
 				MatchedTextColor: Color{},
 				BorderColor:      Color{},
+			},
+			SearchInputUI: SearchInputUI{
+				FontSize:        DefaultHintFontSize,
+				FontFamily:      "",
+				BorderRadius:    DefaultHintBorderRadius,
+				PaddingX:        DefaultHintPaddingX,
+				PaddingY:        DefaultHintPaddingY,
+				BorderWidth:     1,
+				Position:        "bottom_center",
+				XOffset:         0,
+				YOffset:         DefaultSearchInputYOffset,
+				Width:           DefaultSearchInputWidth,
+				BackgroundColor: Color{},
+				TextColor:       Color{},
+				BorderColor:     Color{},
+			},
+			BoundaryHighlight: BoundaryHighlightUI{
+				Enabled:         false,
+				BorderWidth:     DefaultHintBoundaryBorderWidth,
+				BorderRadius:    DefaultHintBoundaryBorderRadius,
+				BorderColor:     Color{},
+				BackgroundColor: Color{},
+			},
+			Vision: HintsVisionConfig{
+				DetectText:                    true,
+				DetectRectangles:              true,
+				RequestTimeoutMS:              DefaultVisionRequestTimeoutMS,
+				MinimumConfidence:             DefaultVisionMinimumConfidence,
+				MergeIOUThreshold:             DefaultVisionMergeIOUThreshold,
+				RectangleMaxCandidates:        DefaultVisionRectangleMaxCandidates,
+				RectangleMinSize:              DefaultVisionRectangleMinSize,
+				RectangleMinAspect:            DefaultVisionRectangleMinAspect,
+				RectangleMaxAspect:            DefaultVisionRectangleMaxAspect,
+				ButtonMinConfidence:           DefaultVisionButtonMinConfidence,
+				ButtonMinAspect:               DefaultVisionButtonMinAspect,
+				ButtonMaxAspect:               DefaultVisionButtonMaxAspect,
+				ButtonIconMaxSize:             DefaultVisionButtonIconMaxSize,
+				LinkMinAspect:                 DefaultVisionLinkMinAspect,
+				LinkMaxHeight:                 DefaultVisionLinkMaxHeight,
+				LinkMinWidth:                  DefaultVisionLinkMinWidth,
+				ImageMinSize:                  DefaultVisionImageMinSize,
+				CheckboxMaxSize:               DefaultVisionCheckboxMaxSize,
+				GenericClickableMinConfidence: DefaultVisionGenericClickableMinConfidence,
 			},
 
 			IncludeMenubarHints:           false,
@@ -286,11 +406,16 @@ func newDefaultConfig() *Config {
 			IncludeDockHints:              false,
 			IncludeNCHints:                false,
 			IncludeStageManagerHints:      false,
+			IncludePIPHints:               false,
+			IncludeScreenCaptureHints:     false,
 			DetectMissionControl:          false,
+			OnMissionControlActivated:     nil,
+			OnMissionControlDeactivated:   nil,
 
 			ClickableRoles: []string{},
 
 			IgnoreClickableCheck: false,
+			VisibleCheckEnabled:  false,
 
 			AppConfigs: []AppConfig{},
 
@@ -299,6 +424,7 @@ func newDefaultConfig() *Config {
 				AdditionalElectronBundles: []string{},
 				AdditionalChromiumBundles: []string{},
 				AdditionalFirefoxBundles:  []string{},
+				AdditionalWebKitBundles:   []string{},
 			},
 		},
 		Grid: GridConfig{
@@ -342,13 +468,13 @@ func newDefaultConfig() *Config {
 		RecursiveGrid: RecursiveGridConfig{
 			Enabled: true,
 			Animation: RecursiveGridAnimationConfig{
-				Enabled:    false,
+				Enabled:    true,
 				DurationMS: DefaultRecursiveGridAnimationDurationMS,
 			},
-			GridCols: 2, //nolint:mnd
-			GridRows: 2, //nolint:mnd
+			GridCols: 3, //nolint:mnd
+			GridRows: 3, //nolint:mnd
 
-			Keys: "uijk", // warpd convention: u=TL, i=TR, j=BL, k=BR
+			Keys: "rtyfghvbn", // 3x3 grid: left-to-right, top-to-bottom
 			Hotkeys: map[string]StringOrStringArray{
 				"Escape":    {"idle"},
 				"`":         {"toggle-cursor-follow-selection"},
@@ -393,6 +519,31 @@ func newDefaultConfig() *Config {
 			UI: VirtualPointerUI{
 				Size:  DefaultVirtualPointerSize,
 				Color: Color{},
+			},
+		},
+		MouseAction: MouseActionConfig{
+			Enabled: false,
+			Actions: []string{
+				"left_click",
+				"right_click",
+				"middle_click",
+				"mouse_down",
+				"mouse_up",
+			},
+			UI: MouseActionUI{
+				Size:            DefaultMouseActionIndicatorSize,
+				BorderWidth:     DefaultMouseActionIndicatorBorderWidth,
+				BackgroundColor: Color{},
+				BorderColor:     Color{},
+				Shape:           "circle",
+			},
+			Animation: MouseActionAnimation{
+				DurationMS:   DefaultMouseActionIndicatorDurationMS,
+				StartScale:   DefaultMouseActionIndicatorStartScale,
+				EndScale:     DefaultMouseActionIndicatorEndScale,
+				StartOpacity: DefaultMouseActionIndicatorStartOpacity,
+				EndOpacity:   DefaultMouseActionIndicatorEndOpacity,
+				Easing:       "ease_out",
 			},
 		},
 		ModeIndicator: ModeIndicatorConfig{
@@ -447,6 +598,8 @@ func newDefaultConfig() *Config {
 			ScrollStep:     DefaultScrollStep,
 			ScrollStepHalf: DefaultScrollStepHalf,
 			ScrollStepFull: DefaultScrollStepFull,
+			InvertScroll:   DefaultScrollInvert,
+			AppConfigs:     []AppConfig{},
 			Hotkeys: map[string]StringOrStringArray{
 				"Escape":   {"idle"},
 				"k":        {"action scroll_up"},
@@ -473,7 +626,6 @@ func newDefaultConfig() *Config {
 		Logging: LoggingConfig{
 			LogLevel:           "info",
 			LogFile:            "",
-			StructuredLogging:  true,
 			DisableFileLogging: true,
 			MaxFileSize:        DefaultMaxFileSize,
 			MaxBackups:         DefaultMaxBackups,

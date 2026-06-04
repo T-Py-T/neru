@@ -213,13 +213,22 @@ func TestAdapter_MatchesFilter(t *testing.T) {
 		element.RoleButton,
 	)
 
+	elemWithSearchText, _ := element.NewElement(
+		element.ID("test-id-with-search-text"),
+		image.Rect(0, 0, 100, 100),
+		element.RoleButton,
+		element.WithSearchText("Apple Notes row"),
+	)
+
 	tests := []struct {
 		name   string
+		elem   *element.Element
 		filter ports.ElementFilter
 		want   bool
 	}{
 		{
 			name: "match by role",
+			elem: elem,
 			filter: ports.ElementFilter{
 				Roles: []element.Role{element.RoleButton},
 			},
@@ -227,6 +236,7 @@ func TestAdapter_MatchesFilter(t *testing.T) {
 		},
 		{
 			name: "no match by role",
+			elem: elem,
 			filter: ports.ElementFilter{
 				Roles: []element.Role{element.RoleLink},
 			},
@@ -234,8 +244,17 @@ func TestAdapter_MatchesFilter(t *testing.T) {
 		},
 		{
 			name: "match by min size",
+			elem: elem,
 			filter: ports.ElementFilter{
 				MinSize: image.Point{X: 50, Y: 50},
+			},
+			want: true,
+		},
+		{
+			name: "match by extra search text",
+			elem: elemWithSearchText,
+			filter: ports.ElementFilter{
+				ValueContains: "notes",
 			},
 			want: true,
 		},
@@ -243,7 +262,7 @@ func TestAdapter_MatchesFilter(t *testing.T) {
 
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := adapter.MatchesFilter(elem, testCase.filter)
+			got := adapter.MatchesFilter(testCase.elem, testCase.filter)
 			if got != testCase.want {
 				t.Errorf("matchesFilter() = %v, want %v", got, testCase.want)
 			}
@@ -512,6 +531,56 @@ func TestAdapter_RolePassing(t *testing.T) {
 			t.Errorf(
 				"Expected ClickableNodesRolesHistory to contain roles with AXDockItem, got: %v",
 				mockClient.ClickableNodesRolesHistory,
+			)
+		}
+	})
+
+	t.Run("Picture in Picture Elements", func(t *testing.T) {
+		mockClient.LastCalledBundleID = ""
+		mockClient.LastBundleRoles = nil
+
+		filter := ports.ElementFilter{
+			IncludePIP: true,
+		}
+
+		_, _ = adapter.ClickableElements(ctx, filter)
+
+		if mockClient.LastCalledBundleID != "com.apple.PIPAgent" {
+			t.Errorf(
+				"Expected PIP supplementary query to use com.apple.PIPAgent, got: %q",
+				mockClient.LastCalledBundleID,
+			)
+		}
+
+		if mockClient.LastBundleRoles != nil {
+			t.Errorf(
+				"Expected PIP query to pass nil roles (no role restriction), got: %v",
+				mockClient.LastBundleRoles,
+			)
+		}
+	})
+
+	t.Run("Screen Capture Elements", func(t *testing.T) {
+		mockClient.LastCalledBundleID = ""
+		mockClient.LastBundleRoles = nil
+
+		filter := ports.ElementFilter{
+			IncludeScreenCapture: true,
+		}
+
+		_, _ = adapter.ClickableElements(ctx, filter)
+
+		if mockClient.LastCalledBundleID != "com.apple.screencaptureui" {
+			t.Errorf(
+				"Expected Screen Capture supplementary query to use com.apple.screencaptureui, got: %q",
+				mockClient.LastCalledBundleID,
+			)
+		}
+
+		if mockClient.LastBundleRoles != nil {
+			t.Errorf(
+				"Expected Screen Capture query to pass nil roles (no role restriction), got: %v",
+				mockClient.LastBundleRoles,
 			)
 		}
 	})

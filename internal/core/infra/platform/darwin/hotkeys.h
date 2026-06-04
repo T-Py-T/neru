@@ -14,16 +14,17 @@
 
 /// Hotkey callback type
 /// @param hotkeyId Hotkey identifier
+/// @param eventKind Event kind (1 = pressed, 2 = released)
 /// @param userData User data pointer
-typedef void (*HotkeyCallback)(int hotkeyId, void *userData);
+typedef void (*HotkeyCallback)(int hotkeyId, int eventKind, void *userData);
 
 /// Modifier keys
 typedef enum {
-	ModifierNone = 0,       ///< No modifier
-	ModifierCmd = 1 << 0,   ///< Command key
-	ModifierShift = 1 << 1, ///< Shift key
-	ModifierAlt = 1 << 2,   ///< Alt/Option key
-	ModifierCtrl = 1 << 3   ///< Control key
+	ModifierNone = 0,        ///< No modifier
+	ModifierCmd = 1 << 0,    ///< Command key
+	ModifierShift = 1 << 1,  ///< Shift key
+	ModifierAlt = 1 << 2,    ///< Alt/Option key
+	ModifierCtrl = 1 << 3    ///< Control key
 } ModifierKey;
 
 #pragma mark - Hotkey Functions
@@ -35,20 +36,20 @@ typedef enum {
 /// @param callback Callback function
 /// @param userData User data pointer
 /// @return 1 on success, 0 on failure
-int registerHotkey(int keyCode, int modifiers, int hotkeyId, HotkeyCallback callback, void *userData);
+int NeruRegisterHotkey(int keyCode, int modifiers, int hotkeyId, HotkeyCallback callback, void *userData);
 
 /// Unregister hotkey
 /// @param hotkeyId Hotkey identifier
-void unregisterHotkey(int hotkeyId);
+void NeruUnregisterHotkey(int hotkeyId);
 
 /// Unregister all hotkeys
-void unregisterAllHotkeys(void);
+void NeruUnregisterAllHotkeys(void);
 
 /// Parse key string
 /// @param keyString Key string (e.g., "Cmd+Shift+Space")
 /// @param keyCode Output parameter for key code
 /// @param modifiers Output parameter for modifiers
 /// @return 1 on success, 0 on failure
-int parseKeyString(const char *keyString, int *keyCode, int *modifiers);
+int NeruParseKeyString(const char *keyString, int *keyCode, int *modifiers);
 
-#endif // HOTKEYS_H
+#endif  // HOTKEYS_H

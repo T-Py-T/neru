@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"image"
 	"strconv"
 	"strings"
@@ -78,7 +79,10 @@ type parsedActionArgs struct {
 	monitorName    string
 	hasMonitorName bool
 	usePrevious    bool
+	useBackward    bool
 	modifierStr    string
+	stepsOverride  int
+	hasSteps       bool
 }
 
 func shouldClearSelectionAfterMoveMouse(parsed parsedActionArgs, targetsSelection bool) bool {
@@ -206,6 +210,8 @@ func parseActionArgs(rawArgs []string) (parsedActionArgs, bool) {
 			parsed.useBare = true
 		case arg == "--previous":
 			parsed.usePrevious = true
+		case arg == "--backward":
+			parsed.useBackward = true
 		case strings.HasPrefix(arg, "--name") && (arg == "--name" || arg[len("--name")] == '='):
 			val, newIdx, ok := extractStringFlag(rawArgs, idx, "--name")
 			idx = newIdx
@@ -218,6 +224,18 @@ func parseActionArgs(rawArgs []string) (parsedActionArgs, bool) {
 
 			parsed.monitorName = val
 			parsed.hasMonitorName = true
+		case strings.HasPrefix(arg, "--steps") && (arg == "--steps" || arg[len("--steps")] == '='):
+			val, newIdx, ok := extractIntFlag(rawArgs, idx, "--steps")
+			idx = newIdx
+
+			if !ok || val <= 0 {
+				parseErr = true
+
+				break
+			}
+
+			parsed.stepsOverride = val
+			parsed.hasSteps = true
 		default:
 			if strings.HasPrefix(arg, "--") {
 				parseErr = true
@@ -284,6 +302,18 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 
 	if action.IsMoveMonitorAction(actionName) {
 		return h.handleMoveMonitorAction(ctx, parsed)
+	}
+
+	if action.IsCycleHintAction(actionName) {
+		return h.handleCycleHintAction(ctx, parsed)
+	}
+
+	if action.IsSearchHintsAction(actionName) {
+		return h.handleSearchHintsAction(parsed)
+	}
+
+	if action.IsFocusWindowAction(actionName) {
+		return h.handleFocusWindowAction(ctx, parsed)
 	}
 
 	modifiers, modErr := action.ParseModifiers(parsed.modifierStr)
@@ -450,7 +480,7 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 
 		offsetX, offsetY := parsed.xVal, parsed.yVal
 
-		h.logger.Info("Moving mouse to center via IPC",
+		h.logger.Debug("Moving mouse to center via IPC",
 			zap.Int("offsetX", offsetX),
 			zap.Int("offsetY", offsetY),
 		)
@@ -489,7 +519,7 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 
 		offsetX, offsetY := parsed.xVal, parsed.yVal
 
-		h.logger.Info("Moving mouse to window center via IPC",
+		h.logger.Debug("Moving mouse to window center via IPC",
 			zap.Int("offsetX", offsetX),
 			zap.Int("offsetY", offsetY),
 		)
@@ -534,7 +564,7 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 			}
 		}
 
-		h.logger.Info("Moving mouse relative via IPC",
+		h.logger.Debug("Moving mouse relative via IPC",
 			zap.Int("dx", parsed.deltaX),
 			zap.Int("dy", parsed.deltaY),
 		)
@@ -563,7 +593,7 @@ func (h *IPCControllerActions) handleAction(ctx context.Context, cmd ipc.Command
 		}
 	}
 
-	h.logger.Info("Performing action via IPC",
+	h.logger.Debug("Performing action via IPC",
 		zap.String("action", actionName),
 		zap.Int("x", parsed.xVal),
 		zap.Int("y", parsed.yVal),
@@ -624,7 +654,7 @@ func (h *IPCControllerActions) handleFeedAction(args []string) ipc.Response {
 		keys = append(keys, key)
 	}
 
-	h.logger.Info("Feeding keys via IPC", zap.Strings("keys", keys))
+	h.logger.Debug("Feeding keys via IPC", zap.Int("key_count", len(keys)))
 
 	for index, key := range keys {
 		err := keyfeed.Feed(key)
@@ -641,7 +671,7 @@ func (h *IPCControllerActions) handleFeedAction(args []string) ipc.Response {
 
 			return ipc.Response{
 				Success: false,
-				Message: "failed to feed key " + key + ": " + err.Error(),
+				Message: fmt.Sprintf("failed to feed key %s: %s", key, err.Error()),
 				Code:    code,
 			}
 		}
@@ -1137,7 +1167,7 @@ func (h *IPCControllerActions) handleMoveMonitorAction(
 	}
 
 	if parsed.hasMonitorName {
-		h.logger.Info("Moving to monitor by name via IPC",
+		h.logger.Debug("Moving to monitor by name via IPC",
 			zap.String("monitor", parsed.monitorName),
 		)
 
@@ -1164,7 +1194,7 @@ func (h *IPCControllerActions) handleMoveMonitorAction(
 		direction = modes.MonitorDirectionPrevious
 	}
 
-	h.logger.Info("Cycling monitor via IPC",
+	h.logger.Debug("Cycling monitor via IPC",
 		zap.Bool("previous", parsed.usePrevious),
 	)
 
@@ -1182,6 +1212,88 @@ func (h *IPCControllerActions) handleMoveMonitorAction(
 	return ipc.Response{
 		Success: true,
 		Message: "move_monitor performed",
+		Code:    ipc.CodeOK,
+	}
+}
+
+// handleCycleHintAction cycles through visible hints in hints mode.
+func (h *IPCControllerActions) handleCycleHintAction(
+	ctx context.Context,
+	parsed parsedActionArgs,
+) ipc.Response {
+	if parsed.hasX || parsed.hasY || parsed.hasDX || parsed.hasDY ||
+		parsed.hasCenter || parsed.hasWindow || parsed.useSelection ||
+		parsed.useBare || parsed.hasMonitorName || parsed.usePrevious ||
+		parsed.modifierStr != "" {
+		return ipc.Response{
+			Success: false,
+			Message: "cycle_hint does not support these flags",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
+	if h.modesHandler == nil {
+		return ipc.Response{
+			Success: false,
+			Message: "modes handler not available",
+			Code:    ipc.CodeActionFailed,
+		}
+	}
+
+	h.logger.Debug("Cycling hints via IPC",
+		zap.Bool("backward", parsed.useBackward),
+	)
+
+	err := h.modesHandler.CycleHint(ctx, parsed.useBackward)
+	if err != nil {
+		h.logger.Error("Failed to cycle hints", zap.Error(err))
+
+		return ipc.Response{
+			Success: false,
+			Message: "failed to cycle hints: " + err.Error(),
+			Code:    ipc.CodeActionFailed,
+		}
+	}
+
+	return ipc.Response{
+		Success: true,
+		Message: "cycle_hint performed",
+		Code:    ipc.CodeOK,
+	}
+}
+
+// handleSearchHintsAction activates text search in hints mode.
+func (h *IPCControllerActions) handleSearchHintsAction(parsed parsedActionArgs) ipc.Response {
+	if hasUnsupportedFlags(parsed) || parsed.useBackward || parsed.hasWindow {
+		return ipc.Response{
+			Success: false,
+			Message: "search_hints does not support action flags",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
+	if h.modesHandler == nil {
+		return ipc.Response{
+			Success: false,
+			Message: "modes handler not available",
+			Code:    ipc.CodeActionFailed,
+		}
+	}
+
+	err := h.modesHandler.StartHintSearch()
+	if err != nil {
+		h.logger.Error("Failed to start hint search", zap.Error(err))
+
+		return ipc.Response{
+			Success: false,
+			Message: "failed to start hint search: " + err.Error(),
+			Code:    ipc.CodeActionFailed,
+		}
+	}
+
+	return ipc.Response{
+		Success: true,
+		Message: "search_hints activated",
 		Code:    ipc.CodeOK,
 	}
 }
@@ -1229,7 +1341,15 @@ func (h *IPCControllerActions) handleScrollAction(
 		}
 	}
 
-	h.logger.Info("Performing scroll action via IPC",
+	if parsed.hasSteps && amount != services.ScrollAmountChar {
+		return ipc.Response{
+			Success: false,
+			Message: "--steps is only supported with scroll_up, scroll_down, scroll_left, and scroll_right",
+			Code:    ipc.CodeInvalidInput,
+		}
+	}
+
+	h.logger.Debug("Performing scroll action via IPC",
 		zap.String("action", actionName),
 		zap.Int("direction", int(direction)),
 		zap.Int("amount", int(amount)),
@@ -1273,7 +1393,7 @@ func (h *IPCControllerActions) handleScrollAction(
 		}
 	}
 
-	scrollErr := h.scrollService.Scroll(ctx, direction, amount)
+	scrollErr := h.scrollService.Scroll(ctx, direction, amount, parsed.stepsOverride)
 	if scrollErr != nil {
 		h.logger.Error("Scroll action failed", zap.Error(scrollErr),
 			zap.String("action", actionName))

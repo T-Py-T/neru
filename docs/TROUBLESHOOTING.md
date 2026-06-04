@@ -10,13 +10,15 @@ Common issues and solutions for Neru.
 - [Installation & Setup](#installation--setup)
 - [Permissions](#permissions)
 - [Hints & Grids](#hints--grids)
-- [Hotkeys](#hotkeys)
-- [Performance](#performance)
-- [Daemon](#daemon)
-- [App-Specific](#app-specific)
+- [Hotkeys Not Working](#hotkeys-not-working)
+- [Performance Issues](#performance-issues)
+- [Daemon Issues](#daemon-issues)
+- [App-Specific Issues](#app-specific-issues)
 - [Keyboard Layout Issues](#keyboard-layout-issues)
-- [Configuration](#configuration)
-- [Debugging](#debugging)
+- [Configuration Issues](#configuration-issues)
+- [Logging and Debugging](#logging-and-debugging)
+- [Getting Help](#getting-help)
+- [Emergency Reset](#emergency-reset)
 
 ---
 
@@ -474,7 +476,7 @@ detect_mission_control = true
 ```
 
 > [!NOTE]
-> `detect_mission_control` is only working on macOS 26.x (tahoe). Do not enable this if your macOS version is below Tahoe (26.x) at all cost!
+> Mission Control detection uses `CGWindowListCopyWindowInfo` to check for Dock overlay windows. It works on macOS 14+ (Sonoma) and 15+ (Sequoia/Tahoe). On macOS 13 and earlier, it looks for a "Mission Control" app window instead.
 
 ---
 
@@ -618,9 +620,15 @@ grep "com.apple.Safari" ~/Library/Logs/neru/app.log
 
 **"Enabled AXManualAccessibility"** - Electron support activated successfully
 
-**"No clickable elements found"** - No hints to show (app may need custom config)
+**"Hints mode activated"** - Hint overlay is active; includes hint count when available
 
-**"Failed to get AX elements"** - Accessibility permission issue
+**"Clickable element collection was slow"** - Accessibility scanning completed but took longer than expected
+
+**"Failed to get clickable elements"** - Accessibility query failed; check macOS Accessibility permission and app-specific exclusions
+
+**"Secure input is enabled, blocking mode activation"** - macOS secure input is active, often because a password field is focused
+
+Most key routing, overlay redraw, and hint filtering details are logged only at `debug` to keep production logs quiet.
 
 ### Clear logs
 

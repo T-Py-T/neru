@@ -1,9 +1,9 @@
 package accessibility
 
 import (
+	"context"
 	"fmt"
 	"image"
-	"strings"
 
 	"go.uber.org/zap"
 
@@ -15,39 +15,26 @@ import (
 // InfraAXClient implements AXClient using the infrastructure layer.
 type InfraAXClient struct {
 	logger         *zap.Logger
-	cache          *InfoCache
 	configProvider config.Provider
 }
 
 // NewInfraAXClient creates a new infrastructure-based AXClient.
-// If cache is nil, a default InfoCache is created automatically.
 func NewInfraAXClient(
 	logger *zap.Logger,
-	cache *InfoCache,
 	configProvider config.Provider,
 ) *InfraAXClient {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 
-	if cache == nil {
-		cache = NewInfoCache(logger)
-	}
-
 	return &InfraAXClient{
-		logger:         logger,
-		cache:          cache,
+		logger:         logger.Named("accessibility.client"),
 		configProvider: configProvider,
 	}
 }
 
-// Cache returns the InfoCache used by this client.
-func (c *InfraAXClient) Cache() *InfoCache {
-	return c.cache
-}
-
 // FrontmostWindow returns the frontmost window.
-func (c *InfraAXClient) FrontmostWindow() (AXWindow, error) {
+func (c *InfraAXClient) FrontmostWindow(_ context.Context) (AXWindow, error) {
 	window := FrontmostWindow()
 	if window == nil {
 		return nil, derrors.New(derrors.CodeAccessibilityFailed, "failed to get frontmost window")
@@ -57,7 +44,7 @@ func (c *InfraAXClient) FrontmostWindow() (AXWindow, error) {
 }
 
 // AllWindows returns all windows of the focused application.
-func (c *InfraAXClient) AllWindows() ([]AXWindow, error) {
+func (c *InfraAXClient) AllWindows(_ context.Context) ([]AXWindow, error) {
 	windows, err := AllWindows()
 	if err != nil {
 		return nil, err
@@ -71,8 +58,23 @@ func (c *InfraAXClient) AllWindows() ([]AXWindow, error) {
 	return result, nil
 }
 
+// FrontmostAndPopoverWindows returns the frontmost window plus popovers.
+func (c *InfraAXClient) FrontmostAndPopoverWindows(_ context.Context) ([]AXWindow, error) {
+	windows, err := FrontmostAndPopoverWindows()
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]AXWindow, len(windows))
+	for i, w := range windows {
+		result[i] = &InfraWindow{element: w}
+	}
+
+	return result, nil
+}
+
 // FocusedApplication returns the focused application.
-func (c *InfraAXClient) FocusedApplication() (AXApp, error) {
+func (c *InfraAXClient) FocusedApplication(_ context.Context) (AXApp, error) {
 	app := FocusedApplication()
 	if app == nil {
 		return nil, derrors.New(derrors.CodeAccessibilityFailed, "failed to get focused app")
@@ -82,52 +84,21 @@ func (c *InfraAXClient) FocusedApplication() (AXApp, error) {
 }
 
 // ClickableNodes returns clickable nodes for the given root element.
+// If maxDepth is > 0, it overrides the configured tree depth.
 func (c *InfraAXClient) ClickableNodes(
+	ctx context.Context,
 	root AXElement,
-	includeOffscreen bool,
 	roles []string,
+	maxDepth int,
 ) ([]AXNode, error) {
-	var element *Element
-
-	switch elementType := root.(type) {
-	case *InfraWindow:
-		element = elementType.element
-	case *InfraApp:
-		element = elementType.element
-	default:
-		return nil, derrors.New(derrors.CodeInvalidInput, "invalid element type")
+	element, extractErr := c.extractElement(root)
+	if extractErr != nil {
+		return nil, extractErr
 	}
 
-	if element == nil {
-		return nil, derrors.New(derrors.CodeInvalidInput, "element is nil")
-	}
+	opts, allowedRoles, ignoreClickableCheck := c.buildClickableOpts(element, roles, maxDepth)
 
-	opts := DefaultTreeOptions(c.logger)
-	opts.SetCache(c.cache)
-	opts.SetIncludeOutOfBounds(includeOffscreen)
-
-	// Enable strict filtering for Chromium/Electron apps which have noisy DOM trees
-	bundleID := element.BundleIdentifier()
-	if isLikelyChromiumOrElectron(bundleID) ||
-		isUserConfiguredChromiumElectron(bundleID, c.configProvider) {
-		opts.SetStrictFiltering(true)
-
-		if includeOffscreen {
-			c.logger.Warn(
-				"strict filtering requires includeOutOfBounds=false, overriding user preference",
-				zap.String("bundle_id", bundleID),
-			)
-		}
-
-		opts.SetIncludeOutOfBounds(false) // strict filtering requires bound checks to be active
-	}
-
-	if cfg := currentConfig(c.configProvider); cfg != nil {
-		opts.SetMaxDepth(cfg.Hints.MaxDepth)
-		opts.SetParallelThreshold(cfg.Hints.ParallelThreshold)
-	}
-
-	tree, treeErr := BuildTree(element, opts)
+	tree, treeErr := BuildTree(ctx, element, opts)
 	if treeErr != nil {
 		return nil, derrors.Wrap(
 			treeErr,
@@ -136,18 +107,14 @@ func (c *InfraAXClient) ClickableNodes(
 		)
 	}
 
-	var allowedRoles map[string]struct{}
-	if len(roles) > 0 {
-		allowedRoles = make(map[string]struct{}, len(roles))
-		for _, role := range roles {
-			allowedRoles[role] = struct{}{}
-		}
-	}
-
-	clickableNodes := tree.FindClickableElements(allowedRoles, c.cache, c.configProvider)
+	clickableNodes := tree.FindClickableElements(
+		allowedRoles,
+		c.configProvider,
+		ignoreClickableCheck,
+	)
 
 	// Release tree nodes that are not part of the result to avoid
-	// leaking CFRetain'd AXUIElementRefs from getChildren/getVisibleRows.
+	// leaking CFRetain'd AXUIElementRefs from NeruGetChildren/NeruGetVisibleRows.
 	releaseTreeExcept(tree, clickableNodes)
 
 	clickableNodesResult := make([]AXNode, len(clickableNodes))
@@ -155,7 +122,7 @@ func (c *InfraAXClient) ClickableNodes(
 	for i, node := range clickableNodes {
 		clickableNodesResult[i] = &InfraNode{
 			node:           node,
-			cache:          c.cache,
+			clickable:      true,
 			configProvider: c.configProvider,
 		}
 	}
@@ -164,7 +131,7 @@ func (c *InfraAXClient) ClickableNodes(
 }
 
 // ApplicationByBundleID returns the application with the given bundle ID.
-func (c *InfraAXClient) ApplicationByBundleID(bundleID string) (AXApp, error) {
+func (c *InfraAXClient) ApplicationByBundleID(_ context.Context, bundleID string) (AXApp, error) {
 	app := ApplicationByBundleID(bundleID)
 	if app == nil {
 		return nil, derrors.New(derrors.CodeAccessibilityFailed, "application not found")
@@ -174,14 +141,16 @@ func (c *InfraAXClient) ApplicationByBundleID(bundleID string) (AXApp, error) {
 }
 
 // MenuBarClickableElements returns clickable elements in the menu bar.
+// If maxDepth is > 0, it overrides the configured tree depth.
 func (c *InfraAXClient) MenuBarClickableElements(
-	strictFiltering bool,
+	ctx context.Context,
+	maxDepth int,
 ) ([]AXNode, error) {
 	nodes, nodesErr := MenuBarClickableElements(
+		ctx,
 		c.logger,
-		c.cache,
 		c.configProvider,
-		strictFiltering,
+		maxDepth,
 	)
 	if nodesErr != nil {
 		return nil, derrors.Wrap(
@@ -195,7 +164,7 @@ func (c *InfraAXClient) MenuBarClickableElements(
 	for index, node := range nodes {
 		nodesResult[index] = &InfraNode{
 			node:           node,
-			cache:          c.cache,
+			clickable:      true,
 			configProvider: c.configProvider,
 		}
 	}
@@ -204,18 +173,20 @@ func (c *InfraAXClient) MenuBarClickableElements(
 }
 
 // ClickableElementsFromBundleID returns clickable elements for the application with the given bundle ID.
+// If maxDepth is > 0, it overrides the configured tree depth for flat supplementary sources.
 func (c *InfraAXClient) ClickableElementsFromBundleID(
+	ctx context.Context,
 	bundleID string,
 	roles []string,
-	strictFiltering bool,
+	maxDepth int,
 ) ([]AXNode, error) {
 	nodes, nodesErr := ClickableElementsFromBundleID(
+		ctx,
 		bundleID,
 		roles,
 		c.logger,
-		c.cache,
 		c.configProvider,
-		strictFiltering,
+		maxDepth,
 	)
 	if nodesErr != nil {
 		return nil, derrors.Wrap(
@@ -229,7 +200,7 @@ func (c *InfraAXClient) ClickableElementsFromBundleID(
 	for index, node := range nodes {
 		nodesResult[index] = &InfraNode{
 			node:           node,
-			cache:          c.cache,
+			clickable:      true,
 			configProvider: c.configProvider,
 		}
 	}
@@ -330,9 +301,59 @@ func (c *InfraAXClient) IsMissionControlActive() bool {
 	return IsMissionControlActive()
 }
 
-// ClearCache removes all entries from the element info cache.
-func (c *InfraAXClient) ClearCache() {
-	c.cache.Clear()
+// extractElement returns the raw *Element from an AXElement wrapper.
+func (c *InfraAXClient) extractElement(root AXElement) (*Element, error) {
+	switch elementType := root.(type) {
+	case *InfraWindow:
+		if elementType.element == nil {
+			return nil, derrors.New(derrors.CodeInvalidInput, "element is nil")
+		}
+
+		return elementType.element, nil
+	case *InfraApp:
+		if elementType.element == nil {
+			return nil, derrors.New(derrors.CodeInvalidInput, "element is nil")
+		}
+
+		return elementType.element, nil
+	default:
+		return nil, derrors.New(derrors.CodeInvalidInput, "invalid element type")
+	}
+}
+
+// buildClickableOpts constructs tree options, allowed roles, and the
+// ignore-clickable flag for the given element and role list.
+func (c *InfraAXClient) buildClickableOpts(
+	element *Element,
+	roles []string,
+	maxDepth int,
+) (TreeOptions, map[string]struct{}, bool) {
+	opts := DefaultTreeOptions(c.logger)
+	opts.SetConfigProvider(c.configProvider)
+
+	if cfg := currentConfig(c.configProvider); cfg != nil {
+		depth := cfg.Hints.MaxDepth
+		if maxDepth > 0 {
+			depth = maxDepth
+		}
+
+		opts.SetMaxDepth(depth)
+	}
+
+	var allowedRoles map[string]struct{}
+	if len(roles) > 0 {
+		allowedRoles = make(map[string]struct{}, len(roles))
+		for _, role := range roles {
+			allowedRoles[role] = struct{}{}
+		}
+	}
+
+	ignoreClickableCheck := false
+	if cfg := currentConfig(c.configProvider); cfg != nil {
+		ignoreClickableCheck = cfg.ShouldIgnoreClickableCheckForApp(element.BundleIdentifier())
+	}
+
+	return opts, allowedRoles, ignoreClickableCheck
 }
 
 // Wrappers
@@ -402,7 +423,7 @@ func (a *InfraApp) Info() (*AXAppInfo, error) {
 // InfraNode wraps an TreeNode.
 type InfraNode struct {
 	node           *TreeNode
-	cache          *InfoCache
+	clickable      bool
 	configProvider config.Provider
 }
 
@@ -469,13 +490,26 @@ func (n *InfraNode) Value() string {
 	return n.node.Info().Value()
 }
 
+// SearchText returns additional text collected from the node subtree.
+func (n *InfraNode) SearchText() string {
+	if n.node == nil || n.node.Info() == nil {
+		return ""
+	}
+
+	return n.node.Info().SearchText()
+}
+
 // IsClickable returns true if the node is clickable.
 func (n *InfraNode) IsClickable() bool {
+	if n.clickable {
+		return true
+	}
+
 	if n.node == nil || n.node.Element() == nil {
 		return false
 	}
 
-	return n.node.Element().IsClickable(n.node.Info(), nil, n.cache, n.configProvider)
+	return n.node.Element().IsClickable(n.node.Info(), nil, n.configProvider, false)
 }
 
 // Release releases the underlying AXUIElementRef held by this node.
@@ -483,51 +517,4 @@ func (n *InfraNode) Release() {
 	if n.node != nil && n.node.Element() != nil {
 		n.node.Element().Release()
 	}
-}
-
-// isLikelyChromiumOrElectron returns true if the bundle ID matches known Chromium/Electron apps.
-// This is duplicated from electron package to avoid import cycle.
-func isLikelyChromiumOrElectron(bundleID string) bool {
-	if bundleID == "" {
-		return false
-	}
-
-	bundleID = strings.TrimSpace(bundleID)
-
-	for _, b := range config.KnownChromiumBundles {
-		if strings.EqualFold(b, bundleID) {
-			return true
-		}
-	}
-
-	for _, b := range config.KnownElectronBundles {
-		if strings.EqualFold(b, bundleID) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// isUserConfiguredChromiumElectron checks if the bundle ID matches user-configured
-// additional Chromium/Electron bundles from config. Supports exact matches and
-// wildcard patterns (ending with *).
-func isUserConfiguredChromiumElectron(bundleID string, configProvider config.Provider) bool {
-	if bundleID == "" || configProvider == nil {
-		return false
-	}
-
-	cfg := configProvider.Get()
-	if cfg == nil {
-		return false
-	}
-
-	chromiumBundles := cfg.Hints.AdditionalAXSupport.AdditionalChromiumBundles
-	if config.MatchesAdditionalBundle(bundleID, chromiumBundles) {
-		return true
-	}
-
-	electronBundles := cfg.Hints.AdditionalAXSupport.AdditionalElectronBundles
-
-	return config.MatchesAdditionalBundle(bundleID, electronBundles)
 }

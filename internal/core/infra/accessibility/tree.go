@@ -11,13 +11,17 @@ package accessibility
 import "C"
 
 import (
+	"context"
 	"image"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/config"
+	"github.com/y3owk1n/neru/internal/core/domain/element"
 	derrors "github.com/y3owk1n/neru/internal/core/errors"
 )
 
@@ -35,6 +39,18 @@ func rectFromInfo(info *ElementInfo) image.Rectangle {
 		pos.X+size.X,
 		pos.Y+size.Y,
 	)
+}
+
+// screenBoundsOrRect returns the active screen bounds when the provided rect is
+// empty; otherwise returns the rect unchanged. This ensures that tree builders
+// for all sources (main window, supplementary) always have meaningful clip
+// bounds even when the root element has no position/size (e.g. an AXApplication).
+func screenBoundsOrRect(r image.Rectangle) image.Rectangle {
+	if r.Empty() {
+		return platformActiveScreenBounds()
+	}
+
+	return r
 }
 
 // treeNodePool is a pool of TreeNode structs to reduce GC pressure during
@@ -140,40 +156,19 @@ func (n *TreeNode) AddChild(child *TreeNode) {
 
 // TreeOptions configures accessibility tree traversal behavior and filtering.
 type TreeOptions struct {
-	filterFunc         func(*ElementInfo) bool
-	includeOutOfBounds bool
-	cache              *InfoCache
-	parallelThreshold  int
-	maxParallelDepth   int
-	maxDepth           int
-	logger             *zap.Logger
-	stats              *treeStats
-	strictFiltering    bool // Apply strict filtering for Chromium/Electron DOM trees
+	filterFunc           func(*ElementInfo) bool
+	maxDepth             int
+	logger               *zap.Logger
+	stats                *treeStats
+	bundleID             string          // Bundle ID for auto-detecting Chromium/Electron strict filtering
+	configProvider       config.Provider // For checking user-configured Chromium/Electron bundles
+	isChromiumOrElectron bool            // Pre-computed flag for fast check
+	isWebKit             bool            // Pre-computed flag for WebKit-based apps
 }
 
 // FilterFunc returns the filter function.
 func (o *TreeOptions) FilterFunc() func(*ElementInfo) bool {
 	return o.filterFunc
-}
-
-// IncludeOutOfBounds returns whether to include out of bounds elements.
-func (o *TreeOptions) IncludeOutOfBounds() bool {
-	return o.includeOutOfBounds
-}
-
-// Cache returns the info cache.
-func (o *TreeOptions) Cache() *InfoCache {
-	return o.cache
-}
-
-// ParallelThreshold returns the parallel threshold.
-func (o *TreeOptions) ParallelThreshold() int {
-	return o.parallelThreshold
-}
-
-// MaxParallelDepth returns the max parallel depth.
-func (o *TreeOptions) MaxParallelDepth() int {
-	return o.maxParallelDepth
 }
 
 // MaxDepth returns the max depth.
@@ -191,9 +186,14 @@ func (o *TreeOptions) Stats() *treeStats {
 	return o.stats
 }
 
-// StrictFiltering returns whether strict filtering is enabled for Chromium/Electron.
-func (o *TreeOptions) StrictFiltering() bool {
-	return o.strictFiltering
+// SetBundleID sets the bundle ID for auto-detecting Chromium/Electron strict filtering.
+func (o *TreeOptions) SetBundleID(bundleID string) {
+	o.bundleID = bundleID
+}
+
+// SetConfigProvider sets the config provider for checking user-configured Chromium/Electron bundles.
+func (o *TreeOptions) SetConfigProvider(cp config.Provider) {
+	o.configProvider = cp
 }
 
 // SetFilterFunc sets the filter function.
@@ -201,43 +201,17 @@ func (o *TreeOptions) SetFilterFunc(fn func(*ElementInfo) bool) {
 	o.filterFunc = fn
 }
 
-// SetIncludeOutOfBounds sets whether to include out of bounds elements.
-func (o *TreeOptions) SetIncludeOutOfBounds(include bool) {
-	o.includeOutOfBounds = include
-}
-
-// SetCache sets the info cache.
-func (o *TreeOptions) SetCache(cache *InfoCache) {
-	o.cache = cache
-}
-
 // SetMaxDepth sets the max depth for tree traversal.
 func (o *TreeOptions) SetMaxDepth(depth int) {
 	o.maxDepth = depth
 }
 
-// SetParallelThreshold sets the threshold for parallel child processing.
-func (o *TreeOptions) SetParallelThreshold(threshold int) {
-	o.parallelThreshold = threshold
-}
-
-// SetStrictFiltering sets whether to apply strict filtering for Chromium/Electron DOM trees.
-func (o *TreeOptions) SetStrictFiltering(strict bool) {
-	o.strictFiltering = strict
-}
-
 // DefaultTreeOptions returns default tree traversal options.
-// Note: cache is nil by default; callers must set it via SetCache before
-// passing opts to BuildTree (which requires a non-nil cache).
 func DefaultTreeOptions(logger *zap.Logger) TreeOptions {
 	return TreeOptions{
-		filterFunc:         nil,
-		includeOutOfBounds: false,
-		cache:              nil,
-		parallelThreshold:  config.DefaultParallelThreshold,
-		maxParallelDepth:   config.DefaultMaxParallelDepth,
-		maxDepth:           config.DefaultMaxDepth,
-		logger:             logger,
+		filterFunc: nil,
+		maxDepth:   config.DefaultMaxDepth,
+		logger:     logger,
 	}
 }
 
@@ -252,9 +226,9 @@ type treeStats struct {
 	filteredOut           atomic.Int64
 	noChildren            atomic.Int64
 	childrenErrors        atomic.Int64
-	parallelBatches       atomic.Int64
 	sequentialBatches     atomic.Int64
 	maxDepthSeen          atomic.Int64
+	outOfBoundsSkipped    atomic.Int64
 }
 
 // recordDepth atomically updates the max depth seen.
@@ -271,7 +245,17 @@ func (s *treeStats) recordDepth(depth int) {
 }
 
 // BuildTree constructs an accessibility tree starting from the specified root element.
-func BuildTree(root *Element, opts TreeOptions) (*TreeNode, error) {
+func BuildTree(ctx context.Context, root *Element, opts TreeOptions) (*TreeNode, error) {
+	select {
+	case <-ctx.Done():
+		return nil, derrors.Wrap(
+			ctx.Err(),
+			derrors.CodeContextCanceled,
+			"operation canceled before tree build",
+		)
+	default:
+	}
+
 	if root == nil {
 		if ce := opts.Logger().
 			Check(zap.DebugLevel, "BuildTree called with nil root element"); ce != nil {
@@ -281,25 +265,11 @@ func BuildTree(root *Element, opts TreeOptions) (*TreeNode, error) {
 		return nil, errRootElementNil
 	}
 
-	// Ensure a cache is always available to avoid nil dereferences in traversal.
-	if opts.cache == nil {
-		return nil, derrors.New(
-			derrors.CodeAccessibilityFailed,
-			"opts.cache must not be nil; use DefaultTreeOptions()",
-		)
-	}
+	info, infoErr := root.Info()
+	if infoErr != nil {
+		opts.Logger().Warn("Failed to get root element info", zap.Error(infoErr))
 
-	// Try to get from cache first
-	info := opts.cache.Get(root)
-	if info == nil {
-		var infoErr error
-		info, infoErr = root.Info()
-		if infoErr != nil {
-			opts.Logger().Warn("Failed to get root element info", zap.Error(infoErr))
-
-			return nil, infoErr
-		}
-		opts.cache.Set(root, info)
+		return nil, infoErr
 	}
 
 	if info == nil {
@@ -308,13 +278,57 @@ func BuildTree(root *Element, opts TreeOptions) (*TreeNode, error) {
 
 	stats := &treeStats{}
 
-	// Calculate window bounds for spatial filtering
-	windowBounds := rectFromInfo(info)
+	buildStart := time.Now()
+
+	// Calculate window bounds for spatial filtering.
+	// Fall back to active screen bounds when the root element has no
+	// position/size (e.g. an AXApplication for supplementary sources).
+	// For AXMenuBar, always use screen bounds since dropdown menus
+	// render below the bar itself and would be clipped otherwise.
+	windowBounds := screenBoundsOrRect(rectFromInfo(info))
+	if info.Role() == string(element.RoleMenuBar) {
+		windowBounds = platformActiveScreenBounds()
+	}
+
+	// Auto-detect Chromium/Electron from root element's bundle ID for strict filtering.
+	if opts.bundleID == "" {
+		opts.bundleID = root.BundleIdentifier()
+	}
+	opts.isChromiumOrElectron = isChromiumOrElectron(opts.bundleID, opts.configProvider)
+	opts.isWebKit = isWebKit(opts.bundleID, opts.configProvider)
 
 	node := getTreeNode(root, info, nil, config.DefaultChildrenCapacity)
 
 	opts.stats = stats
-	buildTreeRecursive(node, 1, opts, windowBounds)
+	buildTreeRecursive(ctx, node, 1, opts, windowBounds, windowBounds)
+
+	select {
+	case <-ctx.Done():
+		releaseTreeExcept(node, nil)
+
+		return nil, derrors.Wrap(
+			ctx.Err(),
+			derrors.CodeContextCanceled,
+			"tree build canceled mid-traversal",
+		)
+	default:
+	}
+
+	accumulateSearchText(node)
+
+	buildElapsed := time.Since(buildStart)
+	if ce := opts.Logger().Check(zap.DebugLevel, "TIMING: BuildTree"); ce != nil {
+		ce.Write(
+			zap.Duration("elapsed", buildElapsed),
+			zap.Int64("nodes_visited", stats.nodesVisited.Load()),
+			zap.Int64("max_depth_seen", stats.maxDepthSeen.Load()),
+			zap.Int64("skipped_non_interactive", stats.skippedNonInteractive.Load()),
+			zap.String("root_role", info.Role()),
+			zap.Int("pid", info.PID()),
+			zap.Bool("is_chromium_electron", opts.isChromiumOrElectron),
+			zap.Bool("is_webkit", opts.isWebKit),
+		)
+	}
 
 	if ce := opts.Logger().Check(zap.DebugLevel, "Tree build completed"); ce != nil {
 		ce.Write(
@@ -329,8 +343,8 @@ func BuildTree(root *Element, opts TreeOptions) (*TreeNode, error) {
 			zap.Int64("filtered_out", stats.filteredOut.Load()),
 			zap.Int64("no_children", stats.noChildren.Load()),
 			zap.Int64("children_errors", stats.childrenErrors.Load()),
-			zap.Int64("parallel_batches", stats.parallelBatches.Load()),
 			zap.Int64("sequential_batches", stats.sequentialBatches.Load()),
+			zap.Int64("out_of_bounds_skipped", stats.outOfBoundsSkipped.Load()),
 			zap.Int64("max_depth_seen", stats.maxDepthSeen.Load()),
 		)
 	}
@@ -339,32 +353,73 @@ func BuildTree(root *Element, opts TreeOptions) (*TreeNode, error) {
 }
 
 // Roles that typically don't contain interactive elements.
-var nonInteractiveRoles = map[string]bool{
-	"AXStaticText": true,
-	"AXImage":      true,
+var nonInteractiveRoles = map[element.Role]bool{
+	element.RoleStaticText: true,
+	element.RoleImage:      true,
 }
 
 // Roles that are themselves interactive (leaf nodes).
-var interactiveLeafRoles = map[string]bool{
-	"AXButton":             true,
-	"AXComboBox":           true,
-	"AXCheckBox":           true,
-	"AXRadioButton":        true,
-	"AXLink":               true,
-	"AXPopUpButton":        true,
-	"AXSlider":             true,
-	"AXTabButton":          true,
-	"AXSwitch":             true,
-	"AXDisclosureTriangle": true,
-	"AXTextArea":           true,
+var interactiveLeafRoles = map[element.Role]bool{
+	element.RoleButton:             true,
+	element.RoleMenuButton:         true,
+	element.RoleComboBox:           true,
+	element.RoleCheckBox:           true,
+	element.RoleLink:               true,
+	element.RolePopUpButton:        true,
+	element.RoleSlider:             true,
+	element.RoleTabButton:          true,
+	element.RoleSwitch:             true,
+	element.RoleDisclosureTriangle: true,
+	element.RoleTextField:          true,
+	element.RoleGenericElement:     true,
+	element.RoleTextArea:           true,
+	element.RoleRadioButton:        true,
+}
+
+// Roles that can contain important interactive children even when their
+// parent is an interactive leaf (e.g., a button that opens a popover).
+// This set is checked to ensure we don't stop traversal at buttons/menus
+// that trigger popovers, sheets, or menus.
+var importantContainerRoles = map[element.Role]bool{
+	element.RolePopover: true,
+	element.RoleSheet:   true,
+	element.RoleMenu:    true,
+	element.RoleSGTMenu: true,
+	element.RoleList:    true,
+	element.RoleLink:    true,
+	element.RoleButton:  true,
+}
+
+// Roles that commonly spawn important container children (popovers, sheets, menus).
+// Only for these parent roles do we fetch children to check for important containers
+// when the parent is itself an interactive leaf. This avoids wasting Info() calls
+// on children of leaf roles that never contain important containers.
+var leafRolesWithImportantChildren = map[element.Role]bool{
+	element.RoleButton:             true,
+	element.RoleMenuButton:         true,
+	element.RolePopUpButton:        true,
+	element.RoleLink:               true,
+	element.RoleComboBox:           true, // dropdown AXMenu
+	element.RoleDisclosureTriangle: true, // reveals children when expanded
+	element.RoleGenericElement:     true, // catch-all — could contain anything
+	element.RoleTextArea:           true, // in notes.app, link field in note needs to be clickable...
+	element.RoleRadioButton:        true, // in safari, url bar is radio button, but has nested button in it...
 }
 
 func buildTreeRecursive(
+	ctx context.Context,
 	parent *TreeNode,
 	depth int,
 	opts TreeOptions,
+	clipBounds image.Rectangle,
 	windowBounds image.Rectangle,
 ) {
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+
 	if opts.stats != nil {
 		opts.stats.nodesVisited.Add(1)
 		opts.stats.recordDepth(depth)
@@ -380,7 +435,7 @@ func buildTreeRecursive(
 	}
 
 	// Early exit for roles that can't have interactive children
-	if nonInteractiveRoles[parent.info.Role()] {
+	if nonInteractiveRoles[element.Role(parent.info.Role())] {
 		if opts.stats != nil {
 			opts.stats.skippedNonInteractive.Add(1)
 		}
@@ -388,44 +443,120 @@ func buildTreeRecursive(
 		return
 	}
 
-	// Don't traverse deeper into interactive leaf elements
-	if interactiveLeafRoles[parent.info.Role()] {
+	// Don't traverse children of AX-hidden parents. This handles
+	// CSS visibility:hidden / opacity:0 inheritance in web content
+	// where the parent is marked hidden but children are not
+	// individually flagged. Also skip AXVisible=false elements.
+	if parent.info != nil && (parent.info.IsHidden() || !parent.info.IsVisible()) {
+		return
+	}
+
+	// Early exit if element is out of window bounds.
+	// Targeted at Chromium/Electron apps (noisy DOM trees with many off-screen
+	// elements) and WebKit-based apps (e.g. Safari, where skipping off-screen
+	// subtrees avoids expensive AXAPI round-trips).
+	//
+	// This check is intentionally placed before the Children() call to avoid
+	// expensive AXAPI round-trips for off-screen subtrees — the majority of
+	// noise on long Chromium pages comes from elements outside the viewport.
+	//
+	// Example, try this site: https://nix-darwin.github.io/nix-darwin/manual/
+	elementRect := rectFromInfo(parent.info)
+	if !elementRect.Overlaps(windowBounds) && (opts.isChromiumOrElectron || opts.isWebKit) {
 		if opts.stats != nil {
-			opts.stats.stoppedAtLeaf.Add(1)
+			opts.stats.outOfBoundsSkipped.Add(1)
+		}
+
+		if ce := opts.logger.Check(
+			zap.DebugLevel,
+			"Out-of-bounds element, skipping subtree",
+		); ce != nil {
+			ce.Write(
+				zap.Int("depth", depth),
+				zap.String("parent_role", parent.info.Role()),
+				zap.String("parent_title", parent.info.Title()),
+			)
 		}
 
 		return
 	}
 
-	children, err := parent.element.Children(opts.cache)
-	if err != nil || len(children) == 0 {
-		if opts.stats != nil {
-			if err != nil {
-				opts.stats.childrenErrors.Add(1)
-			} else {
-				opts.stats.noChildren.Add(1)
+	// Don't traverse deeper into interactive leaf elements,
+	// unless they have important container children (e.g., popovers, sheets, menus).
+	// This handles cases like a toolbar button that opens a popover.
+	var children []*Element
+	if interactiveLeafRoles[element.Role(parent.info.Role())] {
+		if !leafRolesWithImportantChildren[element.Role(parent.info.Role())] {
+			if opts.stats != nil {
+				opts.stats.stoppedAtLeaf.Add(1)
+			}
+
+			return
+		}
+
+		var childrenErr error
+		children, childrenErr = parent.element.Children(parent.info.Role())
+		hasImportantContainer := false
+		if childrenErr == nil && len(children) > 0 {
+			for _, child := range children {
+				childInfo, infoErr := child.Info()
+				if infoErr != nil {
+					continue
+				}
+				if childInfo != nil && importantContainerRoles[element.Role(childInfo.Role())] {
+					hasImportantContainer = true
+
+					break
+				}
 			}
 		}
+		if !hasImportantContainer {
+			for _, child := range children {
+				child.Release()
+			}
+			if opts.stats != nil {
+				switch {
+				case childrenErr != nil:
+					opts.stats.childrenErrors.Add(1)
+				case len(children) == 0:
+					opts.stats.noChildren.Add(1)
+				default:
+					opts.stats.stoppedAtLeaf.Add(1)
+				}
+			}
 
-		return
-	}
-
-	// Decide whether to parallelize
-	shouldParallelize := depth <= opts.maxParallelDepth &&
-		len(children) >= opts.parallelThreshold
-
-	if shouldParallelize {
-		buildChildrenParallel(parent, children, depth, opts, windowBounds)
+			return
+		}
+		// Reuse children slice for traversal below, skip the second Children() call.
 	} else {
-		buildChildrenSequential(parent, children, depth, opts, windowBounds)
+		var err error
+		children, err = parent.element.Children(parent.info.Role())
+		if err != nil || len(children) == 0 {
+			if opts.stats != nil {
+				if err != nil {
+					opts.stats.childrenErrors.Add(1)
+				} else {
+					opts.stats.noChildren.Add(1)
+				}
+			}
+
+			return
+		}
 	}
+
+	// Process children sequentially to avoid goroutine/thread explosion
+	// from nested parallel tree building. Concurrency is controlled at
+	// the ClickableElements level (maxConcurrentWindows = 4).
+	buildChildrenSequential(ctx, parent, children, depth, opts, clipBounds, windowBounds)
 }
 
 func buildChildrenSequential(
+	ctx context.Context,
 	parent *TreeNode,
 	children []*Element,
 	depth int,
 	opts TreeOptions,
+	clipBounds image.Rectangle,
 	windowBounds image.Rectangle,
 ) {
 	// First pass: count valid children and collect their info
@@ -435,24 +566,31 @@ func buildChildrenSequential(
 	}
 	validChildren := make([]childData, 0, len(children))
 
-	for _, child := range children {
-		// Try cache first
-		info := opts.cache.Get(child)
-		if info == nil {
-			var err error
-			info, err = child.Info()
-			if err != nil {
-				if opts.stats != nil {
-					opts.stats.childErrors.Add(1)
-				}
-				child.Release()
-
-				continue
+	for index, child := range children {
+		select {
+		case <-ctx.Done():
+			for _, vc := range validChildren {
+				vc.element.Release()
 			}
-			opts.cache.Set(child, info)
+			for _, remaining := range children[index:] {
+				remaining.Release()
+			}
+
+			return
+		default:
 		}
 
-		if !shouldIncludeElement(info, opts, windowBounds) {
+		info, err := child.Info()
+		if err != nil {
+			if opts.stats != nil {
+				opts.stats.childErrors.Add(1)
+			}
+			child.Release()
+
+			continue
+		}
+
+		if !shouldIncludeElement(info, opts, clipBounds) {
 			if opts.stats != nil {
 				opts.stats.filteredOut.Add(1)
 			}
@@ -476,7 +614,26 @@ func buildChildrenSequential(
 		childNode := getTreeNode(data.element, data.info, parent, 0)
 
 		parent.children = append(parent.children, childNode)
-		buildTreeRecursive(childNode, depth+1, opts, windowBounds)
+
+		newClipBounds := clipBounds
+		if element.Role(data.info.Role()) == element.RoleScrollArea {
+			childRect := rectFromInfo(data.info)
+			if childRect.Dx() > 0 && childRect.Dy() > 0 {
+				newClipBounds = childRect.Intersect(clipBounds)
+				if ce := opts.Logger().
+					Check(zap.DebugLevel, "Scroll area detected, tightening clip bounds"); ce != nil {
+					ce.Write(
+						zap.String("role", data.info.Role()),
+						zap.Int("clip_x", newClipBounds.Min.X),
+						zap.Int("clip_y", newClipBounds.Min.Y),
+						zap.Int("clip_w", newClipBounds.Dx()),
+						zap.Int("clip_h", newClipBounds.Dy()),
+					)
+				}
+			}
+		}
+
+		buildTreeRecursive(ctx, childNode, depth+1, opts, newClipBounds, windowBounds)
 	}
 
 	if opts.stats != nil {
@@ -484,155 +641,79 @@ func buildChildrenSequential(
 	}
 }
 
-func buildChildrenParallel(
-	parent *TreeNode,
-	children []*Element,
-	depth int,
-	opts TreeOptions,
-	windowBounds image.Rectangle,
-) {
-	// Pre-allocate result slice with exact capacity
-	type childResult struct {
-		node  *TreeNode
-		index int
-		err   error
-	}
-
-	// Use buffered channel sized to number of children
-	results := make(chan childResult, len(children))
-	var waitGroup sync.WaitGroup
-
-	// Process children in parallel
-	for index, child := range children {
-		waitGroup.Add(1)
-		go func(idx int, elem *Element) {
-			defer waitGroup.Done()
-
-			// Try cache first (cache must be thread-safe!)
-			info := opts.cache.Get(elem)
-			if info == nil {
-				var err error
-				info, err = elem.Info()
-				if err != nil {
-					if opts.stats != nil {
-						opts.stats.childErrors.Add(1)
-					}
-
-					elem.Release()
-
-					results <- childResult{node: nil, index: idx, err: err}
-
-					return
-				}
-				opts.cache.Set(elem, info)
-			}
-
-			if !shouldIncludeElement(info, opts, windowBounds) {
-				if opts.stats != nil {
-					opts.stats.filteredOut.Add(1)
-				}
-
-				elem.Release()
-
-				results <- childResult{node: nil, index: idx}
-
-				return
-			}
-
-			childNode := getTreeNode(elem, info, parent, 0)
-
-			// Recursively build (this may spawn more goroutines at deeper levels)
-			buildTreeRecursive(childNode, depth+1, opts, windowBounds)
-
-			results <- childResult{node: childNode, index: idx}
-		}(index, child)
-	}
-
-	// Close results channel when all goroutines complete
-	go func() {
-		waitGroup.Wait()
-		close(results)
-	}()
-
-	// Pre-allocate collection slice with exact capacity
-	collected := make([]*TreeNode, len(children))
-	validCount := 0
-
-	for result := range results {
-		if result.node != nil {
-			collected[result.index] = result.node
-			validCount++
-		}
-	}
-
-	// Reuse the pooled backing array when it has enough room.
-	if cap(parent.children) >= validCount {
-		parent.children = parent.children[:0]
-	} else {
-		parent.children = make([]*TreeNode, 0, validCount)
-	}
-
-	for _, node := range collected {
-		if node != nil {
-			parent.children = append(parent.children, node)
-		}
-	}
-
-	if opts.stats != nil {
-		opts.stats.parallelBatches.Add(1)
-	}
-}
-
 // minElementSize is the minimum size threshold for elements.
 // Elements smaller than this are filtered out as noise (especially in Chromium DOM trees).
-// This matches similar filtering in tools like Glyphlow.
 const minElementSize = 15
 
 // shouldIncludeElement combines all filtering logic into one function.
+//
+// The clip-bounds overlap check is always applied so that ALL tree sources —
+// including supplementary ones (dock, menubar, PIP, etc.) — benefit from
+// spatial filtering against their respective clip bounds.
 func shouldIncludeElement(
 	info *ElementInfo,
 	opts TreeOptions,
-	windowBounds image.Rectangle,
+	clipBounds image.Rectangle,
 ) bool {
-	if !opts.includeOutOfBounds {
-		elementRect := rectFromInfo(info)
+	elementRect := rectFromInfo(info)
 
-		// Filter out zero-sized interactive elements (they're broken/invalid)
-		if elementRect.Dx() == 0 || elementRect.Dy() == 0 {
-			if interactiveLeafRoles[info.Role()] {
+	// Clip bounds check: always filter elements completely outside the
+	// visible area. This handles both window-level clipping (main window
+	// tree) and scroll-container clipping (AXScrollArea viewport), as well
+	// as screen-level clipping for supplementary sources where clip bounds
+	// fall back to the active screen bounds when the root rect is empty.
+	if elementRect.Dx() > 0 && elementRect.Dy() > 0 {
+		if !elementRect.Overlaps(clipBounds) {
+			if ce := opts.Logger().
+				Check(zap.DebugLevel, "Element filtered by clip bounds"); ce != nil {
+				ce.Write(
+					zap.String("role", info.Role()),
+					zap.Int("elem_x", elementRect.Min.X),
+					zap.Int("elem_y", elementRect.Min.Y),
+					zap.Int("elem_w", elementRect.Dx()),
+					zap.Int("elem_h", elementRect.Dy()),
+					zap.Int("clip_x", clipBounds.Min.X),
+					zap.Int("clip_y", clipBounds.Min.Y),
+					zap.Int("clip_w", clipBounds.Dx()),
+					zap.Int("clip_h", clipBounds.Dy()),
+				)
+			}
+
+			return false
+		}
+	}
+
+	// Filter out zero-sized interactive elements (they're broken/invalid)
+	if elementRect.Dx() == 0 || elementRect.Dy() == 0 {
+		if interactiveLeafRoles[element.Role(info.Role())] {
+			return false
+		}
+	}
+
+	// Strict filtering: auto-enabled for Chromium/Electron apps with noisy DOM trees
+	// WebKit-based apps (Safari) have clean trees that don't need this aggressive filtering
+	if opts.isChromiumOrElectron && elementRect.Dx() > 0 &&
+		elementRect.Dy() > 0 {
+		// Filter out tiny elements that are likely noise in Chromium DOM trees.
+		// This is especially important for web content where the DOM can have
+		// thousands of tiny placeholder/structure elements.
+		// Filter if either dimension is too small (not just both)
+		if elementRect.Dx() < minElementSize || elementRect.Dy() < minElementSize {
+			// Only filter if it's not a known important role
+			if !interactiveLeafRoles[element.Role(info.Role())] {
 				return false
 			}
 		}
 
-		// Strict filtering: only apply for Chromium/Electron apps with noisy DOM trees
-		// For native apps like Safari, we trust the semantic tree to not have noise
-		if opts.strictFiltering && elementRect.Dx() > 0 && elementRect.Dy() > 0 {
-			// Filter out tiny elements that are likely noise in Chromium DOM trees.
-			// This is especially important for web content where the DOM can have
-			// thousands of tiny placeholder/structure elements.
-			// Filter if either dimension is too small (not just both)
-			if elementRect.Dx() < minElementSize || elementRect.Dy() < minElementSize {
-				// Only filter if it's not a known important role
-				if !interactiveLeafRoles[info.Role()] {
-					return false
-				}
-			}
-
-			// Filter elements whose center is outside window bounds (overflowing elements)
-			// But keep interactive roles (buttons, links, etc.) even if at edges
-			halfWidth := elementRect.Dx() / 2  //nolint:mnd
-			halfHeight := elementRect.Dy() / 2 //nolint:mnd
-			centerX := elementRect.Min.X + halfWidth
-			centerY := elementRect.Min.Y + halfHeight
-			if centerX < windowBounds.Min.X || centerX > windowBounds.Max.X ||
-				centerY < windowBounds.Min.Y || centerY > windowBounds.Max.Y {
-				if !interactiveLeafRoles[info.Role()] {
-					return false
-				}
-			}
-		} else if elementRect.Dx() > 0 && elementRect.Dy() > 0 {
-			// For non-strict filtering, only check basic overlap
-			if !elementRect.Overlaps(windowBounds) {
+		// Filter elements whose center is outside clip bounds (overflowing/scroll-clipped elements)
+		// But keep interactive roles (buttons, links, etc.) even if at edges
+		halfWidth := elementRect.Dx() / 2  //nolint:mnd
+		halfHeight := elementRect.Dy() / 2 //nolint:mnd
+		centerX := elementRect.Min.X + halfWidth
+		centerY := elementRect.Min.Y + halfHeight
+		if centerX < clipBounds.Min.X || centerX > clipBounds.Max.X ||
+			centerY < clipBounds.Min.Y || centerY > clipBounds.Max.Y {
+			if !interactiveLeafRoles[element.Role(info.Role())] {
 				return false
 			}
 		}
@@ -646,21 +727,99 @@ func shouldIncludeElement(
 }
 
 // FindClickableElements finds all clickable elements in the tree.
+// Search text is already accumulated during tree building via accumulateSearchText.
 func (n *TreeNode) FindClickableElements(
 	allowedRoles map[string]struct{},
-	cache *InfoCache,
 	configProvider config.Provider,
+	ignoreClickableCheck bool,
 ) []*TreeNode {
 	var result []*TreeNode
 	n.walkTree(func(node *TreeNode) bool {
-		if node.element.IsClickable(node.info, allowedRoles, cache, configProvider) {
-			result = append(result, node)
+		if !node.element.IsClickable(
+			node.info,
+			allowedRoles,
+			configProvider,
+			ignoreClickableCheck,
+		) {
+			return true
 		}
+
+		rect := rectFromInfo(node.info)
+		if rect.Dx() == 0 || rect.Dy() == 0 {
+			return true
+		}
+
+		result = append(result, node)
 
 		return true
 	})
 
 	return result
+}
+
+func appendSearchText(builder *strings.Builder, seen map[string]struct{}, text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	if _, ok := seen[text]; ok {
+		return
+	}
+
+	if builder.Len() > 0 {
+		builder.WriteByte(' ')
+	}
+	builder.WriteString(text)
+	seen[text] = struct{}{}
+}
+
+// accumulateSearchText performs a single post-order walk over the tree to
+// collect text from each node's subtree. This replaces the previous approach
+// where collectSearchText was called separately for each clickable element,
+// which resulted in O(n*m) descendant walks.
+func accumulateSearchText(root *TreeNode) {
+	root.walkTreePostOrder(func(node *TreeNode) {
+		if node.info == nil {
+			return
+		}
+
+		hasAny := false
+		if strings.TrimSpace(node.info.Title()) != "" ||
+			strings.TrimSpace(node.info.Description()) != "" ||
+			strings.TrimSpace(node.info.Value()) != "" {
+			hasAny = true
+		} else {
+			for _, child := range node.children {
+				if child.info != nil && child.info.searchText != "" {
+					hasAny = true
+
+					break
+				}
+			}
+		}
+		if !hasAny {
+			node.info.searchText = ""
+
+			return
+		}
+
+		var builder strings.Builder
+		seen := make(map[string]struct{})
+
+		// Collect text from this node itself
+		appendSearchText(&builder, seen, node.info.Title())
+		appendSearchText(&builder, seen, node.info.Description())
+		appendSearchText(&builder, seen, node.info.Value())
+
+		// Merge text from children (already computed since this is post-order)
+		for _, child := range node.children {
+			if child.info != nil && child.info.searchText != "" {
+				appendSearchText(&builder, seen, child.info.searchText)
+			}
+		}
+
+		node.info.searchText = builder.String()
+	})
 }
 
 // Release releases the AXUIElementRef for every node in the subtree except
@@ -725,4 +884,110 @@ func (n *TreeNode) walkTreePostOrder(visit func(*TreeNode)) {
 		child.walkTreePostOrder(visit)
 	}
 	visit(n)
+}
+
+// isChromiumOrElectron returns true if the bundle ID matches known Chromium/Electron apps
+// or user-configured additional bundles.
+func isChromiumOrElectron(bundleID string, configProvider config.Provider) bool {
+	if isLikelyChromiumOrElectron(bundleID) {
+		return true
+	}
+
+	return isUserConfiguredChromiumElectron(bundleID, configProvider)
+}
+
+var (
+	knownChromiumMap map[string]struct{}
+	knownElectronMap map[string]struct{}
+	initKnownOnce    sync.Once
+)
+
+func initKnownMaps() {
+	knownChromiumMap = make(map[string]struct{}, len(config.KnownChromiumBundles))
+	for _, b := range config.KnownChromiumBundles {
+		knownChromiumMap[strings.ToLower(strings.TrimSpace(b))] = struct{}{}
+	}
+	knownElectronMap = make(map[string]struct{}, len(config.KnownElectronBundles))
+	for _, b := range config.KnownElectronBundles {
+		knownElectronMap[strings.ToLower(strings.TrimSpace(b))] = struct{}{}
+	}
+}
+
+// isLikelyChromiumOrElectron returns true if the bundle ID matches known Chromium/Electron apps.
+// This is duplicated from electron package to avoid import cycle.
+func isLikelyChromiumOrElectron(bundleID string) bool {
+	if bundleID == "" {
+		return false
+	}
+	initKnownOnce.Do(initKnownMaps)
+
+	bundleID = strings.ToLower(strings.TrimSpace(bundleID))
+	if _, ok := knownChromiumMap[bundleID]; ok {
+		return true
+	}
+	if _, ok := knownElectronMap[bundleID]; ok {
+		return true
+	}
+
+	return false
+}
+
+// isLikelyWebKit returns true if the bundle ID matches known WebKit-based apps.
+func isLikelyWebKit(bundleID string) bool {
+	if bundleID == "" {
+		return false
+	}
+
+	return config.MatchesAdditionalBundle(bundleID, config.KnownWebKitBundles)
+}
+
+// isUserConfiguredChromiumElectron checks if the bundle ID matches user-configured
+// additional Chromium/Electron bundles from config. Supports exact matches and
+// wildcard patterns (ending with *).
+func isUserConfiguredChromiumElectron(bundleID string, configProvider config.Provider) bool {
+	if bundleID == "" || configProvider == nil {
+		return false
+	}
+
+	cfg := configProvider.Get()
+	if cfg == nil {
+		return false
+	}
+
+	chromiumBundles := cfg.Hints.AdditionalAXSupport.AdditionalChromiumBundles
+	if config.MatchesAdditionalBundle(bundleID, chromiumBundles) {
+		return true
+	}
+
+	electronBundles := cfg.Hints.AdditionalAXSupport.AdditionalElectronBundles
+
+	return config.MatchesAdditionalBundle(bundleID, electronBundles)
+}
+
+// isWebKit returns true if the bundle ID matches known WebKit-based app bundle
+// identifiers or user-configured additional WebKit bundles.
+func isWebKit(bundleID string, configProvider config.Provider) bool {
+	if bundleID == "" {
+		return false
+	}
+
+	// Check known WebKit bundles (Safari, Safari Technology Preview, etc.)
+	if config.MatchesAdditionalBundle(bundleID, config.KnownWebKitBundles) {
+		return true
+	}
+
+	// Check user-configured additional WebKit bundles
+	if configProvider == nil {
+		return false
+	}
+
+	cfg := configProvider.Get()
+	if cfg == nil {
+		return false
+	}
+
+	return config.MatchesAdditionalBundle(
+		bundleID,
+		cfg.Hints.AdditionalAXSupport.AdditionalWebKitBundles,
+	)
 }

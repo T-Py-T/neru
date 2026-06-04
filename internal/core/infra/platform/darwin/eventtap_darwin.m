@@ -203,7 +203,7 @@ static BOOL parseHotkeyString(NSString *hotkeyString, CGKeyCode *outKeyCode, uin
 		if (!mainKey)
 			return NO;
 
-		CGKeyCode keyCode = keyNameToCode(mainKey);
+		CGKeyCode keyCode = NeruKeyNameToCode(mainKey);
 		if (keyCode == 0xFFFF)
 			return NO;
 
@@ -472,7 +472,7 @@ CGEventRef eventTapCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef 
 				}
 
 				// Build the full key string (e.g. "Cmd+Shift+K") and dispatch to callback
-				NSString *keyName = keyCodeToName(keyCode);
+				NSString *keyName = NeruKeyCodeToName(keyCode);
 				if (!keyName) {
 					keyName = specialKeyName(keyCode);
 				}
@@ -498,7 +498,7 @@ CGEventRef eventTapCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef 
 
 			// Handle Shift+Letter for direct action matching (before Unicode translation)
 			if (hasShift && !hasCmd && !hasAlt && !hasCtrl) {
-				NSString *keyName = keyCodeToName(keyCode);
+				NSString *keyName = NeruKeyCodeToName(keyCode);
 				if (!keyName) {
 					keyName = specialKeyName(keyCode);
 				}
@@ -523,7 +523,7 @@ CGEventRef eventTapCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef 
 
 			// Map key code to character using current keyboard layout (with US QWERTY fallback).
 			// Uses UCKeyTranslate to respect the active keyboard layout while bypassing input methods.
-			NSString *keyChar = keyCodeToCharacter(keyCode, flags);
+			NSString *keyChar = NeruKeyCodeToCharacter(keyCode, flags);
 			if (keyChar && context->callback) {
 				const char *keyCString = [keyChar UTF8String];
 				if (keyCString) {
@@ -533,6 +533,19 @@ CGEventRef eventTapCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef 
 			}
 
 			// Unknown key code — pass to system
+			return event;
+		}
+
+		if (type == kCGEventKeyUp) {
+			CGKeyCode keyCode = (CGKeyCode)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
+			NSString *keyName = specialKeyName(keyCode);
+			if (!keyName) {
+				keyName = NeruKeyCodeToCharacter(keyCode, 0);
+			}
+			if (keyName && context->callback) {
+				NSString *keyUpStr = [NSString stringWithFormat:@"__keyup_%@", keyName];
+				context->callback([keyUpStr UTF8String], context->userData);
+			}
 			return event;
 		}
 
@@ -546,7 +559,7 @@ CGEventRef eventTapCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef 
 /// @param callback Callback function
 /// @param userData User data pointer
 /// @return Event tap handle
-EventTap createEventTap(EventTapCallback callback, void *userData) {
+EventTap NeruCreateEventTap(EventTapCallback callback, void *userData) {
 	EventTapContext *context = (EventTapContext *)calloc(1, sizeof(EventTapContext));
 	if (!context)
 		return NULL;
@@ -576,19 +589,19 @@ EventTap createEventTap(EventTapCallback callback, void *userData) {
 
 	// Register for keyboard layout change notifications so all key lookups are
 	// rebuilt when key names map to different keycodes.
-	setKeymapLayoutChangeCallback(rebuildEventTapLookups);
+	NeruSetKeymapLayoutChangeCallback(rebuildEventTapLookups);
 
 	context->pendingAddSourceBlock = nil;
 
 	// Create the event tap
-	CGEventMask eventMask = (1 << kCGEventKeyDown) | (1 << kCGEventFlagsChanged);
+	CGEventMask eventMask = (1 << kCGEventKeyDown) | (1 << kCGEventKeyUp) | (1 << kCGEventFlagsChanged);
 	context->eventTap = CGEventTapCreate(
 	    kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault, eventMask, eventTapCallback, context);
 
 	if (!context->eventTap) {
 		// Creation failed — clean up all allocated resources
 		gEventTapContext = nil;
-		setKeymapLayoutChangeCallback(NULL);
+		NeruSetKeymapLayoutChangeCallback(NULL);
 		context->hotkeyLookup = nil;
 		context->hotkeyStrings = nil;
 		context->interceptedModifierLookup = nil;
@@ -607,7 +620,7 @@ EventTap createEventTap(EventTapCallback callback, void *userData) {
 	} else {
 		__block dispatch_block_t block;
 		block = dispatch_block_create(0, ^{
-			// Guard against execution after cancellation (e.g., if destroyEventTap
+			// Guard against execution after cancellation (e.g., if NeruDestroyEventTap
 			// cancelled this block but it was already dequeued for execution).
 			if (dispatch_block_testcancel(block)) {
 				block = nil;  // Break retain cycle
@@ -630,7 +643,7 @@ EventTap createEventTap(EventTapCallback callback, void *userData) {
 /// @param tap Event tap handle
 /// @param hotkeys Array of hotkey strings
 /// @param count Number of hotkeys
-void setEventTapHotkeys(EventTap tap, const char **hotkeys, int count) {
+void NeruSetEventTapHotkeys(EventTap tap, const char **hotkeys, int count) {
 	if (!tap)
 		return;
 
@@ -671,7 +684,7 @@ void setEventTapHotkeys(EventTap tap, const char **hotkeys, int count) {
 /// @param enabled Non-zero to enable passthrough
 /// @param blacklistKeys Array of blacklisted modifier shortcuts
 /// @param count Number of blacklisted keys
-void setEventTapModifierPassthrough(EventTap tap, int enabled, const char **blacklistKeys, int count) {
+void NeruSetEventTapModifierPassthrough(EventTap tap, int enabled, const char **blacklistKeys, int count) {
 	if (!tap)
 		return;
 
@@ -709,7 +722,7 @@ void setEventTapModifierPassthrough(EventTap tap, int enabled, const char **blac
 /// @param tap Event tap handle
 /// @param keys Array of key strings
 /// @param count Number of keys
-void setEventTapInterceptedModifierKeys(EventTap tap, const char **keys, int count) {
+void NeruSetEventTapInterceptedModifierKeys(EventTap tap, const char **keys, int count) {
 	if (!tap)
 		return;
 
@@ -745,7 +758,7 @@ void setEventTapInterceptedModifierKeys(EventTap tap, const char **keys, int cou
 /// Set callback invoked when a modifier shortcut passes through to macOS.
 /// @param tap Event tap handle
 /// @param callback Passthrough callback function (may be NULL to clear)
-void setEventTapPassthroughCallback(EventTap tap, EventTapPassthroughCallback callback) {
+void NeruSetEventTapPassthroughCallback(EventTap tap, EventTapPassthroughCallback callback) {
 	if (!tap)
 		return;
 
@@ -762,7 +775,7 @@ void setEventTapPassthroughCallback(EventTap tap, EventTapPassthroughCallback ca
 /// is correctly seen as key-up, not key-down.
 /// @param tap Event tap handle
 /// @param enabled Non-zero to enable, zero to disable
-void setEventTapStickyModifierToggle(EventTap tap, int enabled) {
+void NeruSetEventTapStickyModifierToggle(EventTap tap, int enabled) {
 	if (!tap)
 		return;
 
@@ -785,7 +798,7 @@ void setEventTapStickyModifierToggle(EventTap tap, int enabled) {
 /// Post a physical modifier event to macOS.
 /// This sends a kCGEventFlagsChanged event to the system and stamps it with
 /// a custom userdata field so Neru recognizes and ignores its own generated events.
-void postEventTapModifierEvent(const char *modifier, int isDown) {
+void NeruPostEventTapModifierEvent(const char *modifier, int isDown) {
 	CGKeyCode keyCode = 0;
 	CGEventFlags modMask = 0;
 	if (strcmp(modifier, "cmd") == 0) {
@@ -832,7 +845,7 @@ void postEventTapModifierEvent(const char *modifier, int isDown) {
 
 /// Enable event tap
 /// @param tap Event tap handle
-void enableEventTap(EventTap tap) {
+void NeruEnableEventTap(EventTap tap) {
 	if (!tap)
 		return;
 
@@ -849,7 +862,7 @@ void enableEventTap(EventTap tap) {
 
 /// Disable event tap
 /// @param tap Event tap handle
-void disableEventTap(EventTap tap) {
+void NeruDisableEventTap(EventTap tap) {
 	if (!tap)
 		return;
 
@@ -863,7 +876,7 @@ void disableEventTap(EventTap tap) {
 
 /// Destroy event tap
 /// @param tap Event tap handle
-void destroyEventTap(EventTap tap) {
+void NeruDestroyEventTap(EventTap tap) {
 	if (!tap)
 		return;
 
@@ -898,7 +911,7 @@ void destroyEventTap(EventTap tap) {
 		// Clear global reference before freeing
 		if (gEventTapContext == context) {
 			gEventTapContext = nil;
-			setKeymapLayoutChangeCallback(NULL);
+			NeruSetKeymapLayoutChangeCallback(NULL);
 		}
 
 		// Synchronize with any in-flight event tap callback that may be
@@ -950,7 +963,7 @@ void destroyEventTap(EventTap tap) {
 	// Always dispatch cleanup asynchronously on the main queue so that any
 	// previously-enqueued enable/disable blocks (which also capture `context`)
 	// execute before we free the context. GCD guarantees FIFO ordering on a
-	// serial queue, so this prevents use-after-free when destroyEventTap is
+	// serial queue, so this prevents use-after-free when NeruDestroyEventTap is
 	// called from the main thread.
 	dispatch_async(dispatch_get_main_queue(), cleanupBlock);
 }

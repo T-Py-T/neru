@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -39,6 +40,10 @@ var RootCmd = &cobra.Command{
 	Short: "Neru - Keyboard-driven navigation tool",
 	Long: `Neru is a keyboard-driven navigation tool that provides
 vim-like navigation capabilities across applications using accessibility APIs.`,
+	Example: `  neru launch                        Start the Neru daemon
+  neru status                        Show daemon status
+  neru hints --action left_click     Activate hints mode with pending click
+  neru action scroll_down --steps 3  Scroll down 3 steps`,
 	SilenceErrors: true,
 	Version:       Version,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -351,10 +356,12 @@ Use --bare to force current-cursor targeting.`,
 }
 
 // BuildScrollActionCommand creates a scroll action cobra command.
-func BuildScrollActionCommand(use, short, long string) *cobra.Command {
+// If supportSteps is true, a --steps flag is added to override the scroll step amount.
+func BuildScrollActionCommand(use, short, long string, supportSteps bool) *cobra.Command {
 	var (
 		selection bool
 		bare      bool
+		steps     int
 	)
 
 	cmd := &cobra.Command{
@@ -381,6 +388,19 @@ func BuildScrollActionCommand(use, short, long string) *cobra.Command {
 				args = append(args, "--bare")
 			}
 
+			if supportSteps {
+				if cmd.Flags().Changed("steps") && steps <= 0 {
+					return derrors.New(
+						derrors.CodeInvalidInput,
+						"--steps must be a positive integer",
+					)
+				}
+
+				if steps > 0 {
+					args = append(args, "--steps", strconv.Itoa(steps))
+				}
+			}
+
 			return sendCommand(cmd, "action", args)
 		},
 	}
@@ -389,6 +409,11 @@ func BuildScrollActionCommand(use, short, long string) *cobra.Command {
 		BoolVar(&selection, "selection", false, "Explicitly use the active mode selection as the target point")
 	cmd.Flags().
 		BoolVar(&bare, "bare", false, "Use the current cursor position even when a mode selection exists")
+
+	if supportSteps {
+		cmd.Flags().
+			IntVar(&steps, "steps", 0, "Override the scroll step amount (pixels); configured default is used when omitted")
+	}
 
 	return cmd
 }
@@ -483,6 +508,70 @@ Positive values move right/down, negative values move left/up.`,
 	cmd.Flags().IntVar(&deltaY, "dy", 0, "Delta Y (pixels, positive=down, negative=up)")
 	_ = cmd.MarkFlagRequired("dx")
 	_ = cmd.MarkFlagRequired("dy")
+
+	return cmd
+}
+
+// BuildFocusWindowCommand creates a focus_window cobra command that cycles
+// window focus through all focusable windows on the active space.
+func BuildFocusWindowCommand() *cobra.Command {
+	var backward bool
+
+	cmd := &cobra.Command{
+		Use:   "focus_window",
+		Short: "Cycle focus through windows on the active space",
+		Long: `Cycle keyboard focus through all focusable windows on the current space.
+
+Cycles forward through windows (or backward with --backward), wrapping at the
+end. Only windows that are focusable (not minimized, not hidden) and on the
+current space are included.`,
+		PreRunE: func(_ *cobra.Command, _ []string) error {
+			return requiresRunningInstance()
+		},
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			actionArgs := []string{"focus_window"}
+
+			if backward {
+				actionArgs = append(actionArgs, "--backward")
+			}
+
+			return sendCommand(cmd, "action", actionArgs)
+		},
+	}
+
+	cmd.Flags().
+		BoolVar(&backward, "backward", false, "Cycle to the previous window instead of the next one")
+
+	return cmd
+}
+
+// BuildCycleHintCommand creates a cycle_hint cobra command that cycles through visible hints.
+func BuildCycleHintCommand() *cobra.Command {
+	var backward bool
+
+	cmd := &cobra.Command{
+		Use:   "cycle_hint",
+		Short: "Cycle through visible hints",
+		Long: `Cycle through visible hints in hints mode.
+
+Cycles forward through hints (or backward with --backward), wrapping at the end.
+Requires hints mode to be active.`,
+		PreRunE: func(_ *cobra.Command, _ []string) error {
+			return requiresRunningInstance()
+		},
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			actionArgs := []string{"cycle_hint"}
+
+			if backward {
+				actionArgs = append(actionArgs, "--backward")
+			}
+
+			return sendCommand(cmd, "action", actionArgs)
+		},
+	}
+
+	cmd.Flags().
+		BoolVar(&backward, "backward", false, "Cycle to the previous hint instead of the next one")
 
 	return cmd
 }

@@ -183,6 +183,18 @@ func TestHintService_ShowHints(t *testing.T) {
 						t.Error("IncludeNotificationCenter should be true based on config")
 					}
 
+					if !filter.IncludeStageManager {
+						t.Error("IncludeStageManager should be true based on config")
+					}
+
+					if !filter.IncludePIP {
+						t.Error("IncludePIP should be true based on config")
+					}
+
+					if !filter.IncludeScreenCapture {
+						t.Error("IncludeScreenCapture should be true based on config")
+					}
+
 					return testElements, nil
 				}
 			},
@@ -192,10 +204,12 @@ func TestHintService_ShowHints(t *testing.T) {
 				return gen
 			},
 			config: config.HintsConfig{
-				IncludeMenubarHints:      true,
-				IncludeDockHints:         true,
-				IncludeNCHints:           true,
-				IncludeStageManagerHints: true,
+				IncludeMenubarHints:       true,
+				IncludeDockHints:          true,
+				IncludeNCHints:            true,
+				IncludeStageManagerHints:  true,
+				IncludePIPHints:           true,
+				IncludeScreenCaptureHints: true,
 			},
 			wantErr:       false,
 			wantHintCount: 3,
@@ -244,6 +258,37 @@ func TestHintService_ShowHints(t *testing.T) {
 			wantErr:       false,
 			wantHintCount: 3,
 		},
+		{
+			name: "too many elements shows max hints without error",
+			setupMocks: func(acc *mocks.MockAccessibilityPort, _ *mocks.MockOverlayPort) {
+				acc.ClickableElementsFunc = func(_ context.Context, _ ports.ElementFilter) ([]*element.Element, error) {
+					elements := make([]*element.Element, 10)
+
+					for index := range elements {
+						elements[index] = mustNewElement(
+							fmt.Sprintf("elem%d", index),
+							image.Rect(index*10, index*10, index*10+40, index*10+40),
+						)
+					}
+
+					return elements, nil
+				}
+			},
+			setupGen: func() hint.Generator {
+				gen, _ := hint.NewAlphabetGenerator("as")
+
+				return gen
+			},
+			wantErr:       false,
+			wantHintCount: 8,
+			checkHints: func(t *testing.T, hints []*hint.Interface) {
+				t.Helper()
+
+				if len(hints) != 8 {
+					t.Errorf("Expected 8 hints, got %d", len(hints))
+				}
+			},
+		},
 	}
 
 	for _, testCase := range tests {
@@ -261,10 +306,11 @@ func TestHintService_ShowHints(t *testing.T) {
 			service := services.NewHintService(
 				mockAcc,
 				mockOverlay,
-				&mocks.SystemMock{},
+				&mocks.MockSystemPort{},
 				generator,
 				testCase.config,
 				logger,
+				nil,
 			)
 
 			ctx := context.Background()
@@ -335,10 +381,11 @@ func TestHintService_HideHints(t *testing.T) {
 			service := services.NewHintService(
 				mockAcc,
 				mockOverlay,
-				&mocks.SystemMock{},
+				&mocks.MockSystemPort{},
 				generator,
 				config.HintsConfig{},
 				logger,
+				nil,
 			)
 
 			ctx := context.Background()
@@ -408,10 +455,11 @@ func TestHintService_RefreshHints(t *testing.T) {
 			service := services.NewHintService(
 				mockAcc,
 				mockOverlay,
-				&mocks.SystemMock{},
+				&mocks.MockSystemPort{},
 				generator,
 				config.HintsConfig{},
 				logger,
+				nil,
 			)
 
 			ctx := context.Background()
@@ -428,6 +476,132 @@ func TestHintService_RefreshHints(t *testing.T) {
 	}
 }
 
+func TestHintService_GenerateHintsVisionCombinesSupplementaryAndWindowElements(
+	t *testing.T,
+) {
+	supplementElement := mustNewElement("menubar", image.Rect(10, 0, 60, 20))
+	windowElement := mustNewElement("window", image.Rect(10, 40, 60, 90))
+
+	mockAcc := &mocks.MockAccessibilityPort{}
+	mockAcc.ClickableElementsFunc = func(
+		_ context.Context,
+		filter ports.ElementFilter,
+	) ([]*element.Element, error) {
+		if !filter.SkipWindowElements {
+			t.Error("accessibility should not collect window elements when using vision strategy")
+
+			return nil, nil
+		}
+
+		return []*element.Element{supplementElement}, nil
+	}
+
+	mockSystem := &mocks.MockSystemPort{}
+	mockSystem.FocusedWindowBoundsFunc = func(context.Context) (image.Rectangle, bool, error) {
+		return image.Rect(0, 0, 200, 200), true, nil
+	}
+
+	generator, _ := hint.NewAlphabetGenerator("asdf")
+	service := services.NewHintService(
+		mockAcc,
+		&mocks.MockOverlayPort{},
+		mockSystem,
+		generator,
+		config.HintsConfig{
+			ClickableRoles:                []string{string(element.RoleButton)},
+			IncludeMenubarHints:           true,
+			AdditionalMenubarHintsTargets: []string{"Clock"},
+			IncludeDockHints:              true,
+			IncludeNCHints:                true,
+			IncludeStageManagerHints:      true,
+			IncludePIPHints:               true,
+			IncludeScreenCaptureHints:     true,
+		},
+		logger.Get(),
+		&mockVisionPort{
+			detectedElements: []*element.Element{windowElement},
+		},
+	)
+
+	hints, err := service.GenerateHints(
+		context.Background(),
+		nil,
+		nil,
+		"com.example.app",
+		config.StrategyVision,
+	)
+	if err != nil {
+		t.Fatalf("GenerateHints() unexpected error: %v", err)
+	}
+
+	if len(hints) != 2 {
+		t.Fatalf("GenerateHints() returned %d hints, want 2", len(hints))
+	}
+
+	seen := map[element.ID]int{}
+	for _, generatedHint := range hints {
+		seen[generatedHint.Element().ID()]++
+	}
+
+	if seen[supplementElement.ID()] != 1 {
+		t.Errorf("supplementary element count = %d, want 1", seen[supplementElement.ID()])
+	}
+
+	if seen[windowElement.ID()] != 1 {
+		t.Errorf("window element count = %d, want 1", seen[windowElement.ID()])
+	}
+}
+
+func TestHintService_GenerateHintsVisionWithNilPortReturnsSupplementaryElements(
+	t *testing.T,
+) {
+	supplementElement := mustNewElement("menubar", image.Rect(10, 0, 60, 20))
+
+	mockAcc := &mocks.MockAccessibilityPort{}
+	mockAcc.ClickableElementsFunc = func(
+		_ context.Context,
+		filter ports.ElementFilter,
+	) ([]*element.Element, error) {
+		if !filter.SkipWindowElements {
+			t.Error("nil vision port should not trigger window AX collection")
+		}
+
+		return []*element.Element{supplementElement}, nil
+	}
+
+	generator, _ := hint.NewAlphabetGenerator("asdf")
+	service := services.NewHintService(
+		mockAcc,
+		&mocks.MockOverlayPort{},
+		&mocks.MockSystemPort{},
+		generator,
+		config.HintsConfig{
+			IncludeMenubarHints: true,
+		},
+		logger.Get(),
+		nil,
+	)
+
+	hints, err := service.GenerateHints(
+		context.Background(),
+		nil,
+		nil,
+		"com.example.app",
+		config.StrategyVision,
+	)
+	if err != nil {
+		t.Fatalf("GenerateHints() unexpected error: %v", err)
+	}
+
+	if len(hints) != 1 {
+		t.Fatalf("GenerateHints() returned %d hints, want 1", len(hints))
+	}
+
+	if hints[0].Element().ID() != supplementElement.ID() {
+		t.Errorf("hint element = %q, want %q", hints[0].Element().ID(), supplementElement.ID())
+	}
+}
+
 func TestHintService_UpdateGenerator(t *testing.T) {
 	mockAcc := &mocks.MockAccessibilityPort{}
 	mockOverlay := &mocks.MockOverlayPort{}
@@ -439,10 +613,11 @@ func TestHintService_UpdateGenerator(t *testing.T) {
 	service := services.NewHintService(
 		mockAcc,
 		mockOverlay,
-		&mocks.SystemMock{},
+		&mocks.MockSystemPort{},
 		initialGen,
 		config.HintsConfig{},
 		logger,
+		nil,
 	)
 
 	// Update with new generator
@@ -463,10 +638,11 @@ func TestHintService_Health(t *testing.T) {
 	service := services.NewHintService(
 		mockAcc,
 		mockOverlay,
-		&mocks.SystemMock{},
+		&mocks.MockSystemPort{},
 		generator,
 		config.HintsConfig{},
 		logger,
+		nil,
 	)
 
 	// Setup mocks
@@ -511,4 +687,29 @@ func mustNewElement(id string, bounds image.Rectangle) *element.Element {
 	}
 
 	return element
+}
+
+type mockVisionPort struct {
+	detectedElements []*element.Element
+	detectErr        error
+}
+
+func (m *mockVisionPort) DetectElements(
+	context.Context,
+	image.Rectangle,
+	config.HintsVisionConfig,
+) ([]*element.Element, error) {
+	if m.detectErr != nil {
+		return nil, m.detectErr
+	}
+
+	return m.detectedElements, nil
+}
+
+func (m *mockVisionPort) CaptureScreen(context.Context) (*image.RGBA, error) {
+	return nil, derrors.New(derrors.CodeBridgeFailed, "capture screen not implemented")
+}
+
+func (m *mockVisionPort) Health(context.Context) error {
+	return nil
 }

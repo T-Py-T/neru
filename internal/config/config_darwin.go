@@ -8,10 +8,12 @@ func applyPlatformDefaults(cfg *Config) {
 		"com.apple.TextInputMenuAgent",
 		"com.apple.controlcenter",
 		"com.apple.systemuiserver",
+		"com.y3owk1n.neru",
 	)
 
 	cfg.Hints.ClickableRoles = append(cfg.Hints.ClickableRoles,
 		"AXButton",
+		"AXMenuButton",
 		"AXComboBox",
 		"AXCheckBox",
 		"AXRadioButton",
@@ -26,5 +28,6 @@ func applyPlatformDefaults(cfg *Config) {
 		"AXMenuItem",
 		"AXCell",
 		"AXRow",
+		"AXGenericElement",
 	)
 }

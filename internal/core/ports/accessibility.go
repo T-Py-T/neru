@@ -45,14 +45,6 @@ type ApplicationInfo interface {
 	IsAppExcluded(ctx context.Context, bundleID string) bool
 }
 
-// CacheManagement defines the interface for managing the accessibility element cache.
-type CacheManagement interface {
-	// ClearCache removes all cached element information.
-	// This should be called before querying elements when the UI may have
-	// changed (e.g., after scrolling) to ensure fresh position data.
-	ClearCache()
-}
-
 // AccessibilityPort defines the interface for interacting with the platform
 // accessibility API (AXUIElement on macOS, AT-SPI on Linux, UIA on Windows).
 // Implementations handle all platform-specific bridge complexity and live in
@@ -64,7 +56,6 @@ type AccessibilityPort interface {
 	ElementDiscovery
 	ActionExecution
 	ApplicationInfo
-	CacheManagement
 }
 
 // ElementFilter defines criteria for filtering UI elements.
@@ -72,8 +63,11 @@ type ElementFilter struct {
 	// Roles specifies which accessibility roles to include.
 	Roles []element.Role
 
-	// IncludeOffscreen includes elements outside the visible screen area.
-	IncludeOffscreen bool
+	// SkipWindowElements skips querying the frontmost window for elements.
+	// When true, only supplementary elements (menubar, dock, NC, etc.) are
+	// collected. Used by the vision strategy where the frontmost window
+	// is detected via Vision Framework instead of the AX tree.
+	SkipWindowElements bool
 
 	// MinSize specifies the minimum element size to include.
 	MinSize image.Point
@@ -102,6 +96,16 @@ type ElementFilter struct {
 	// Platform equivalents on Linux/Windows are not yet mapped.
 	IncludeStageManager bool
 
+	// IncludePIP includes Picture in Picture controls.
+	// On macOS this queries com.apple.PIPAgent.
+	// Platform equivalents on Linux/Windows are not yet mapped.
+	IncludePIP bool
+
+	// IncludeScreenCapture includes screen capture controls.
+	// On macOS this queries com.apple.screencaptureui.
+	// Platform equivalents on Linux/Windows are not yet mapped.
+	IncludeScreenCapture bool
+
 	// TitleContains filters elements whose title contains this substring (case-insensitive).
 	TitleContains string
 
@@ -121,12 +125,13 @@ type ElementFilter struct {
 // DefaultElementFilter returns a filter with sensible defaults.
 func DefaultElementFilter() ElementFilter {
 	return ElementFilter{
-		IncludeOffscreen:          false,
 		MinSize:                   image.Point{X: 1, Y: 1},
 		IncludeMenubar:            false,
 		AdditionalMenubarTargets:  []string{},
 		IncludeDock:               false,
 		IncludeNotificationCenter: false,
 		IncludeStageManager:       false,
+		IncludePIP:                false,
+		IncludeScreenCapture:      false,
 	}
 }

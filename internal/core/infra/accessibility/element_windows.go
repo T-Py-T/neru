@@ -14,6 +14,9 @@ import (
 // Element represents a UI element for Windows (stub).
 type Element struct{}
 
+// Children returns the element's children.
+func (e *Element) Children(role string) ([]*Element, error) { return nil, nil }
+
 // Hash returns a hash of the element.
 func (e *Element) Hash() (uint64, error) { return 0, nil }
 
@@ -39,8 +42,8 @@ func (e *Element) MenuBar() *Element { return nil }
 func (e *Element) IsClickable(
 	_ *ElementInfo,
 	_ map[string]struct{},
-	_ *InfoCache,
 	_ config.Provider,
+	_ bool,
 ) bool {
 	return false
 }
@@ -60,7 +63,9 @@ type ElementInfo struct {
 	title           string
 	description     string
 	value           string
+	searchText      string
 	role            string
+	subrole         string
 	roleDescription string
 	isEnabled       bool
 	isFocused       bool
@@ -82,8 +87,14 @@ func (ei *ElementInfo) Description() string { return ei.description }
 // Value returns the element value.
 func (ei *ElementInfo) Value() string { return ei.value }
 
+// SearchText returns extra searchable text collected from descendant elements.
+func (ei *ElementInfo) SearchText() string { return ei.searchText }
+
 // Role returns the element role.
 func (ei *ElementInfo) Role() string { return ei.role }
+
+// Subrole returns the element subrole.
+func (ei *ElementInfo) Subrole() string { return ei.subrole }
 
 // RoleDescription returns the element role description.
 func (ei *ElementInfo) RoleDescription() string { return ei.roleDescription }
@@ -119,6 +130,9 @@ func ElementAtPosition(x, y int) *Element { return nil }
 
 // AllWindows returns all windows (stub).
 func AllWindows() ([]*Element, error) { return []*Element{}, nil }
+
+// FrontmostAndPopoverWindows returns frontmost/popover windows (Windows stub).
+func FrontmostAndPopoverWindows() ([]*Element, error) { return []*Element{}, nil }
 
 // FrontmostWindow returns the frontmost window (stub).
 func FrontmostWindow() *Element { return nil }

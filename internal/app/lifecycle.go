@@ -7,7 +7,6 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/metrics"
-	"strings"
 	"syscall"
 	"time"
 
@@ -16,15 +15,17 @@ import (
 	"github.com/y3owk1n/neru/internal/config"
 	"github.com/y3owk1n/neru/internal/core/domain"
 	"github.com/y3owk1n/neru/internal/core/infra/electron"
+	"github.com/y3owk1n/neru/internal/core/infra/ipc"
 	"github.com/y3owk1n/neru/internal/core/infra/logger"
+	"github.com/y3owk1n/neru/internal/core/infra/platform"
 	"github.com/y3owk1n/neru/internal/core/infra/systray"
 )
 
 const (
-	// MaxExecDisplayLength is the maximum length for executable display names.
-	MaxExecDisplayLength = 30
 	// SystrayQuitTimeout is the timeout for systray quit.
 	SystrayQuitTimeout = 10 * time.Second
+	// StopTimeout is the timeout for IPC server stop during cleanup.
+	StopTimeout = 5 * time.Second
 	// GCTickerInterval is the interval for garbage collection.
 	GCTickerInterval = 5 * time.Minute
 
@@ -52,9 +53,15 @@ const (
 
 // Run starts the main application loop and initializes all subsystems.
 func (a *App) Run() error {
-	a.logger.Info("Starting Neru")
+	cfg := a.configSnapshot()
+	a.logger.Info("Starting Neru",
+		zap.String("version", ipc.BuildVersion()),
+		zap.String("platform", string(platform.CurrentOS())),
+		zap.String("config_path", a.ConfigPath),
+		zap.String("log_level", cfg.Logging.LogLevel),
+		zap.Bool("file_logging", !cfg.Logging.DisableFileLogging))
 
-	err := a.ipcServer.Start(context.Background())
+	err := a.ipcServer.Start(a.ctx)
 	if err != nil {
 		a.logger.Error("Failed to start IPC server", zap.Error(err))
 
@@ -71,12 +78,8 @@ func (a *App) Run() error {
 
 	a.setupAppWatcherCallbacks()
 
-	a.logger.Info("Neru is running")
-
-	cfg := a.configSnapshot()
-
 	if cfg.Grid.EnableGC {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(a.ctx)
 		a.gcCancel = cancel
 
 		go func() {
@@ -195,9 +198,38 @@ func (a *App) setupAppWatcherCallbacks() {
 		a.handleScreenParametersChange()
 	})
 
+	// Watch for Mission Control activated events
+	a.appWatcher.OnMissionControlActivated(func() {
+		cfg := a.configSnapshot()
+		if len(cfg.Hints.OnMissionControlActivated) > 0 && cfg.Hints.DetectMissionControl {
+			a.logger.Info("Mission Control activated: executing actions",
+				zap.Int("action_count", len(cfg.Hints.OnMissionControlActivated)))
+			a.dispatchHotkeyActionsAsync(
+				"mission_control_activated",
+				cfg.Hints.OnMissionControlActivated,
+			)
+		}
+	})
+
+	// Watch for Mission Control deactivated events
+	a.appWatcher.OnMissionControlDeactivated(func() {
+		cfg := a.configSnapshot()
+		if len(cfg.Hints.OnMissionControlDeactivated) > 0 && cfg.Hints.DetectMissionControl {
+			a.logger.Info("Mission Control deactivated: executing actions",
+				zap.Int("action_count", len(cfg.Hints.OnMissionControlDeactivated)))
+			a.dispatchHotkeyActionsAsync(
+				"mission_control_deactivated",
+				cfg.Hints.OnMissionControlDeactivated,
+			)
+		}
+	})
+
 	// Watch for macOS theme changes (Dark Mode / Light Mode) to update
 	// theme-aware label colors without requiring restart.
 	a.setupThemeObserver()
+
+	// Gate Mission Control detection at all levels using config
+	a.appWatcher.SetMCDetection(a.configSnapshot().Hints.DetectMissionControl)
 }
 
 // handleScreenParametersChange responds to display configuration changes by updating overlays.
@@ -242,10 +274,10 @@ func (a *App) processScreenChange() {
 	// but avoid showing the overlay window which happens in ResizeToActiveScreen.
 	isIdle := currentMode == domain.ModeIdle
 	if !isIdle {
-		a.logger.Info("Screen parameters changed; adjusting overlays")
+		a.logger.Debug("Screen parameters changed; adjusting overlays")
 	}
 
-	ctx := context.Background()
+	ctx := a.ctx
 
 	cfg := a.configSnapshot()
 
@@ -298,7 +330,7 @@ func (a *App) handleGridScreenChange(cfg *config.Config, currentMode domain.Mode
 	}
 
 	a.overlayManager.Show()
-	a.logger.Info("Grid overlay resized and regenerated for new screen bounds")
+	a.logger.Debug("Grid overlay resized and regenerated for new screen bounds")
 
 	return true
 }
@@ -332,7 +364,7 @@ func (a *App) handleHintScreenChange(
 		return true
 	}
 
-	a.logger.Info("Hint overlay resized and regenerated for new screen bounds")
+	a.logger.Debug("Hint overlay resized and regenerated for new screen bounds")
 
 	return true
 }
@@ -372,7 +404,7 @@ func (a *App) handleRecursiveGridScreenChange(cfg *config.Config, currentMode do
 	}
 
 	a.overlayManager.Show()
-	a.logger.Info("Recursive-grid overlay resized and regenerated for new screen bounds")
+	a.logger.Debug("Recursive-grid overlay resized and regenerated for new screen bounds")
 
 	return true
 }
@@ -399,17 +431,56 @@ func (a *App) handleAppActivation(bundleID string) {
 func (a *App) handleAdditionalAccessibility(bundleID string, cfg *config.Config) {
 	config := cfg.Hints.AdditionalAXSupport
 
-	if electron.ShouldEnableElectronSupport(bundleID, config.AdditionalElectronBundles) {
-		electron.EnsureElectronAccessibility(bundleID, a.logger)
+	isElectron := electron.ShouldEnableElectronSupport(bundleID, config.AdditionalElectronBundles)
+	isChromium := electron.ShouldEnableChromiumSupport(bundleID, config.AdditionalChromiumBundles)
+	isFirefox := electron.ShouldEnableFirefoxSupport(bundleID, config.AdditionalFirefoxBundles)
+
+	if !isElectron && !isChromium && !isFirefox {
+		return
 	}
 
-	if electron.ShouldEnableChromiumSupport(bundleID, config.AdditionalChromiumBundles) {
-		electron.EnsureChromiumAccessibility(bundleID, a.logger)
-	}
+	go func() {
+		// Apps may need time to initialize their accessibility tree after launch.
+		// We retry a few times to ensure the accessibility attributes are successfully set.
+		// Use exponential backoff to minimize latency for fast-booting apps while
+		// still accommodating slow-booting ones.
+		const (
+			maxRetries    = 5
+			initialDelay  = 100 * time.Millisecond
+			backoffFactor = 2
+		)
 
-	if electron.ShouldEnableFirefoxSupport(bundleID, config.AdditionalFirefoxBundles) {
-		electron.EnsureFirefoxAccessibility(bundleID, a.logger)
-	}
+		delay := initialDelay
+		for range maxRetries {
+			allSuccess := true
+
+			if isElectron {
+				if !electron.EnsureElectronAccessibility(bundleID, a.logger) {
+					allSuccess = false
+				}
+			}
+
+			if isChromium {
+				if !electron.EnsureChromiumAccessibility(bundleID, a.logger) {
+					allSuccess = false
+				}
+			}
+
+			if isFirefox {
+				if !electron.EnsureFirefoxAccessibility(bundleID, a.logger) {
+					allSuccess = false
+				}
+			}
+
+			if allSuccess {
+				return
+			}
+
+			// Wait before retrying
+			time.Sleep(delay)
+			delay *= backoffFactor
+		}
+	}()
 }
 
 // printStartupInfo displays startup information including registered hotkeys.
@@ -418,7 +489,8 @@ func (a *App) printStartupInfo() {
 
 	cfg := a.configSnapshot()
 
-	for key, actions := range cfg.Hotkeys.Bindings {
+	registeredBindings := 0
+	for _, actions := range cfg.Hotkeys.Bindings {
 		if len(actions) == 0 {
 			continue
 		}
@@ -427,21 +499,10 @@ func (a *App) printStartupInfo() {
 			continue
 		}
 
-		// For display, show first action or truncate if exec
-		toShow := actions[0]
-		if strings.HasPrefix(toShow, "exec") {
-			runes := []rune(toShow)
-			if len(runes) > MaxExecDisplayLength {
-				toShow = string(runes[:MaxExecDisplayLength]) + "..."
-			}
-		}
-
-		if len(actions) > 1 {
-			toShow = fmt.Sprintf("%s (+%d more)", toShow, len(actions)-1)
-		}
-
-		a.logger.Info(fmt.Sprintf("  %s: %s", key, toShow))
+		registeredBindings++
 	}
+
+	a.logger.Debug("Configured hotkey bindings", zap.Int("count", registeredBindings))
 }
 
 // waitForShutdown waits for shutdown signals and handles graceful termination.
@@ -513,11 +574,21 @@ func (a *App) Stop() {
 	})
 }
 
+// Quit triggers a graceful shutdown of the application.
+func (a *App) Quit() {
+	a.Stop()
+	platformQuit()
+}
+
 // Cleanup cleans up resources. It is safe to call multiple times; only the
 // first invocation performs the actual teardown.
 func (a *App) Cleanup() {
 	a.cleanupOnce.Do(func() {
-		a.logger.Info("Cleaning up")
+		a.logger.Debug("Cleaning up")
+		// Cancel root context to signal shutdown to all operations
+		if a.cancel != nil {
+			a.cancel()
+		}
 		// Cancel background GC if running
 		if a.gcCancel != nil {
 			a.gcCancel()
@@ -527,15 +598,24 @@ func (a *App) Cleanup() {
 		// Stop theme observer: nil the handler first so any in-flight KVO callback
 		// (between the async dispatch and actual observer removal) is a no-op.
 		a.stopThemeObserver()
-		// Stop IPC server first to prevent new requests
+		// Stop IPC server first to prevent new requests.
+		// Use a fresh context instead of a.ctx since the root context was
+		// canceled above; a canceled context would cause Stop() to fail
+		// immediately before it can complete graceful teardown.
 		if a.ipcServer != nil {
-			stopServerErr := a.ipcServer.Stop(context.Background())
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), StopTimeout)
+
+			stopServerErr := a.ipcServer.Stop(stopCtx)
+
+			stopCancel()
+
 			if stopServerErr != nil {
 				a.logger.Error("Failed to stop IPC server", zap.Error(stopServerErr))
 			}
 		}
 
 		if a.hotkeyManager != nil {
+			a.stopAllHotkeyRepeats()
 			a.hotkeyManager.UnregisterAll()
 		}
 
@@ -550,11 +630,6 @@ func (a *App) Cleanup() {
 
 		if a.eventTap != nil {
 			a.eventTap.Destroy()
-		}
-		// Stop accessibility cache cleanup goroutine
-		if a.axCacheStop != nil {
-			a.axCacheStop()
-			a.axCacheStop = nil
 		}
 		// Sync and close logger
 		loggerSyncErr := logger.Sync()

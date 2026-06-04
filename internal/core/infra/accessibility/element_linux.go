@@ -41,7 +41,9 @@ type ElementInfo struct {
 	title           string
 	description     string
 	value           string
+	searchText      string
 	role            string
+	subrole         string
 	roleDescription string
 	isEnabled       bool
 	isFocused       bool
@@ -63,8 +65,14 @@ func (ei *ElementInfo) Description() string { return ei.description }
 // Value returns the element value.
 func (ei *ElementInfo) Value() string { return ei.value }
 
+// SearchText returns extra searchable text collected from descendant elements.
+func (ei *ElementInfo) SearchText() string { return ei.searchText }
+
 // Role returns the element role.
 func (ei *ElementInfo) Role() string { return ei.role }
+
+// Subrole returns the element subrole.
+func (ei *ElementInfo) Subrole() string { return ei.subrole }
 
 // RoleDescription returns the element role description.
 func (ei *ElementInfo) RoleDescription() string { return ei.roleDescription }
@@ -175,7 +183,7 @@ func (e *Element) Info() (*ElementInfo, error) {
 }
 
 // Children returns the element's children (Linux stub).
-func (e *Element) Children(_ *InfoCache) ([]*Element, error) { return []*Element{}, nil }
+func (e *Element) Children(role string) ([]*Element, error) { return nil, nil }
 
 // SetFocus sets focus on the element (Linux stub).
 func (e *Element) SetFocus() error { return nil }
@@ -200,6 +208,9 @@ func (e *Element) Clone() (*Element, error) { return &Element{}, nil }
 
 // AllWindows returns all windows (Linux stub).
 func AllWindows() ([]*Element, error) { return []*Element{}, nil }
+
+// FrontmostAndPopoverWindows returns frontmost/popover windows (Linux stub).
+func FrontmostAndPopoverWindows() ([]*Element, error) { return []*Element{}, nil }
 
 // FrontmostWindow returns the frontmost window.
 func FrontmostWindow() *Element {
@@ -523,8 +534,8 @@ func CurrentCursorPosition() image.Point {
 func (e *Element) IsClickable(
 	_ *ElementInfo,
 	_ map[string]struct{},
-	_ *InfoCache,
 	_ config.Provider,
+	_ bool,
 ) bool {
 	return false
 }

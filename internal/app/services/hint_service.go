@@ -2,19 +2,22 @@ package services
 
 import (
 	"context"
+	"slices"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/config"
-	"github.com/y3owk1n/neru/internal/core"
 	"github.com/y3owk1n/neru/internal/core/domain/element"
 	"github.com/y3owk1n/neru/internal/core/domain/hint"
+	derrors "github.com/y3owk1n/neru/internal/core/errors"
 	"github.com/y3owk1n/neru/internal/core/ports"
 )
 
 // HintService orchestrates hint generation and display.
-// It coordinates between the accessibility system, hint generator, and overlay.
+// It coordinates between the accessibility system, vision detection,
+// hint generator, and overlay.
 type HintService struct {
 	BaseService
 
@@ -22,6 +25,7 @@ type HintService struct {
 	generator hint.Generator
 	config    config.HintsConfig
 	logger    *zap.Logger
+	vision    ports.VisionPort
 }
 
 // NewHintService creates a new hint service with the given dependencies.
@@ -32,12 +36,18 @@ func NewHintService(
 	generator hint.Generator,
 	config config.HintsConfig,
 	logger *zap.Logger,
+	vision ports.VisionPort,
 ) *HintService {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
 	return &HintService{
 		BaseService: NewBaseService(accessibility, overlay, system),
 		generator:   generator,
 		config:      config,
-		logger:      logger,
+		logger:      logger.Named("service.hints"),
+		vision:      vision,
 	}
 }
 
@@ -48,28 +58,60 @@ func (s *HintService) ShowHints(
 	filterRoles []string,
 	filterTextContains []string,
 ) ([]*hint.Interface, error) {
-	s.logger.Info("Showing hints")
+	s.logger.Debug("Showing hints")
 
+	hints, err := s.GenerateHints(ctx, filterRoles, filterTextContains, "", "")
+	if err != nil {
+		return nil, err
+	}
+
+	if len(hints) == 0 {
+		return hints, nil
+	}
+
+	// Display hints
+	showHintsErr := s.overlay.ShowHints(ctx, hints)
+	if showHintsErr != nil {
+		s.logger.Error("Failed to show hints overlay", zap.Error(showHintsErr))
+
+		return nil, derrors.WrapOverlayFailed(showHintsErr, "show hints")
+	}
+
+	s.logger.Debug("Hints displayed successfully", zap.Int("count", len(hints)))
+
+	return hints, nil
+}
+
+// GenerateHints collects clickable elements and generates labels without drawing
+// them. Mode handlers use this to filter and position hints before the first
+// render, avoiding an extra full overlay draw during activation.
+// If bundleID is non-empty, it is used directly (skips AX call).
+// If strategyOverride is non-empty, it overrides the config-derived strategy.
+func (s *HintService) GenerateHints(
+	ctx context.Context,
+	filterRoles []string,
+	filterTextContains []string,
+	bundleID string,
+	strategyOverride string,
+) ([]*hint.Interface, error) {
 	s.mu.RLock()
 	cfg := s.config
 	gen := s.generator
 	s.mu.RUnlock()
 
-	// Clear the accessibility cache before querying elements to ensure fresh
-	// position data. Without this, elements that moved due to scrolling would
-	// retain their stale pre-scroll positions from the cache (StaticElementTTL
-	// is 30s), causing hint labels to appear at wrong locations.
-	s.accessibility.ClearCache()
-
 	filter := ports.DefaultElementFilter()
 
 	// Populate filter with configuration
-	bundleID, bundleIDErr := s.accessibility.FocusedAppBundleID(ctx)
-	if bundleIDErr != nil {
-		s.logger.Debug(
-			"Failed to get focused app bundle ID for hints roles",
-			zap.Error(bundleIDErr),
-		)
+	if bundleID == "" {
+		var bundleIDErr error
+
+		bundleID, bundleIDErr = s.accessibility.FocusedAppBundleID(ctx)
+		if bundleIDErr != nil {
+			s.logger.Debug(
+				"Failed to get focused app bundle ID for hints roles",
+				zap.Error(bundleIDErr),
+			)
+		}
 	}
 
 	// Use filterRoles if provided, otherwise use configured roles
@@ -100,6 +142,8 @@ func (s *HintService) ShowHints(
 	filter.IncludeDock = cfg.IncludeDockHints
 	filter.IncludeNotificationCenter = cfg.IncludeNCHints
 	filter.IncludeStageManager = cfg.IncludeStageManagerHints
+	filter.IncludePIP = cfg.IncludePIPHints
+	filter.IncludeScreenCapture = cfg.IncludeScreenCaptureHints
 
 	// Apply text filter if provided (OR match - element matches if any text contains match)
 	if len(filterTextContains) > 0 {
@@ -112,51 +156,72 @@ func (s *HintService) ShowHints(
 		}
 
 		s.logger.Debug("Applying text filter",
-			zap.Strings("text", filterTextContains))
+			zap.Int("term_count", len(filterTextContains)))
 	}
 
-	// Get clickable elements
-	elements, elementsErr := s.accessibility.ClickableElements(ctx, filter)
-	if elementsErr != nil {
-		s.logger.Error("Failed to get clickable elements", zap.Error(elementsErr))
+	// Determine strategy for the frontmost app (override takes precedence)
+	strategy := cfg.StrategyForApp(bundleID)
+	if strategyOverride != "" {
+		strategy = strategyOverride
+	}
 
-		return nil, core.WrapAccessibilityFailed(elementsErr, "get clickable elements")
+	var (
+		elements []*element.Element
+		genErr   error
+	)
+
+	switch strategy {
+	case config.StrategyVision:
+		elements = s.generateHintsVision(ctx, bundleID, filter)
+	default:
+		elements, genErr = s.generateHintsAX(ctx, filter)
+	}
+
+	if genErr != nil {
+		return nil, genErr
 	}
 
 	if len(elements) == 0 {
-		s.logger.Info("No clickable elements found")
+		s.logger.Debug("No clickable elements found")
 
 		return nil, nil
 	}
 
-	s.logger.Info("Found clickable elements", zap.Int("count", len(elements)))
+	s.logger.Debug("Found clickable elements", zap.Int("count", len(elements)))
+
+	maxHints := gen.MaxHints()
+	if maxHints > 0 && len(elements) > maxHints {
+		s.logger.Warn(
+			"Clickable element count exceeds available hint key combinations; showing as many as possible",
+			zap.Int("element_count", len(elements)),
+			zap.Int("max_hints", maxHints),
+			zap.Int("omitted_count", len(elements)-maxHints),
+		)
+	}
 
 	// Generate hints
+	genStart := time.Now()
 	hints, elementsErr := gen.Generate(ctx, elements)
+	s.logger.Debug("TIMING: HintGenerator.Generate",
+		zap.Duration("elapsed", time.Since(genStart)),
+		zap.Int("element_count", len(elements)),
+		zap.Int("hint_count", len(hints)),
+		zap.Error(elementsErr))
+
 	if elementsErr != nil {
 		s.logger.Error("Failed to generate hints", zap.Error(elementsErr))
 
-		return nil, core.WrapInternalFailed(elementsErr, "generate hints")
+		return nil, derrors.WrapInternalFailed(elementsErr, "generate hints")
 	}
 
-	s.logger.Info("Generated hints", zap.Int("count", len(hints)))
-
-	// Display hints
-	showHintsErr := s.overlay.ShowHints(ctx, hints)
-	if showHintsErr != nil {
-		s.logger.Error("Failed to show hints overlay", zap.Error(showHintsErr))
-
-		return nil, core.WrapOverlayFailed(showHintsErr, "show hints")
-	}
-
-	s.logger.Info("Hints displayed successfully")
+	s.logger.Debug("Generated hints", zap.Int("count", len(hints)))
 
 	return hints, nil
 }
 
 // HideHints removes the hint overlay from the screen.
 func (s *HintService) HideHints(ctx context.Context) error {
-	s.logger.Info("Hiding hints")
+	s.logger.Debug("Hiding hints")
 
 	err := s.HideOverlay(ctx, "hide hints")
 	if err != nil {
@@ -165,14 +230,14 @@ func (s *HintService) HideHints(ctx context.Context) error {
 		return err
 	}
 
-	s.logger.Info("Hints hidden successfully")
+	s.logger.Debug("Hints hidden successfully")
 
 	return nil
 }
 
 // RefreshHints updates the hint display (e.g., after screen changes).
 func (s *HintService) RefreshHints(ctx context.Context) error {
-	s.logger.Info("Refreshing hints")
+	s.logger.Debug("Refreshing hints")
 
 	if !s.overlay.IsVisible() {
 		s.logger.Debug("Overlay not visible, skipping refresh")
@@ -184,10 +249,10 @@ func (s *HintService) RefreshHints(ctx context.Context) error {
 	if refreshOverlayErr != nil {
 		s.logger.Error("Failed to refresh overlay", zap.Error(refreshOverlayErr))
 
-		return core.WrapOverlayFailed(refreshOverlayErr, "refresh hints")
+		return derrors.WrapOverlayFailed(refreshOverlayErr, "refresh hints")
 	}
 
-	s.logger.Info("Hints refreshed successfully")
+	s.logger.Debug("Hints refreshed successfully")
 
 	return nil
 }
@@ -200,11 +265,13 @@ func (s *HintService) UpdateConfig(config config.HintsConfig) {
 
 	s.config = config
 
-	s.logger.Info("Hints configuration updated",
+	s.logger.Debug("Hints configuration updated",
 		zap.Bool("include_menubar", config.IncludeMenubarHints),
 		zap.Bool("include_dock", config.IncludeDockHints),
 		zap.Bool("include_nc", config.IncludeNCHints),
-		zap.Bool("include_stage_manager", config.IncludeStageManagerHints))
+		zap.Bool("include_stage_manager", config.IncludeStageManagerHints),
+		zap.Bool("include_pip", config.IncludePIPHints),
+		zap.Bool("include_screen_capture", config.IncludeScreenCaptureHints))
 }
 
 // UpdateGenerator updates the hint generator.
@@ -221,5 +288,107 @@ func (s *HintService) UpdateGenerator(_ context.Context, generator hint.Generato
 
 	s.generator = generator
 
-	s.logger.Info("Hint generator updated")
+	s.logger.Debug("Hint generator updated")
+}
+
+// generateHintsAX collects elements using the AX tree (default strategy).
+func (s *HintService) generateHintsAX(
+	ctx context.Context,
+	filter ports.ElementFilter,
+) ([]*element.Element, error) {
+	axStart := time.Now()
+	elements, err := s.accessibility.ClickableElements(ctx, filter)
+	s.logger.Debug("TIMING: ClickableElements (axtree)",
+		zap.Duration("elapsed", time.Since(axStart)),
+		zap.Int("element_count", len(elements)),
+		zap.Error(err))
+
+	if err != nil {
+		s.logger.Error("Failed to get clickable elements via AX", zap.Error(err))
+
+		return nil, derrors.WrapAccessibilityFailed(err, "get clickable elements")
+	}
+
+	return elements, nil
+}
+
+// generateHintsVision collects window elements via vision detection and
+// supplementary elements (menubar, dock, etc.) via AX. This hybrid approach
+// ensures system UI is always detected while the frontmost window content
+// uses vision-based detection for apps with poor AX trees.
+func (s *HintService) generateHintsVision(
+	ctx context.Context,
+	_ string,
+	filter ports.ElementFilter,
+) []*element.Element {
+	// Collect supplementary elements (menubar, dock, NC, etc.) via AX.
+	// These are system-level components that vision should not attempt to detect.
+	var allElements []*element.Element
+
+	supplementStart := time.Now()
+	supplementFilter := filter
+	supplementFilter.Roles = nil               // no role filtering for supplementary elements
+	supplementFilter.SkipWindowElements = true // vision handles the window
+
+	supplementElements, err := s.accessibility.ClickableElements(ctx, supplementFilter)
+	if err != nil {
+		s.logger.Debug("Failed to get supplementary elements via AX", zap.Error(err))
+	} else {
+		allElements = append(allElements, supplementElements...)
+	}
+
+	s.logger.Debug("TIMING: Supplementary elements (AX)",
+		zap.Duration("elapsed", time.Since(supplementStart)),
+		zap.Int("count", len(supplementElements)))
+
+	if s.vision == nil {
+		s.logger.Warn("Vision strategy selected but vision port is unavailable")
+
+		return allElements
+	}
+
+	// Get focused window bounds for vision detection
+	windowBounds, found, boundsErr := s.system.FocusedWindowBounds(ctx)
+	if boundsErr != nil || !found {
+		s.logger.Debug(
+			"No focused window bounds, falling back to full screen",
+			zap.Error(boundsErr),
+		)
+
+		windowBounds, boundsErr = s.system.ScreenBounds(ctx)
+		if boundsErr != nil {
+			s.logger.Error("Failed to get screen bounds for vision detection", zap.Error(boundsErr))
+
+			return allElements
+		}
+	}
+
+	// Detect window elements via vision
+	visionStart := time.Now()
+	windowElements, visionErr := s.vision.DetectElements(ctx, windowBounds, s.config.Vision)
+	s.logger.Debug("TIMING: Window elements (vision)",
+		zap.Duration("elapsed", time.Since(visionStart)),
+		zap.Int("count", len(windowElements)),
+		zap.Error(visionErr))
+
+	if visionErr != nil {
+		s.logger.Error("Failed to detect elements via vision", zap.Error(visionErr))
+
+		return allElements
+	}
+
+	// Filter vision-detected elements by configured roles
+	for _, element := range windowElements {
+		if len(filter.Roles) == 0 {
+			allElements = append(allElements, element)
+
+			continue
+		}
+
+		if slices.Contains(filter.Roles, element.Role()) {
+			allElements = append(allElements, element)
+		}
+	}
+
+	return allElements
 }

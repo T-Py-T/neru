@@ -20,6 +20,7 @@ import (
 
 	"github.com/y3owk1n/neru/internal/config"
 	"github.com/y3owk1n/neru/internal/core/domain/action"
+	"github.com/y3owk1n/neru/internal/core/domain/element"
 	derrors "github.com/y3owk1n/neru/internal/core/errors"
 	"github.com/y3owk1n/neru/internal/core/infra/platform/darwin"
 )
@@ -94,16 +95,25 @@ func ClickableRoles() []string {
 
 // ElementInfo contains metadata and positioning information for a UI element.
 type ElementInfo struct {
-	position        image.Point
-	size            image.Point
-	title           string
-	description     string
-	value           string
-	role            string
-	roleDescription string
-	isEnabled       bool
-	isFocused       bool
-	pid             int
+	position          image.Point
+	size              image.Point
+	title             string
+	description       string
+	value             string
+	identifier        string
+	searchText        string
+	role              string
+	subrole           string
+	roleDescription   string
+	isEnabled         bool
+	hasEnabledAttr    bool
+	isFocused         bool
+	isHidden          bool
+	isVisible         bool
+	hasPressAction    bool
+	hasShowMenuAction bool
+	preActionsFetched bool
+	pid               int
 }
 
 // Position returns the element position.
@@ -131,9 +141,24 @@ func (ei *ElementInfo) Value() string {
 	return ei.value
 }
 
+// Identifier returns the element identifier.
+func (ei *ElementInfo) Identifier() string {
+	return ei.identifier
+}
+
+// SearchText returns extra searchable text collected from descendant elements.
+func (ei *ElementInfo) SearchText() string {
+	return ei.searchText
+}
+
 // Role returns the element role.
 func (ei *ElementInfo) Role() string {
 	return ei.role
+}
+
+// Subrole returns the element subrole.
+func (ei *ElementInfo) Subrole() string {
+	return ei.subrole
 }
 
 // RoleDescription returns the element role description.
@@ -151,6 +176,28 @@ func (ei *ElementInfo) IsFocused() bool {
 	return ei.isFocused
 }
 
+// IsHidden returns whether the element is AX-hidden
+// (e.g. CSS visibility:hidden, or the element is in an offscreen menu).
+func (ei *ElementInfo) IsHidden() bool {
+	return ei.isHidden
+}
+
+// IsVisible returns whether the element is AX-visible.
+// When the AXVisible attribute is not supported, returns true (default).
+func (ei *ElementInfo) IsVisible() bool {
+	return ei.isVisible
+}
+
+// HasPressAction returns whether the element has AXPress action.
+func (ei *ElementInfo) HasPressAction() bool {
+	return ei.hasPressAction
+}
+
+// HasShowMenuAction returns whether the element has AXShowMenu action.
+func (ei *ElementInfo) HasShowMenuAction() bool {
+	return ei.hasShowMenuAction
+}
+
 // PID returns the process ID.
 func (ei *ElementInfo) PID() int {
 	return ei.pid
@@ -158,14 +205,14 @@ func (ei *ElementInfo) PID() int {
 
 // CheckAccessibilityPermissions verifies that the application has been granted accessibility permissions.
 func CheckAccessibilityPermissions() bool {
-	result := C.checkAccessibilityPermissions()
+	result := C.NeruCheckAccessibilityPermissions()
 
 	return result == 1
 }
 
 // SystemWideElement returns the system-wide accessibility element representing the entire screen.
 func SystemWideElement() *Element {
-	ref := C.getSystemWideElement()
+	ref := C.NeruGetSystemWideElement()
 	if ref == nil {
 		return nil
 	}
@@ -175,7 +222,7 @@ func SystemWideElement() *Element {
 
 // FocusedApplication returns the currently focused application element.
 func FocusedApplication() *Element {
-	ref := C.getFocusedApplication()
+	ref := C.NeruGetFocusedApplication()
 	if ref == nil {
 		return nil
 	}
@@ -185,7 +232,7 @@ func FocusedApplication() *Element {
 
 // ApplicationByPID returns an application element identified by its process ID.
 func ApplicationByPID(pid int) *Element {
-	ref := C.getApplicationByPID(C.int(pid))
+	ref := C.NeruGetApplicationByPID(C.int(pid))
 	if ref == nil {
 		return nil
 	}
@@ -198,7 +245,7 @@ func ApplicationByBundleID(bundleID string) *Element {
 	cBundle := C.CString(bundleID)
 	defer C.free(unsafe.Pointer(cBundle)) //nolint:nlreturn
 
-	ref := C.getApplicationByBundleId(cBundle)
+	ref := C.NeruGetApplicationByBundleId(cBundle)
 	if ref == nil {
 		return nil
 	}
@@ -209,7 +256,7 @@ func ApplicationByBundleID(bundleID string) *Element {
 // ElementAtPosition returns the UI element at the specified screen coordinates.
 func ElementAtPosition(x, y int) *Element {
 	pos := C.CGPoint{x: C.double(x), y: C.double(y)}
-	ref := C.getElementAtPosition(pos)
+	ref := C.NeruGetElementAtPosition(pos)
 	if ref == nil {
 		return nil
 	}
@@ -223,11 +270,11 @@ func (e *Element) Info() (*ElementInfo, error) {
 		return nil, errGetInfoNil
 	}
 
-	cInfo := C.getElementInfo(e.ref) //nolint:nlreturn
+	cInfo := C.NeruGetElementInfo(e.ref) //nolint:nlreturn
 	if cInfo == nil {
 		return nil, errGetInfoFailed
 	}
-	defer C.freeElementInfo(cInfo) //nolint:nlreturn
+	defer C.NeruFreeElementInfo(cInfo) //nolint:nlreturn
 
 	info := &ElementInfo{
 		position: image.Point{
@@ -238,9 +285,15 @@ func (e *Element) Info() (*ElementInfo, error) {
 			X: int(cInfo.size.width),
 			Y: int(cInfo.size.height),
 		},
-		isEnabled: bool(cInfo.isEnabled),
-		isFocused: bool(cInfo.isFocused),
-		pid:       int(cInfo.pid),
+		isEnabled:         bool(cInfo.isEnabled),
+		hasEnabledAttr:    bool(cInfo.hasEnabledAttribute),
+		isFocused:         bool(cInfo.isFocused),
+		isHidden:          bool(cInfo.isHidden),
+		isVisible:         bool(cInfo.isVisible),
+		hasPressAction:    bool(cInfo.hasPressAction),
+		hasShowMenuAction: bool(cInfo.hasShowMenuAction),
+		preActionsFetched: bool(cInfo.preActionsFetched),
+		pid:               int(cInfo.pid),
 	}
 
 	if cInfo.title != nil {
@@ -252,8 +305,14 @@ func (e *Element) Info() (*ElementInfo, error) {
 	if cInfo.value != nil {
 		info.value = C.GoString(cInfo.value)
 	}
+	if cInfo.identifier != nil {
+		info.identifier = C.GoString(cInfo.identifier)
+	}
 	if cInfo.role != nil {
 		info.role = C.GoString(cInfo.role)
+	}
+	if cInfo.subrole != nil {
+		info.subrole = C.GoString(cInfo.subrole)
 	}
 	if cInfo.roleDescription != nil {
 		info.roleDescription = C.GoString(cInfo.roleDescription)
@@ -263,7 +322,7 @@ func (e *Element) Info() (*ElementInfo, error) {
 }
 
 // Children returns all child elements of this element.
-func (e *Element) Children(cache *InfoCache) ([]*Element, error) {
+func (e *Element) Children(role string) ([]*Element, error) {
 	if e.ref == nil {
 		return nil, errGetChildrenNil
 	}
@@ -271,42 +330,20 @@ func (e *Element) Children(cache *InfoCache) ([]*Element, error) {
 	var count C.int
 	var rawChildren unsafe.Pointer
 
-	var info *ElementInfo
-	if cache != nil {
-		info = cache.Get(e)
-	}
-
-	if info == nil {
-		var err error
-		info, err = e.Info()
-		if err != nil {
-			return nil, derrors.Wrap(
-				err,
-				derrors.CodeAccessibilityFailed,
-				"failed to get element info",
-			)
-		}
-		if cache != nil {
-			cache.Set(e, info)
-		}
-	}
-
-	if info != nil {
-		switch info.Role() {
-		case "AXList", "AXTable", "AXOutline":
-			ptr := unsafe.Pointer(C.getVisibleRows(e.ref, &count)) //nolint:nlreturn
-			if ptr != nil && count > 0 {
-				rawChildren = ptr
-			} else {
-				if ptr != nil {
-					C.free(ptr)
-				}
-
-				rawChildren = unsafe.Pointer(C.getChildren(e.ref, &count)) //nolint:nlreturn
+	switch role {
+	case string(element.RoleList), string(element.RoleTable), string(element.RoleOutline):
+		ptr := unsafe.Pointer(C.NeruGetVisibleRows(e.ref, &count)) //nolint:nlreturn
+		if ptr != nil && count > 0 {
+			rawChildren = ptr
+		} else {
+			if ptr != nil {
+				C.free(ptr)
 			}
-		default:
-			rawChildren = unsafe.Pointer(C.getChildren(e.ref, &count)) //nolint:nlreturn
+
+			rawChildren = unsafe.Pointer(C.NeruGetChildren(e.ref, &count)) //nolint:nlreturn
 		}
+	default:
+		rawChildren = unsafe.Pointer(C.NeruGetChildren(e.ref, &count)) //nolint:nlreturn
 	}
 
 	if rawChildren == nil || count == 0 {
@@ -320,7 +357,6 @@ func (e *Element) Children(cache *InfoCache) ([]*Element, error) {
 
 	countInt := int(count)
 	childSlice := (*[1 << 30]unsafe.Pointer)(rawChildren)[:countInt:countInt]
-	// Pre-allocate and directly create elements
 	children := make([]*Element, countInt)
 	for i := range children {
 		children[i] = &Element{ref: childSlice[i]}
@@ -329,13 +365,28 @@ func (e *Element) Children(cache *InfoCache) ([]*Element, error) {
 	return children, nil
 }
 
+// ActivateWindow brings the window's application to the foreground and sets
+// keyboard focus on the window.
+func (e *Element) ActivateWindow() error {
+	if e.ref == nil {
+		return errSetFocusNil
+	}
+
+	result := C.NeruActivateWindow(e.ref) //nolint:nlreturn
+	if result == 0 {
+		return errSetFocusFailed
+	}
+
+	return nil
+}
+
 // SetFocus sets focus to the element.
 func (e *Element) SetFocus() error {
 	if e.ref == nil {
 		return errSetFocusNil
 	}
 
-	result := C.setFocus(e.ref) //nolint:nlreturn
+	result := C.NeruSetFocus(e.ref) //nolint:nlreturn
 	if result == 0 {
 		return errSetFocusFailed
 	}
@@ -352,7 +403,7 @@ func (e *Element) Attribute(name string) (string, error) {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName)) //nolint:nlreturn
 
-	cValue := C.getElementAttribute(e.ref, cName) //nolint:nlreturn
+	cValue := C.NeruGetElementAttribute(e.ref, cName) //nolint:nlreturn
 	if cValue == nil {
 		return "", derrors.Newf(
 			derrors.CodeAccessibilityFailed,
@@ -360,7 +411,7 @@ func (e *Element) Attribute(name string) (string, error) {
 			name,
 		)
 	}
-	defer C.freeString(cValue)
+	defer C.NeruFreeString(cValue)
 
 	return C.GoString(cValue), nil
 }
@@ -368,7 +419,7 @@ func (e *Element) Attribute(name string) (string, error) {
 // Release releases the element reference.
 func (e *Element) Release() {
 	if e.ref != nil {
-		C.releaseElement(e.ref)
+		C.NeruReleaseElement(e.ref)
 		e.ref = nil
 	}
 }
@@ -388,14 +439,14 @@ func (e *Element) Hash() (uint64, error) {
 		return 0, derrors.New(derrors.CodeAccessibilityFailed, "element reference is nil")
 	}
 
-	hash := C.getElementHash(e.ref) //nolint:nlreturn
+	hash := C.NeruGetElementHash(e.ref) //nolint:nlreturn
 
 	return uint64(hash), nil
 }
 
 // Equal checks if this element refers to the same underlying UI element as another.
 // It uses a fast-path pointer comparison before falling back to the CGo call
-// (C.areElementsEqual). Cloned elements share the same underlying pointer, so
+// (C.NeruAreElementsEqual). Cloned elements share the same underlying pointer, so
 // this avoids crossing the CGo boundary in the common case during cache lookups.
 func (e *Element) Equal(other *Element) bool {
 	if e == nil && other == nil {
@@ -417,7 +468,7 @@ func (e *Element) Equal(other *Element) bool {
 		return true
 	}
 
-	result := C.areElementsEqual(e.ref, other.ref) //nolint:nlreturn
+	result := C.NeruAreElementsEqual(e.ref, other.ref) //nolint:nlreturn
 
 	return result == 1
 }
@@ -428,14 +479,66 @@ func (e *Element) Clone() (*Element, error) {
 		return nil, derrors.New(derrors.CodeAccessibilityFailed, "element reference is nil")
 	}
 
-	C.retainElement(e.ref) //nolint:nlreturn
+	C.NeruRetainElement(e.ref)
+
 	return &Element{ref: e.ref}, nil
 }
 
 // AllWindows returns all windows of the focused application.
 func AllWindows() ([]*Element, error) {
 	var count C.int
-	windows := C.getAllWindows(&count)
+	windows := C.NeruGetAllWindows(&count)
+	if windows == nil || count == 0 {
+		if windows != nil {
+			C.free(unsafe.Pointer(windows))
+		}
+
+		return []*Element{}, nil
+	}
+	defer C.free(unsafe.Pointer(windows)) //nolint:nlreturn
+
+	countInt := int(count)
+	windowSlice := (*[1 << 30]unsafe.Pointer)(unsafe.Pointer(windows))[:countInt:countInt]
+	result := make([]*Element, countInt)
+
+	for index := range result {
+		result[index] = &Element{ref: windowSlice[index]}
+	}
+
+	return result, nil
+}
+
+// AllFocusableWindowsOnActiveSpace returns all focusable windows on the active
+// space across all running applications. Filters out minimized, hidden, and
+// off-space windows.
+func AllFocusableWindowsOnActiveSpace() ([]*Element, error) {
+	var count C.int
+	windows := C.NeruGetAllFocusableWindowsOnActiveSpace(&count)
+	if windows == nil || count == 0 {
+		if windows != nil {
+			C.free(unsafe.Pointer(windows))
+		}
+
+		return []*Element{}, nil
+	}
+	defer C.free(unsafe.Pointer(windows)) //nolint:nlreturn
+
+	countInt := int(count)
+	windowSlice := (*[1 << 30]unsafe.Pointer)(unsafe.Pointer(windows))[:countInt:countInt]
+	result := make([]*Element, countInt)
+
+	for index := range result {
+		result[index] = &Element{ref: windowSlice[index]}
+	}
+
+	return result, nil
+}
+
+// FrontmostAndPopoverWindows returns the frontmost window plus focused-app
+// popover windows in a single native query.
+func FrontmostAndPopoverWindows() ([]*Element, error) {
+	var count C.int
+	windows := C.NeruGetFrontmostAndPopoverWindows(&count)
 	if windows == nil || count == 0 {
 		if windows != nil {
 			C.free(unsafe.Pointer(windows))
@@ -458,7 +561,7 @@ func AllWindows() ([]*Element, error) {
 
 // FrontmostWindow returns the frontmost window.
 func FrontmostWindow() *Element {
-	ref := C.getFrontmostWindow()
+	ref := C.NeruGetFrontmostWindow()
 	if ref == nil {
 		return nil
 	}
@@ -471,7 +574,7 @@ func (e *Element) MenuBar() *Element {
 	if e.ref == nil {
 		return nil
 	}
-	ref := C.getMenuBar(e.ref) //nolint:nlreturn
+	ref := C.NeruGetMenuBar(e.ref) //nolint:nlreturn
 	if ref == nil {
 		return nil
 	}
@@ -485,11 +588,11 @@ func (e *Element) ApplicationName() string {
 		return ""
 	}
 
-	cName := C.getApplicationName(e.ref) //nolint:nlreturn
+	cName := C.NeruGetApplicationName(e.ref) //nolint:nlreturn
 	if cName == nil {
 		return ""
 	}
-	defer C.freeString(cName)
+	defer C.NeruFreeString(cName)
 
 	return C.GoString(cName)
 }
@@ -500,11 +603,11 @@ func (e *Element) BundleIdentifier() string {
 		return ""
 	}
 
-	cBundleID := C.getBundleIdentifier(e.ref) //nolint:nlreturn
+	cBundleID := C.NeruGetBundleIdentifier(e.ref) //nolint:nlreturn
 	if cBundleID == nil {
 		return ""
 	}
-	defer C.freeString(cBundleID)
+	defer C.NeruFreeString(cBundleID)
 
 	return C.GoString(cBundleID)
 }
@@ -515,7 +618,7 @@ func (e *Element) ScrollBounds() image.Rectangle {
 		return image.Rectangle{}
 	}
 
-	rect := C.getScrollBounds(e.ref) //nolint:nlreturn
+	rect := C.NeruGetScrollBounds(e.ref) //nolint:nlreturn
 
 	return image.Rectangle{
 		Min: image.Point{
@@ -539,7 +642,7 @@ func IsLeftMouseDown() bool {
 	return darwin.IsLeftMouseDown()
 }
 
-// GetLastMouseDownPosition returns the last position where mouse down occurred.
+// GetLastMouseDownPosition ret down occurred.
 func GetLastMouseDownPosition() image.Point {
 	return darwin.GetLastMouseDownPosition()
 }
@@ -610,37 +713,19 @@ func CurrentCursorPosition() image.Point {
 func (e *Element) IsClickable(
 	info *ElementInfo,
 	allowedRoles map[string]struct{},
-	cache *InfoCache,
 	configProvider config.Provider,
+	ignoreClickableCheck bool,
 ) bool {
 	if e.ref == nil {
 		return false
 	}
 
-	if cfg := currentConfig(configProvider); cfg != nil {
-		// Check if clickable check should be ignored for this app
-		bundleID := e.BundleIdentifier()
-		if cfg.ShouldIgnoreClickableCheckForApp(bundleID) {
-			return true
-		}
-	}
-
 	// If info is not provided, try to get it
 	if info == nil {
 		var infoErr error
-		// Try cache first if available
-		if cache != nil {
-			info = cache.Get(e)
-		}
-
-		if info == nil {
-			info, infoErr = e.Info()
-			if infoErr != nil {
-				return false
-			}
-			if cache != nil {
-				cache.Set(e, info)
-			}
+		info, infoErr = e.Info()
+		if infoErr != nil {
+			return false
 		}
 	}
 
@@ -654,9 +739,44 @@ func (e *Element) IsClickable(
 		clickableRolesMu.RUnlock()
 	}
 
+	if ignoreClickableCheck {
+		return true
+	}
+
 	if isRoleAllowed {
-		// Also verify it actually has click action
-		result := C.hasClickAction(e.ref) //nolint:nlreturn
+		// NeruHasClickAction handles all checks internally:
+		// 1. AXHidden/AXVisible attribute check (quick reject)
+		// 2. Clickability checks: AXActionNames → role exclusion → AXPress
+		//    description → link+URL (no early returns, accumulate result)
+		// 3. Hit-test visibility as final gate for ALL clickable results
+		cRole := C.CString(info.Role())
+
+		defer C.free(unsafe.Pointer(cRole)) //nolint:nlreturn
+
+		centerX := C.double(info.Position().X + info.Size().X/2)
+		centerY := C.double(info.Position().Y + info.Size().Y/2)
+
+		// Resolve visibility check from config (per-app override, then global).
+		// visible_check_enabled defaults to false, meaning skipVisCheck is true by default.
+		skipVisCheck := !resolveVisibleCheckEnabled(info.PID(), configProvider)
+
+		isWidget := strings.HasPrefix(info.Identifier(), "widget-local:")
+
+		result := C.NeruHasClickAction(
+			e.ref,
+			C.bool(skipVisCheck),
+			C.bool(info.isHidden),
+			C.bool(info.isVisible),
+			C.bool(info.isEnabled),
+			C.bool(info.hasEnabledAttr),
+			cRole,
+			C.bool(isWidget),
+			centerX,
+			centerY,
+			C.bool(info.hasPressAction),
+			C.bool(info.hasShowMenuAction),
+			C.bool(info.preActionsFetched), //nolint:nlreturn
+		)
 
 		return result == 1
 	}
@@ -664,9 +784,75 @@ func (e *Element) IsClickable(
 	return false
 }
 
+// pidBundleCache maps PID → bundle identifier to avoid repeated Cocoa lookups.
+// NOTE: PIDs are reused by macOS. The cache intentionally omits negative results
+// (empty bundleID) so that a reused PID is always re-queried rather than
+// inheriting a stale mapping from a previous process.
+var (
+	pidBundleCache       = map[int]string{}
+	pidVisibleCheckCache = map[int]bool{}
+	lastConfigPointer    *config.Config
+	pidBundleCacheMu     sync.RWMutex
+)
+
+// resolveVisibleCheckEnabled checks the config to determine if the visibility
+// hit-test should be performed for the given PID. Returns true if the visibility
+// check should run, false to skip it.
+func resolveVisibleCheckEnabled(pid int, configProvider config.Provider) bool {
+	var cfg *config.Config
+	if configProvider != nil {
+		cfg = configProvider.Get()
+	}
+
+	pidBundleCacheMu.Lock()
+	if cfg != lastConfigPointer {
+		pidVisibleCheckCache = make(map[int]bool)
+		pidBundleCache = make(map[int]string)
+		lastConfigPointer = cfg
+	}
+	enabled, ok := pidVisibleCheckCache[pid]
+	pidBundleCacheMu.Unlock()
+
+	if ok {
+		return enabled
+	}
+
+	pidBundleCacheMu.RLock()
+	bundleID, hasBundle := pidBundleCache[pid]
+	pidBundleCacheMu.RUnlock()
+
+	if !hasBundle {
+		cBundleID := C.NeruGetBundleIDForPID(C.int(pid))
+		if cBundleID == nil {
+			return false
+		}
+
+		bundleID = C.GoString(cBundleID)
+		C.NeruFreeString(cBundleID)
+
+		pidBundleCacheMu.Lock()
+		pidBundleCache[pid] = bundleID
+		pidBundleCacheMu.Unlock()
+	}
+
+	if bundleID == "" || cfg == nil {
+		return false
+	}
+
+	res := cfg.ShouldEnableVisibleCheckForApp(bundleID)
+
+	pidBundleCacheMu.Lock()
+	if cfg == lastConfigPointer {
+		pidVisibleCheckCache[pid] = res
+	}
+	pidBundleCacheMu.Unlock()
+
+	return res
+}
+
 // IsMissionControlActive checks if Mission Control is currently active.
 func IsMissionControlActive() bool {
-	result := C.isMissionControlActive()
+	result := C.NeruIsMissionControlActive()
 
 	return bool(result)
 }

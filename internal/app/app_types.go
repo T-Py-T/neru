@@ -38,6 +38,8 @@ type SystrayComponent interface {
 
 // App represents the main application instance containing all state and dependencies.
 type App struct {
+	ctx        context.Context //nolint:containedctx // Root context for all App operations
+	cancel     context.CancelFunc
 	config     *config.Config
 	ConfigPath string
 	logger     *zap.Logger
@@ -51,6 +53,7 @@ type App struct {
 	overlayManager OverlayManager
 	hotkeyManager  HotkeyService
 	eventTap       ports.EventTapPort
+	textInput      ports.TextInputPort
 	ipcServer      ports.IPCPort
 	appWatcher     Watcher
 
@@ -64,6 +67,9 @@ type App struct {
 	// configMu serializes access to config-dependent component state between
 	// concurrent writers (theme change observer, IPC config reload, systray reload).
 	configMu sync.RWMutex
+
+	hotkeyRepeatMu      sync.Mutex
+	hotkeyRepeatCancels map[string]context.CancelFunc
 
 	// New Architecture Services
 	hintService            *services.HintService
@@ -86,7 +92,6 @@ type App struct {
 	// Lifecycle management
 	gcCancel         context.CancelFunc
 	gcAggressiveMode bool
-	axCacheStop      func() // stops the accessibility InfoCache cleanup goroutine
 
 	// State subscriptions
 	screenShareSubscriptionID uint64

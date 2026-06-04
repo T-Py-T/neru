@@ -119,6 +119,11 @@ func (c *Config) ValidateHints() error {
 		{c.Hints.UI.TextColor, "hints.ui.text_color"},
 		{c.Hints.UI.MatchedTextColor, "hints.ui.matched_text_color"},
 		{c.Hints.UI.BorderColor, "hints.ui.border_color"},
+		{c.Hints.SearchInputUI.BackgroundColor, "hints.search_input_ui.background_color"},
+		{c.Hints.SearchInputUI.TextColor, "hints.search_input_ui.text_color"},
+		{c.Hints.SearchInputUI.BorderColor, "hints.search_input_ui.border_color"},
+		{c.Hints.BoundaryHighlight.BackgroundColor, "hints.boundary_highlight.background_color"},
+		{c.Hints.BoundaryHighlight.BorderColor, "hints.boundary_highlight.border_color"},
 	})
 	if err != nil {
 		return err
@@ -147,12 +152,156 @@ func (c *Config) ValidateHints() error {
 		return derrors.New(derrors.CodeInvalidConfig, "hints.ui.border_width must be non-negative")
 	}
 
+	switch c.Hints.UI.Placement {
+	case "top", "center", "bottom":
+	case "":
+		c.Hints.UI.Placement = "bottom"
+	default:
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"hints.ui.placement must be one of top, center, bottom",
+		)
+	}
+
+	if c.Hints.SearchInputUI.FontSize < 6 || c.Hints.SearchInputUI.FontSize > 72 {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"hints.search_input_ui.font_size must be between 6 and 72",
+		)
+	}
+
+	err = validateMinValue(
+		c.Hints.SearchInputUI.BorderRadius,
+		-1,
+		"hints.search_input_ui.border_radius",
+	)
+	if err != nil {
+		return err
+	}
+
+	err = validateMinValue(c.Hints.SearchInputUI.PaddingX, -1, "hints.search_input_ui.padding_x")
+	if err != nil {
+		return err
+	}
+
+	err = validateMinValue(c.Hints.SearchInputUI.PaddingY, -1, "hints.search_input_ui.padding_y")
+	if err != nil {
+		return err
+	}
+
+	if c.Hints.SearchInputUI.BorderWidth < 0 {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"hints.search_input_ui.border_width must be non-negative",
+		)
+	}
+
+	if c.Hints.BoundaryHighlight.BorderWidth < 0 {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"hints.boundary_highlight.border_width must be non-negative",
+		)
+	}
+
+	err = validateMinValue(
+		c.Hints.BoundaryHighlight.BorderRadius,
+		-1,
+		"hints.boundary_highlight.border_radius",
+	)
+	if err != nil {
+		return err
+	}
+
+	switch c.Hints.SearchInputUI.Position {
+	case "top_left", "top_center", "top_right",
+		"center",
+		"bottom_left", "bottom_center", "bottom_right":
+	default:
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"hints.search_input_ui.position must be one of top_left, top_center, top_right, center, bottom_left, bottom_center, bottom_right",
+		)
+	}
+
+	err = validateMinValue(c.Hints.SearchInputUI.Width, 1, "hints.search_input_ui.width")
+	if err != nil {
+		return err
+	}
+
 	err = validateMinValue(c.Hints.MaxDepth, 0, "hints.max_depth")
 	if err != nil {
 		return err
 	}
 
-	err = validateMinValue(c.Hints.ParallelThreshold, 1, "hints.parallel_threshold")
+	if (len(c.Hints.OnMissionControlActivated) > 0 || len(c.Hints.OnMissionControlDeactivated) > 0) &&
+		!c.Hints.DetectMissionControl {
+		return derrors.Newf(
+			derrors.CodeInvalidConfig,
+			"hints.on_mission_control_activated/deactivated requires hints.detect_mission_control = true",
+		)
+	}
+
+	if c.Hints.DetectMissionControl && !c.Hints.IncludeDockHints {
+		return derrors.Newf(
+			derrors.CodeInvalidConfig,
+			"hints.detect_mission_control requires hints.include_dock_hints = true "+
+				"(dock windows are the only element source available during Mission Control)",
+		)
+	}
+
+	for idx, actionStr := range c.Hints.OnMissionControlActivated {
+		trimmed := strings.TrimSpace(actionStr)
+		if trimmed == "" {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"hints.on_mission_control_activated[%d] cannot be empty",
+				idx,
+			)
+		}
+
+		err := validateHotkeyActionString(trimmed)
+		if err != nil {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"hints.on_mission_control_activated[%d]: %v",
+				idx,
+				err,
+			)
+		}
+	}
+
+	for idx, actionStr := range c.Hints.OnMissionControlDeactivated {
+		trimmed := strings.TrimSpace(actionStr)
+		if trimmed == "" {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"hints.on_mission_control_deactivated[%d] cannot be empty",
+				idx,
+			)
+		}
+
+		err := validateHotkeyActionString(trimmed)
+		if err != nil {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"hints.on_mission_control_deactivated[%d]: %v",
+				idx,
+				err,
+			)
+		}
+	}
+
+	switch c.Hints.Strategy {
+	case StrategyAXTree, StrategyVision, "":
+	default:
+		return derrors.Newf(
+			derrors.CodeInvalidConfig,
+			"hints.strategy must be %q or %q",
+			StrategyAXTree, StrategyVision,
+		)
+	}
+
+	err = validateHintsVisionConfig(c.Hints.Vision)
 	if err != nil {
 		return err
 	}
@@ -160,8 +309,137 @@ func (c *Config) ValidateHints() error {
 	return nil
 }
 
-// validateAppConfigs validates per-app configuration for a given mode.
-func validateAppConfigs(modeName string, appConfigs []AppConfig) error {
+func validateHintsVisionConfig(vision HintsVisionConfig) error {
+	if !vision.DetectText && !vision.DetectRectangles {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"hints.vision must enable detect_text or detect_rectangles",
+		)
+	}
+
+	if vision.RequestTimeoutMS <= 0 {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"hints.vision.request_timeout_ms must be greater than 0",
+		)
+	}
+
+	if vision.RectangleMaxCandidates <= 0 {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"hints.vision.rectangle_max_candidates must be greater than 0",
+		)
+	}
+
+	err := validateUnitFloat(
+		"hints.vision.minimum_confidence",
+		vision.MinimumConfidence,
+	)
+	if err != nil {
+		return err
+	}
+
+	err = validatePositiveUnitFloat(
+		"hints.vision.merge_iou_threshold",
+		vision.MergeIOUThreshold,
+	)
+	if err != nil {
+		return err
+	}
+
+	err = validateUnitFloat(
+		"hints.vision.rectangle_min_size",
+		vision.RectangleMinSize,
+	)
+	if err != nil {
+		return err
+	}
+
+	err = validatePositiveUnitFloat(
+		"hints.vision.button_min_confidence",
+		vision.ButtonMinConfidence,
+	)
+	if err != nil {
+		return err
+	}
+
+	err = validatePositiveUnitFloat(
+		"hints.vision.generic_clickable_min_confidence",
+		vision.GenericClickableMinConfidence,
+	)
+	if err != nil {
+		return err
+	}
+
+	if vision.RectangleMinAspect <= 0 || vision.RectangleMaxAspect <= 0 ||
+		vision.RectangleMinAspect > vision.RectangleMaxAspect {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"hints.vision rectangle aspect limits must be > 0 and min <= max",
+		)
+	}
+
+	if vision.ButtonMinAspect <= 0 || vision.ButtonMaxAspect <= 0 ||
+		vision.ButtonMinAspect > vision.ButtonMaxAspect {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"hints.vision button aspect limits must be > 0 and min <= max",
+		)
+	}
+
+	if vision.ButtonIconMaxSize <= 0 || vision.LinkMaxHeight <= 0 ||
+		vision.LinkMinWidth <= 0 || vision.ImageMinSize <= 0 ||
+		vision.CheckboxMaxSize <= 0 {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"hints.vision size thresholds must be greater than 0",
+		)
+	}
+
+	if vision.LinkMinAspect <= 0 {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"hints.vision.link_min_aspect must be greater than 0",
+		)
+	}
+
+	return nil
+}
+
+func validateUnitFloat(name string, value float64) error {
+	if value < 0 || value > 1 {
+		return derrors.Newf(
+			derrors.CodeInvalidConfig,
+			"%s must be between 0 and 1",
+			name,
+		)
+	}
+
+	return nil
+}
+
+func validatePositiveUnitFloat(name string, value float64) error {
+	if value <= 0 || value > 1 {
+		return derrors.Newf(
+			derrors.CodeInvalidConfig,
+			"%s must be between 0 (exclusive) and 1 (inclusive)",
+			name,
+		)
+	}
+
+	return nil
+}
+
+// AppConfigFieldValidator is a callback for validating mode-specific fields in AppConfig.
+// It's called for each app config after common validation passes.
+type AppConfigFieldValidator func(idx int, appConfig *AppConfig) error
+
+// validateAppConfigsWithCallback validates per-app configuration with optional field-level validation.
+func validateAppConfigsWithCallback(
+	modeName string,
+	appConfigs []AppConfig,
+	fieldValidator AppConfigFieldValidator,
+) error {
 	seen := make(map[string]struct{}, len(appConfigs))
 	for idx, appConfig := range appConfigs {
 		if strings.TrimSpace(appConfig.BundleID) == "" {
@@ -189,14 +467,169 @@ func validateAppConfigs(modeName string, appConfigs []AppConfig) error {
 		if err != nil {
 			return err
 		}
+
+		// Call mode-specific field validator if provided
+		if fieldValidator != nil {
+			err = fieldValidator(idx, &appConfig)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
 }
 
+// rejectScrollFields creates a field validator that rejects scroll-specific fields.
+// Used for non-scroll modes (hints, grid, recursive_grid) to catch accidental configuration.
+func rejectScrollFields(modeName string) AppConfigFieldValidator {
+	return func(idx int, appConfig *AppConfig) error {
+		if appConfig.ScrollStep != nil {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"%s.app_configs[%d].scroll_step is only valid for scroll mode",
+				modeName, idx,
+			)
+		}
+
+		if appConfig.ScrollStepHalf != nil {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"%s.app_configs[%d].scroll_step_half is only valid for scroll mode",
+				modeName, idx,
+			)
+		}
+
+		if appConfig.ScrollStepFull != nil {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"%s.app_configs[%d].scroll_step_full is only valid for scroll mode",
+				modeName, idx,
+			)
+		}
+
+		return nil
+	}
+}
+
+// rejectHintsFields creates a field validator that rejects hints-specific fields.
+// Used for non-hints modes (grid, recursive_grid) to catch accidental configuration.
+func rejectHintsFields(modeName string) AppConfigFieldValidator {
+	return func(idx int, appConfig *AppConfig) error {
+		if len(appConfig.AdditionalClickable) > 0 {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"%s.app_configs[%d].additional_clickable_roles is only valid for hints mode",
+				modeName, idx,
+			)
+		}
+
+		if appConfig.IgnoreClickableCheck {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"%s.app_configs[%d].ignore_clickable_check is only valid for hints mode",
+				modeName, idx,
+			)
+		}
+
+		if appConfig.VisibleCheckEnabled {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"%s.app_configs[%d].visible_check_enabled is only valid for hints mode",
+				modeName, idx,
+			)
+		}
+
+		return nil
+	}
+}
+
+// rejectModeSpecificFields creates a combined validator that rejects both scroll and hints fields.
+// Used for grid and recursive_grid modes.
+func rejectModeSpecificFields(modeName string) AppConfigFieldValidator {
+	return func(idx int, appConfig *AppConfig) error {
+		err := rejectScrollFields(modeName)(idx, appConfig)
+		if err != nil {
+			return err
+		}
+
+		return rejectHintsFields(modeName)(idx, appConfig)
+	}
+}
+
+// validateScrollAppConfigs validates per-app scroll configuration.
+func validateScrollAppConfigs(modeName string, appConfigs []AppConfig) error {
+	scrollFieldValidator := func(idx int, appConfig *AppConfig) error {
+		// First, reject hints fields
+		err := rejectHintsFields(modeName)(idx, appConfig)
+		if err != nil {
+			return err
+		}
+
+		// Then validate scroll fields
+		if appConfig.ScrollStep != nil {
+			err := validateMinValue(
+				*appConfig.ScrollStep,
+				1,
+				fmt.Sprintf("%s.app_configs[%d].scroll_step", modeName, idx),
+			)
+			if err != nil {
+				return err
+			}
+		}
+
+		if appConfig.ScrollStepHalf != nil {
+			err := validateMinValue(
+				*appConfig.ScrollStepHalf,
+				1,
+				fmt.Sprintf("%s.app_configs[%d].scroll_step_half", modeName, idx),
+			)
+			if err != nil {
+				return err
+			}
+		}
+
+		if appConfig.ScrollStepFull != nil {
+			err := validateMinValue(
+				*appConfig.ScrollStepFull,
+				1,
+				fmt.Sprintf("%s.app_configs[%d].scroll_step_full", modeName, idx),
+			)
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}
+
+	return validateAppConfigsWithCallback(modeName, appConfigs, scrollFieldValidator)
+}
+
 // ValidateAppConfigs validates per-app hint configuration.
 func (c *Config) ValidateAppConfigs() error {
-	return validateAppConfigs("hints", c.Hints.AppConfigs)
+	return validateAppConfigsWithCallback(
+		"hints",
+		c.Hints.AppConfigs,
+		func(idx int, appConfig *AppConfig) error {
+			err := rejectScrollFields("hints")(idx, appConfig)
+			if err != nil {
+				return err
+			}
+
+			switch appConfig.Strategy {
+			case StrategyAXTree, StrategyVision, "":
+			default:
+				return derrors.Newf(
+					derrors.CodeInvalidConfig,
+					"hints.app_configs[%d].strategy must be %q or %q",
+					idx, StrategyAXTree, StrategyVision,
+				)
+			}
+
+			return nil
+		},
+	)
 }
 
 // ValidateGrid validates the grid configuration.
@@ -249,7 +682,11 @@ func (c *Config) ValidateGrid() error {
 		return derrors.New(derrors.CodeInvalidConfig, "grid.ui.border_width must be non-negative")
 	}
 
-	err = validateAppConfigs("grid", c.Grid.AppConfigs)
+	err = validateAppConfigsWithCallback(
+		"grid",
+		c.Grid.AppConfigs,
+		rejectModeSpecificFields("grid"),
+	)
 	if err != nil {
 		return err
 	}
@@ -409,6 +846,20 @@ func (c *Config) checkHotkeysConflicts() error {
 				appConfig.BundleID,
 			),
 			c.HotkeysForModeAndApp(modeNameHints, appConfig.BundleID),
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	for idx, appConfig := range c.Scroll.AppConfigs {
+		err := checkHotkeyConflicts(
+			fmt.Sprintf(
+				"scroll.hotkeys merged with scroll.app_configs[%d] (%s)",
+				idx,
+				appConfig.BundleID,
+			),
+			c.HotkeysForModeAndApp(modeNameScroll, appConfig.BundleID),
 		)
 		if err != nil {
 			return err
@@ -670,7 +1121,11 @@ func (c *Config) ValidateRecursiveGrid() error {
 		return derrors.New(derrors.CodeInvalidConfig, "recursive_grid.ui.font_size must be >= 1")
 	}
 
-	err = validateAppConfigs("recursive_grid", c.RecursiveGrid.AppConfigs)
+	err = validateAppConfigsWithCallback(
+		"recursive_grid",
+		c.RecursiveGrid.AppConfigs,
+		rejectModeSpecificFields("recursive_grid"),
+	)
 	if err != nil {
 		return err
 	}
@@ -696,6 +1151,92 @@ func (c *Config) ValidateVirtualPointer() error {
 	}
 
 	return nil
+}
+
+// ValidateMouseAction validates mouse action indicator configuration.
+func (c *Config) ValidateMouseAction() error {
+	err := validateColors([]colorField{
+		{c.MouseAction.UI.BackgroundColor, "mouse_action_indicator.ui.background_color"},
+		{c.MouseAction.UI.BorderColor, "mouse_action_indicator.ui.border_color"},
+	})
+	if err != nil {
+		return err
+	}
+
+	if c.MouseAction.UI.Size < 1 {
+		return derrors.New(derrors.CodeInvalidConfig, "mouse_action_indicator.ui.size must be >= 1")
+	}
+
+	if c.MouseAction.UI.BorderWidth < 0 {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"mouse_action_indicator.ui.border_width must be >= 0",
+		)
+	}
+
+	switch c.MouseAction.UI.Shape {
+	case "", "circle", "square":
+	default:
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"mouse_action_indicator.ui.shape must be circle or square",
+		)
+	}
+
+	if c.MouseAction.Animation.DurationMS < 1 {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"mouse_action_indicator.animation.duration_ms must be >= 1",
+		)
+	}
+
+	if c.MouseAction.Animation.StartScale < 0 || c.MouseAction.Animation.EndScale < 0 {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"mouse_action_indicator.animation scales must be non-negative",
+		)
+	}
+
+	if !validOpacity(c.MouseAction.Animation.StartOpacity) ||
+		!validOpacity(c.MouseAction.Animation.EndOpacity) {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"mouse_action_indicator.animation opacity values must be between 0 and 1",
+		)
+	}
+
+	switch c.MouseAction.Animation.Easing {
+	case "", "linear", "ease_in", "ease_out", "ease_in_out":
+	default:
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"mouse_action_indicator.animation.easing must be linear, ease_in, ease_out, or ease_in_out",
+		)
+	}
+
+	if len(c.MouseAction.Actions) == 0 {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"mouse_action_indicator.actions must contain at least one mouse button action",
+		)
+	}
+
+	for index, actionName := range c.MouseAction.Actions {
+		actionType, parseErr := action.ParseType(actionName)
+		if parseErr != nil || !actionType.IsMouseButton() {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"mouse_action_indicator.actions[%d] must be a mouse button action",
+				index,
+			)
+		}
+	}
+
+	return nil
+}
+
+func validOpacity(value float64) bool {
+	return value >= 0 && value <= 1
 }
 
 func validateHotkeyActionString(actionStr string) error {
@@ -728,7 +1269,8 @@ func validateHotkeyActionString(actionStr string) error {
 
 	switch cmd {
 	case "idle", "hints", "grid", "scroll", "recursive_grid",
-		"toggle-screen-share", "toggle-cursor-follow-selection":
+		"toggle-screen-share", "toggle-cursor-follow-selection",
+		"toggle-scroll-invert":
 		return nil
 	default:
 		return derrors.Newf(derrors.CodeInvalidConfig, "unknown command: %s", trimmed)

@@ -33,7 +33,7 @@ func (h *Handler) exitModeLocked() {
 		return
 	}
 
-	h.logger.Info("Exiting current mode", zap.String("mode", h.CurrModeString()))
+	h.logger.Debug("Exiting current mode", zap.String("mode", h.CurrModeString()))
 
 	h.performModeSpecificCleanup()
 	h.performCommonCleanup()
@@ -62,7 +62,14 @@ func (h *Handler) clearAndHideOverlay() {
 
 // cleanupHintsMode handles cleanup for hints mode.
 func (h *Handler) cleanupHintsMode() {
-	h.hints.Context.Reset()
+	h.stopHintSearchTextInputLocked(false)
+
+	resetErr := h.hints.Context.Reset()
+	if resetErr != nil {
+		h.logger.Error("Failed to reset hints context", zap.Error(resetErr))
+	}
+
+	h.cycleHintIndex = -1
 
 	h.clearAndHideOverlay()
 }
@@ -106,6 +113,7 @@ func (h *Handler) cleanupGridMode() {
 // performCommonCleanup handles common cleanup logic for all modes.
 func (h *Handler) performCommonCleanup() {
 	h.stopIndicatorPolling()
+	h.stopHeldRepeatLocked()
 	h.overlayManager.Clear()
 
 	// Stop any pending hints refresh timer to prevent re-activation after exit

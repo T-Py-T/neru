@@ -7,44 +7,32 @@ package darwin
 */
 import "C"
 
-import (
-	"sync"
-)
-
 // IsDarkMode returns true if macOS Dark Mode is currently active.
 func IsDarkMode() bool {
-	return C.isDarkMode() != 0
+	return C.NeruIsDarkMode() != 0
 }
 
-var (
-	themeHandler   func(bool)
-	themeHandlerMu sync.RWMutex
-)
+var themeHandlerSlot cgoSlot[func(bool)]
 
 // SetThemeChangeHandler sets the callback function to be called when the system theme changes.
 func SetThemeChangeHandler(handler func(bool)) {
-	themeHandlerMu.Lock()
-	defer themeHandlerMu.Unlock()
-	themeHandler = handler
+	themeHandlerSlot.Set(handler)
 }
 
 // StartThemeObserver starts observing macOS theme changes.
 func StartThemeObserver() {
-	C.startThemeObserver()
+	C.NeruStartThemeObserver()
 }
 
 // StopThemeObserver stops observing macOS theme changes.
 func StopThemeObserver() {
-	C.stopThemeObserver()
+	C.NeruStopThemeObserver()
 }
 
 //export handleThemeChanged
 func handleThemeChanged(isDark C.int) {
-	themeHandlerMu.RLock()
-	handler := themeHandler
-	themeHandlerMu.RUnlock()
-
-	if handler != nil {
-		go handler(isDark != 0)
-	}
+	dark := isDark != 0
+	themeHandlerSlot.withValidAsync(func(handler func(bool)) {
+		handler(dark)
+	})
 }

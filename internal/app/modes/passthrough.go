@@ -183,7 +183,16 @@ func (h *Handler) handlePassthroughLocked(mode domain.Mode, session uint64) {
 			zap.Duration("delay", passthroughHintRefreshDelay))
 		filterRoles := h.hints.Context.FilterRoles()
 		filterTextContains := h.hints.Context.FilterTextContains()
-		h.activateHintModeInternal(false, nil, nil, filterRoles, filterTextContains)
+		startWithSearch := h.hints.Context.StartWithSearch()
+		strategyOverride := h.hints.Context.StrategyOverride()
+		h.activateHintModeInternal(
+			nil,
+			nil,
+			filterRoles,
+			filterTextContains,
+			&startWithSearch,
+			&strategyOverride,
+		)
 	})
 	h.refreshHintsTimer = timer
 }

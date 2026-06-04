@@ -20,6 +20,7 @@ import (
 	eventtapadapter "github.com/y3owk1n/neru/internal/core/infra/eventtap"
 	ipcadapter "github.com/y3owk1n/neru/internal/core/infra/ipc"
 	"github.com/y3owk1n/neru/internal/core/infra/platform"
+	textinputadapter "github.com/y3owk1n/neru/internal/core/infra/textinput"
 	"github.com/y3owk1n/neru/internal/ui"
 )
 
@@ -60,6 +61,10 @@ func initializeInfrastructure(app *App) error {
 		app.hotkeyManager = initializeHotkeyService(logger)
 	}
 
+	if app.textInput == nil {
+		app.textInput = textinputadapter.NewAdapter(textinputadapter.NewTextInput(logger), logger)
+	}
+
 	return nil
 }
 
@@ -74,15 +79,13 @@ func initializeServicesAndAdapters(app *App) error {
 	configurePlatformRuntimeConfigProviders(cfgService)
 
 	// Initialize adapters
-	accAdapter, overlayAdapter, axCacheStop := initializeAdapters(
+	accAdapter, overlayAdapter := initializeAdapters(
 		cfg,
 		cfgService,
 		logger,
 		app.overlayManager,
 		app.systemPort,
 	)
-
-	app.axCacheStop = axCacheStop
 
 	// Initialize services
 	hintService, gridService, actionService, scrollService, modeIndicatorService, stickyIndicatorService, err := initializeServices(
@@ -319,6 +322,7 @@ func initializeModeHandler(app *App) {
 	}
 
 	app.modes = modes.NewHandler(
+		app.ctx,
 		deps.config,
 		deps.logger,
 		deps.appState,
@@ -344,6 +348,8 @@ func initializeModeHandler(app *App) {
 		deps.callbacks.postModifierEvent,
 		deps.callbacks.refreshHotkeys,
 		deps.callbacks.executeHotkeyAction,
+		app.Quit,
+		app.textInput,
 		app.systemPort,
 	)
 }
@@ -371,13 +377,11 @@ func initializeIPCController(app *App) {
 
 // setupScreenShareStateSubscription sets up a callback to update overlay when screen share state changes.
 func setupScreenShareStateSubscription(app *App) {
-	// Apply initial config value to overlay if set to hide in screen share
+	// Apply initial config value to overlay if set to hide in screen share.
+	// The OnScreenShareStateChanged callback fires immediately with the current
+	// state, so no direct SetSharingType call is needed here.
 	if app.config != nil && app.config.General.HideOverlayInScreenShare {
 		app.appState.SetHiddenForScreenShare(true)
-
-		if app.overlayManager != nil {
-			app.overlayManager.SetSharingType(true)
-		}
 	}
 
 	app.screenShareSubscriptionID = app.appState.OnScreenShareStateChanged(func(hidden bool) {
@@ -404,7 +408,9 @@ func initializeEventTapAndIPC(app *App) error {
 	// Initialize event tap if not provided
 	if app.eventTap == nil {
 		tap := eventtapadapter.NewEventTap(app.HandleKeyPress, logger)
-		app.eventTap = eventtapadapter.NewAdapter(tap, logger)
+		if tap != nil {
+			app.eventTap = eventtapadapter.NewAdapter(tap, logger)
+		}
 	}
 
 	if app.eventTap == nil {
@@ -447,6 +453,7 @@ func initializeShutdownChannel(app *App) {
 func cleanupInfrastructure(app *App) {
 	// Clean up hotkey service
 	if app.hotkeyManager != nil {
+		app.stopAllHotkeyRepeats()
 		app.hotkeyManager.UnregisterAll()
 		app.hotkeyManager = nil
 	}
@@ -458,18 +465,11 @@ func cleanupInfrastructure(app *App) {
 	}
 
 	// Note: overlayManager doesn't need explicit cleanup here as it's handled
-	// by the main Cleanup() method. The accessibility cache is stopped via
-	// axCacheStop in cleanupServicesAndAdapters / Cleanup().
+	// by the main Cleanup() method.
 }
 
 // cleanupServicesAndAdapters cleans up resources allocated during services initialization.
 func cleanupServicesAndAdapters(app *App) {
-	// Stop accessibility cache cleanup goroutine if initialisation failed partway
-	if app.axCacheStop != nil {
-		app.axCacheStop()
-		app.axCacheStop = nil
-	}
-
 	// Services are cleaned up by their respective Close methods when the app is properly initialized
 	// For partial cleanup, we just nil out the references
 	app.hintService = nil
@@ -499,8 +499,14 @@ func cleanupUIComponents(app *App) {
 func cleanupEventTapAndIPC(app *App) {
 	// Clean up IPC server
 	if app.ipcServer != nil {
-		// Try to stop the server gracefully
-		stopErr := app.ipcServer.Stop(context.Background())
+		// Try to stop the server gracefully.
+		// Use a fresh context since app.ctx may already be canceled.
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), StopTimeout)
+
+		stopErr := app.ipcServer.Stop(stopCtx)
+
+		stopCancel()
+
 		if stopErr != nil {
 			app.logger.Error("Failed to stop IPC server during cleanup", zap.Error(stopErr))
 		}

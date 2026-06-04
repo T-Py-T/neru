@@ -3,6 +3,7 @@
 package accessibility
 
 import (
+	"context"
 	"image"
 
 	"go.uber.org/zap"
@@ -28,8 +29,8 @@ func (n *TreeNode) Parent() *TreeNode { return nil }
 // FindClickableElements is a Windows stub.
 func (n *TreeNode) FindClickableElements(
 	keptRoles map[string]struct{},
-	cache any,
 	configProvider config.Provider,
+	ignoreClickableCheck bool,
 ) []*TreeNode {
 	return nil
 }
@@ -49,20 +50,20 @@ func DefaultTreeOptions(logger *zap.Logger) TreeOptions { return TreeOptions{} }
 // SetCache is a Windows stub.
 func (o *TreeOptions) SetCache(cache any) {}
 
-// SetIncludeOutOfBounds is a Windows stub.
-func (o *TreeOptions) SetIncludeOutOfBounds(include bool) {}
-
 // SetMaxDepth is a Windows stub.
 func (o *TreeOptions) SetMaxDepth(depth int) {}
 
-// SetParallelThreshold is a Windows stub.
-func (o *TreeOptions) SetParallelThreshold(threshold int) {}
+// SetBundleID is a Windows stub.
+func (o *TreeOptions) SetBundleID(bundleID string) {}
 
-// SetStrictFiltering is a Windows stub.
-func (o *TreeOptions) SetStrictFiltering(strict bool) {}
+// SetConfigProvider is a Windows stub.
+func (o *TreeOptions) SetConfigProvider(cp config.Provider) {}
+
+// SetFilterFunc is a Windows stub.
+func (o *TreeOptions) SetFilterFunc(fn func(*ElementInfo) bool) {}
 
 // BuildTree builds the accessibility tree for the specified root element (Windows stub).
-func BuildTree(_ *Element, _ TreeOptions) (*TreeNode, error) {
+func BuildTree(_ context.Context, _ *Element, _ TreeOptions) (*TreeNode, error) {
 	return &TreeNode{}, nil
 }
 

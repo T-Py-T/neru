@@ -165,6 +165,12 @@ const (
 	NamePageDown Name = "page_down"
 	// NameSleep pauses action execution for a specified duration.
 	NameSleep Name = "sleep"
+	// NameCycleHint cycles through visible hints in hints mode.
+	NameCycleHint Name = "cycle_hint"
+	// NameSearchHints starts text filtering in hints mode.
+	NameSearchHints Name = "search_hints"
+	// NameFocusWindow cycles focus to the next/previous window on the active space.
+	NameFocusWindow Name = "focus_window"
 
 	// PrefixExec is the prefix for shell command actions.
 	PrefixExec = "exec"
@@ -235,6 +241,21 @@ func IsMoveMonitorAction(name string) bool {
 	return Name(name) == NameMoveMonitor
 }
 
+// IsCycleHintAction reports whether the given action is cycle_hint.
+func IsCycleHintAction(name string) bool {
+	return Name(name) == NameCycleHint
+}
+
+// IsSearchHintsAction reports whether the given action is search_hints.
+func IsSearchHintsAction(name string) bool {
+	return Name(name) == NameSearchHints
+}
+
+// IsFocusWindowAction reports whether the given action is focus_window.
+func IsFocusWindowAction(name string) bool {
+	return Name(name) == NameFocusWindow
+}
+
 // IsKnownName determines whether the specified action name is recognized by the
 // application. This is a superset of the names in knownNames — it also includes
 // scroll sub-actions (scroll_up, page_down, etc.) which are IPC/CLI-only.
@@ -253,7 +274,8 @@ func IsKnownName(name Name) bool {
 		NameWaitForModeExit, NameSaveCursorPos, NameRestoreCursorPos,
 		NameScrollUp, NameScrollDown, NameScrollLeft, NameScrollRight,
 		NameGoTop, NameGoBottom, NamePageUp, NamePageDown,
-		NameMoveMonitor, NameFeed, NameSleep:
+		NameMoveMonitor, NameFeed, NameSleep, NameCycleHint, NameSearchHints,
+		NameFocusWindow:
 		return true
 	default:
 		return false
@@ -276,8 +298,23 @@ func IsScrollSubAction(name string) bool {
 		NameMouseDown, NameMouseUp,
 		NameMoveMouse, NameMoveMouseRelative, NameScroll,
 		NameReset, NameBackspace, NameWaitForModeExit, NameSaveCursorPos, NameRestoreCursorPos,
-		NameMoveMonitor, NameFeed, NameSleep:
+		NameMoveMonitor, NameFeed, NameSleep, NameCycleHint, NameSearchHints,
+		NameFocusWindow:
 		return false
+	default:
+		return false
+	}
+}
+
+// IsHeldRepeatAction reports whether the action name supports held-key repeat
+// (fires repeatedly while the key is held, with no initial delay).
+// Currently applies to scroll, page, and relative mouse move actions.
+func IsHeldRepeatAction(name Name) bool {
+	switch name { //nolint:exhaustive
+	case NameScrollUp, NameScrollDown, NameScrollLeft, NameScrollRight,
+		NamePageUp, NamePageDown,
+		NameMoveMouseRelative:
+		return true
 	default:
 		return false
 	}
@@ -338,7 +375,10 @@ func (n Name) ToType() (Type, error) {
 		NameRestoreCursorPos,
 		NameMoveMonitor,
 		NameFeed,
-		NameSleep:
+		NameSleep,
+		NameCycleHint,
+		NameSearchHints,
+		NameFocusWindow:
 		return 0, derrors.Newf(derrors.CodeInvalidInput, "action name not executable: %s", n)
 	default:
 		return 0, derrors.Newf(derrors.CodeInvalidInput, "unknown action name: %s", n)

@@ -40,7 +40,8 @@ func (a *App) prepareForConfigUpdate() {
 	}
 
 	if a.appState.HotkeysRegistered() {
-		a.logger.Info("Unregistering current hotkeys before reload")
+		a.logger.Debug("Unregistering current hotkeys before reload")
+		a.stopAllHotkeyRepeats()
 		a.hotkeyManager.UnregisterAll()
 		a.appState.SetHotkeysRegistered(false)
 	}
@@ -49,7 +50,7 @@ func (a *App) prepareForConfigUpdate() {
 // applyAppSpecificConfigUpdates applies app-specific configuration updates.
 func (a *App) applyAppSpecificConfigUpdates(loadResult *config.LoadResult) {
 	if loadResult.Config.Hints.Enabled {
-		a.logger.Info("Updating clickable roles",
+		a.logger.Debug("Updating clickable roles",
 			zap.Int("count", len(loadResult.Config.Hints.ClickableRoles)))
 		infra.SetClickableRoles(loadResult.Config.Hints.ClickableRoles, a.logger)
 	}
@@ -92,6 +93,7 @@ func (a *App) reconfigureRuntimeFromConfig(cfg *config.Config) {
 	a.updateServiceConfigs(cfg)
 	a.updateControllerConfigs(cfg)
 	a.syncScreenShareConfig(cfg)
+	a.syncScrollInvertConfig(cfg)
 }
 
 func (a *App) updateComponentConfigs(cfg *config.Config) {
@@ -128,12 +130,16 @@ func (a *App) updateServiceConfigs(cfg *config.Config) {
 		if genErr != nil {
 			a.logger.Error("Failed to create hint generator during reload", zap.Error(genErr))
 		} else {
-			a.hintService.UpdateGenerator(context.Background(), newGen)
+			a.hintService.UpdateGenerator(a.ctx, newGen)
 		}
 	}
 
 	if a.scrollService != nil {
 		a.scrollService.UpdateConfig(cfg.Scroll)
+	}
+
+	if a.actionService != nil {
+		a.actionService.UpdateConfig(cfg.MouseAction)
 	}
 }
 
@@ -150,5 +156,26 @@ func (a *App) updateControllerConfigs(cfg *config.Config) {
 func (a *App) syncScreenShareConfig(cfg *config.Config) {
 	if a.appState.IsHiddenForScreenShare() != cfg.General.HideOverlayInScreenShare {
 		a.appState.SetHiddenForScreenShare(cfg.General.HideOverlayInScreenShare)
+	}
+}
+
+func (a *App) syncScrollInvertConfig(cfg *config.Config) {
+	if a.appState.IsScrollInverted() != cfg.Scroll.InvertScroll {
+		a.appState.SetScrollInverted(cfg.Scroll.InvertScroll)
+		a.syncScrollInvertToService(cfg.Scroll.InvertScroll)
+	}
+}
+
+// syncInitialConfigToAppState syncs configuration values to AppState during startup.
+// This ensures AppState reflects the config file values before any runtime toggles.
+func syncInitialConfigToAppState(app *App) {
+	cfg := app.configSnapshot()
+
+	if app.appState.IsHiddenForScreenShare() != cfg.General.HideOverlayInScreenShare {
+		app.appState.SetHiddenForScreenShare(cfg.General.HideOverlayInScreenShare)
+	}
+
+	if app.appState.IsScrollInverted() != cfg.Scroll.InvertScroll {
+		app.appState.SetScrollInverted(cfg.Scroll.InvertScroll)
 	}
 }

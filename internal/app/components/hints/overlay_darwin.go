@@ -40,6 +40,27 @@ var (
 	hintPoolOnce sync.Once
 )
 
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+
+	return 0
+}
+
+func hintPlacementValue(placement string) int {
+	switch placement {
+	case "top":
+		return int(C.HINT_PLACEMENT_TOP)
+	case "center":
+		return int(C.HINT_PLACEMENT_CENTER)
+	case "bottom", "":
+		return int(C.HINT_PLACEMENT_BOTTOM)
+	default:
+		return int(C.HINT_PLACEMENT_BOTTOM)
+	}
+}
+
 // Overlay manages the rendering of hint overlays using native platform APIs.
 type Overlay struct {
 	window C.OverlayWindow
@@ -54,8 +75,10 @@ type Overlay struct {
 	// Cached C strings for style properties to reduce allocations
 	styleCache *overlayutil.StyleCache
 
-	// Cached C strings for hint labels to avoid malloc/free per draw
-	labelCacheMu sync.RWMutex
+	// Label C strings are retained in cachedLabels until Clear() or Destroy().
+	// The C overlay holds label pointers between draws for incremental updates,
+	// so eviction while active would produce empty labels.
+	labelCacheMu sync.Mutex
 	cachedLabels map[string]*C.char
 
 	// drawMu serializes draw operations against cache invalidation.
@@ -72,16 +95,22 @@ type Overlay struct {
 
 // StyleMode represents the visual styling configuration for hint overlays.
 type StyleMode struct {
-	fontSize         int
-	fontFamily       string
-	borderRadius     int
-	paddingX         int
-	paddingY         int
-	borderWidth      int
-	backgroundColor  string
-	textColor        string
-	matchedTextColor string
-	borderColor      string
+	fontSize                 int
+	fontFamily               string
+	borderRadius             int
+	paddingX                 int
+	paddingY                 int
+	borderWidth              int
+	placement                string
+	backgroundColor          string
+	textColor                string
+	matchedTextColor         string
+	borderColor              string
+	boundaryHighlightEnabled bool
+	boundaryBorderWidth      int
+	boundaryBorderRadius     int
+	boundaryBackgroundColor  string
+	boundaryBorderColor      string
 }
 
 // FontSize returns the font size.
@@ -114,6 +143,11 @@ func (s StyleMode) BorderWidth() int {
 	return s.borderWidth
 }
 
+// Placement returns the hint label placement relative to the target.
+func (s StyleMode) Placement() string {
+	return s.placement
+}
+
 // BackgroundColor returns the background color.
 func (s StyleMode) BackgroundColor() string {
 	return s.backgroundColor
@@ -134,6 +168,21 @@ func (s StyleMode) BorderColor() string {
 	return s.borderColor
 }
 
+// BoundaryHighlightEnabled returns whether target boundaries are drawn behind hints.
+func (s StyleMode) BoundaryHighlightEnabled() bool { return s.boundaryHighlightEnabled }
+
+// BoundaryBorderWidth returns the target boundary stroke width.
+func (s StyleMode) BoundaryBorderWidth() int { return s.boundaryBorderWidth }
+
+// BoundaryBorderRadius returns the target boundary corner radius.
+func (s StyleMode) BoundaryBorderRadius() int { return s.boundaryBorderRadius }
+
+// BoundaryBackgroundColor returns the target boundary fill color.
+func (s StyleMode) BoundaryBackgroundColor() string { return s.boundaryBackgroundColor }
+
+// BoundaryBorderColor returns the target boundary stroke color.
+func (s StyleMode) BoundaryBorderColor() string { return s.boundaryBorderColor }
+
 // initPools initializes the object pools once.
 func initPools() {
 	hintPoolOnce.Do(func() {
@@ -151,6 +200,7 @@ func NewOverlay(config config.HintsConfig, logger *zap.Logger) (*Overlay, error)
 	if err != nil {
 		return nil, err
 	}
+	base.CallbackManager.SetComponent("hints")
 	initPools()
 
 	return &Overlay{
@@ -171,6 +221,7 @@ func NewOverlayWithWindow(
 ) (*Overlay, error) {
 	initPools()
 	base := overlayutil.NewBaseOverlayWithWindow(logger, windowPtr)
+	base.CallbackManager.SetComponent("hints")
 
 	return &Overlay{
 		window:          (C.OverlayWindow)(base.Window),
@@ -245,6 +296,61 @@ func (o *Overlay) DrawHintsWithStyle(hints []*Hint, style StyleMode) error {
 	return o.drawHintsInternal(hints, style, true)
 }
 
+// DrawSearchInput draws the active hints search input.
+func (o *Overlay) DrawSearchInput(
+	query string,
+	resultCount int,
+	frame SearchInputFrame,
+	style SearchInputStyle,
+) error {
+	cQuery := C.CString(query)
+	//nolint:nlreturn // C memory must be freed before return
+	defer C.free(unsafe.Pointer(cQuery))
+
+	cFontFamily := C.CString(style.FontFamily())
+	cBackgroundColor := C.CString(style.BackgroundColor())
+	cTextColor := C.CString(style.TextColor())
+	cBorderColor := C.CString(style.BorderColor())
+	//nolint:nlreturn // C memory must be freed before return
+	defer C.free(unsafe.Pointer(cFontFamily))
+	//nolint:nlreturn // C memory must be freed before return
+	defer C.free(unsafe.Pointer(cBackgroundColor))
+	//nolint:nlreturn // C memory must be freed before return
+	defer C.free(unsafe.Pointer(cTextColor))
+	//nolint:nlreturn // C memory must be freed before return
+	defer C.free(unsafe.Pointer(cBorderColor))
+
+	input := C.SearchInputData{
+		query:       cQuery,
+		resultCount: C.int(resultCount),
+		position: C.CGPoint{
+			x: C.double(frame.Position().X),
+			y: C.double(frame.Position().Y),
+		},
+		width: C.double(frame.Width()),
+	}
+	cStyle := C.SearchInputStyle{
+		fontSize:        C.int(style.FontSize()),
+		fontFamily:      cFontFamily,
+		backgroundColor: cBackgroundColor,
+		textColor:       cTextColor,
+		borderColor:     cBorderColor,
+		borderRadius:    C.int(style.BorderRadius()),
+		borderWidth:     C.int(style.BorderWidth()),
+		paddingX:        C.int(style.PaddingX()),
+		paddingY:        C.int(style.PaddingY()),
+	}
+
+	C.NeruDrawHintSearchInput(o.window, input, cStyle)
+
+	return nil
+}
+
+// HideSearchInput hides the hints search input.
+func (o *Overlay) HideSearchInput() {
+	C.NeruHideHintSearchInput(o.window)
+}
+
 // BuildStyle returns StyleMode based on action name using the provided config.
 func BuildStyle(cfg config.HintsConfig, theme config.ThemeProvider) StyleMode {
 	style := StyleMode{
@@ -254,6 +360,7 @@ func BuildStyle(cfg config.HintsConfig, theme config.ThemeProvider) StyleMode {
 		paddingX:     cfg.UI.PaddingX,
 		paddingY:     cfg.UI.PaddingY,
 		borderWidth:  cfg.UI.BorderWidth,
+		placement:    cfg.UI.Placement,
 		backgroundColor: cfg.UI.BackgroundColor.ForTheme(
 			theme,
 			config.HintsBackgroundColorLight,
@@ -273,6 +380,19 @@ func BuildStyle(cfg config.HintsConfig, theme config.ThemeProvider) StyleMode {
 			theme,
 			config.HintsBorderColorLight,
 			config.HintsBorderColorDark,
+		),
+		boundaryHighlightEnabled: cfg.BoundaryHighlight.Enabled,
+		boundaryBorderWidth:      cfg.BoundaryHighlight.BorderWidth,
+		boundaryBorderRadius:     cfg.BoundaryHighlight.BorderRadius,
+		boundaryBackgroundColor: cfg.BoundaryHighlight.BackgroundColor.ForTheme(
+			theme,
+			config.HintsBoundaryBackgroundColorLight,
+			config.HintsBoundaryBackgroundColorDark,
+		),
+		boundaryBorderColor: cfg.BoundaryHighlight.BorderColor.ForTheme(
+			theme,
+			config.HintsBoundaryBorderColorLight,
+			config.HintsBoundaryBorderColorDark,
 		),
 	}
 
@@ -329,25 +449,20 @@ func (o *Overlay) freeLabelCacheLocked() {
 			C.free(unsafe.Pointer(cStr))
 		}
 	}
-	// Re-initialize map to clear references
 	o.cachedLabels = make(map[string]*C.char)
 }
 
 // getOrCacheLabel returns a cached C string for the label, creating it if needed.
+// Labels are retained until Clear() or Destroy() to avoid dangling pointers in the
+// C overlay, which stores label pointers between draws for incremental updates.
 func (o *Overlay) getOrCacheLabel(label string) *C.char {
-	o.labelCacheMu.RLock()
-	if cStr, ok := o.cachedLabels[label]; ok {
-		o.labelCacheMu.RUnlock()
-
-		return cStr
-	}
-	o.labelCacheMu.RUnlock()
 	o.labelCacheMu.Lock()
 	defer o.labelCacheMu.Unlock()
-	// Double-check
+
 	if cStr, ok := o.cachedLabels[label]; ok {
 		return cStr
 	}
+
 	cStr := C.CString(label)
 	o.cachedLabels[label] = cStr
 
@@ -450,12 +565,14 @@ func (o *Overlay) drawHintsInternal(hints []*Hint, style StyleMode, showArrow bo
 	}
 
 	// Use cached style strings to avoid repeated allocations
-	cachedStyle := o.styleCache.Get(func(s *overlayutil.CachedStyle) {
-		s.FontFamily = unsafe.Pointer(C.CString(style.FontFamily()))
-		s.BgColor = unsafe.Pointer(C.CString(style.BackgroundColor()))
-		s.TextColor = unsafe.Pointer(C.CString(style.TextColor()))
-		s.MatchedTextColor = unsafe.Pointer(C.CString(style.MatchedTextColor()))
-		s.BorderColor = unsafe.Pointer(C.CString(style.BorderColor()))
+	cachedStyle := o.styleCache.Get(func(_cachedStyle *overlayutil.CachedStyle) {
+		_cachedStyle.FontFamily = unsafe.Pointer(C.CString(style.FontFamily()))
+		_cachedStyle.BgColor = unsafe.Pointer(C.CString(style.BackgroundColor()))
+		_cachedStyle.TextColor = unsafe.Pointer(C.CString(style.TextColor()))
+		_cachedStyle.MatchedTextColor = unsafe.Pointer(C.CString(style.MatchedTextColor()))
+		_cachedStyle.BorderColor = unsafe.Pointer(C.CString(style.BorderColor()))
+		_cachedStyle.BoundaryBgColor = unsafe.Pointer(C.CString(style.BoundaryBackgroundColor()))
+		_cachedStyle.BoundaryBorderColor = unsafe.Pointer(C.CString(style.BoundaryBorderColor()))
 	})
 
 	arrowFlag := 0
@@ -464,17 +581,23 @@ func (o *Overlay) drawHintsInternal(hints []*Hint, style StyleMode, showArrow bo
 	}
 
 	finalStyle := C.HintStyle{
-		fontSize:         C.int(style.FontSize()),
-		fontFamily:       (*C.char)(cachedStyle.FontFamily),
-		backgroundColor:  (*C.char)(cachedStyle.BgColor),
-		textColor:        (*C.char)(cachedStyle.TextColor),
-		matchedTextColor: (*C.char)(cachedStyle.MatchedTextColor),
-		borderColor:      (*C.char)(cachedStyle.BorderColor),
-		borderRadius:     C.int(style.BorderRadius()),
-		borderWidth:      C.int(style.BorderWidth()),
-		paddingX:         C.int(style.PaddingX()),
-		paddingY:         C.int(style.PaddingY()),
-		showArrow:        C.int(arrowFlag),
+		fontSize:                 C.int(style.FontSize()),
+		fontFamily:               (*C.char)(cachedStyle.FontFamily),
+		backgroundColor:          (*C.char)(cachedStyle.BgColor),
+		textColor:                (*C.char)(cachedStyle.TextColor),
+		matchedTextColor:         (*C.char)(cachedStyle.MatchedTextColor),
+		borderColor:              (*C.char)(cachedStyle.BorderColor),
+		borderRadius:             C.int(style.BorderRadius()),
+		borderWidth:              C.int(style.BorderWidth()),
+		paddingX:                 C.int(style.PaddingX()),
+		paddingY:                 C.int(style.PaddingY()),
+		showArrow:                C.int(arrowFlag),
+		placement:                C.int(hintPlacementValue(style.Placement())),
+		boundaryHighlightEnabled: C.int(boolToInt(style.BoundaryHighlightEnabled())),
+		boundaryBorderWidth:      C.int(style.BoundaryBorderWidth()),
+		boundaryBorderRadius:     C.int(style.BoundaryBorderRadius()),
+		boundaryBackgroundColor:  (*C.char)(cachedStyle.BoundaryBgColor),
+		boundaryBorderColor:      (*C.char)(cachedStyle.BoundaryBorderColor),
 	}
 
 	// Draw hints
@@ -691,12 +814,18 @@ func (o *Overlay) drawHintsIncrementalStructural(
 	}
 
 	// Get style strings
-	cachedStyle := o.styleCache.Get(func(s *overlayutil.CachedStyle) {
-		s.FontFamily = unsafe.Pointer(C.CString(currentStyle.FontFamily()))
-		s.BgColor = unsafe.Pointer(C.CString(currentStyle.BackgroundColor()))
-		s.TextColor = unsafe.Pointer(C.CString(currentStyle.TextColor()))
-		s.MatchedTextColor = unsafe.Pointer(C.CString(currentStyle.MatchedTextColor()))
-		s.BorderColor = unsafe.Pointer(C.CString(currentStyle.BorderColor()))
+	cachedStyle := o.styleCache.Get(func(_cachedStyle *overlayutil.CachedStyle) {
+		_cachedStyle.FontFamily = unsafe.Pointer(C.CString(currentStyle.FontFamily()))
+		_cachedStyle.BgColor = unsafe.Pointer(C.CString(currentStyle.BackgroundColor()))
+		_cachedStyle.TextColor = unsafe.Pointer(C.CString(currentStyle.TextColor()))
+		_cachedStyle.MatchedTextColor = unsafe.Pointer(C.CString(currentStyle.MatchedTextColor()))
+		_cachedStyle.BorderColor = unsafe.Pointer(C.CString(currentStyle.BorderColor()))
+		_cachedStyle.BoundaryBgColor = unsafe.Pointer(
+			C.CString(currentStyle.BoundaryBackgroundColor()),
+		)
+		_cachedStyle.BoundaryBorderColor = unsafe.Pointer(
+			C.CString(currentStyle.BoundaryBorderColor()),
+		)
 	})
 
 	arrowFlag := 0
@@ -705,17 +834,23 @@ func (o *Overlay) drawHintsIncrementalStructural(
 	}
 
 	finalStyle := C.HintStyle{
-		fontSize:         C.int(currentStyle.FontSize()),
-		fontFamily:       (*C.char)(cachedStyle.FontFamily),
-		backgroundColor:  (*C.char)(cachedStyle.BgColor),
-		textColor:        (*C.char)(cachedStyle.TextColor),
-		matchedTextColor: (*C.char)(cachedStyle.MatchedTextColor),
-		borderColor:      (*C.char)(cachedStyle.BorderColor),
-		borderRadius:     C.int(currentStyle.BorderRadius()),
-		borderWidth:      C.int(currentStyle.BorderWidth()),
-		paddingX:         C.int(currentStyle.PaddingX()),
-		paddingY:         C.int(currentStyle.PaddingY()),
-		showArrow:        C.int(arrowFlag),
+		fontSize:                 C.int(currentStyle.FontSize()),
+		fontFamily:               (*C.char)(cachedStyle.FontFamily),
+		backgroundColor:          (*C.char)(cachedStyle.BgColor),
+		textColor:                (*C.char)(cachedStyle.TextColor),
+		matchedTextColor:         (*C.char)(cachedStyle.MatchedTextColor),
+		borderColor:              (*C.char)(cachedStyle.BorderColor),
+		borderRadius:             C.int(currentStyle.BorderRadius()),
+		borderWidth:              C.int(currentStyle.BorderWidth()),
+		paddingX:                 C.int(currentStyle.PaddingX()),
+		paddingY:                 C.int(currentStyle.PaddingY()),
+		showArrow:                C.int(arrowFlag),
+		placement:                C.int(hintPlacementValue(currentStyle.Placement())),
+		boundaryHighlightEnabled: C.int(boolToInt(currentStyle.BoundaryHighlightEnabled())),
+		boundaryBorderWidth:      C.int(currentStyle.BoundaryBorderWidth()),
+		boundaryBorderRadius:     C.int(currentStyle.BoundaryBorderRadius()),
+		boundaryBackgroundColor:  (*C.char)(cachedStyle.BoundaryBgColor),
+		boundaryBorderColor:      (*C.char)(cachedStyle.BoundaryBorderColor),
 	}
 
 	// Call incremental C API

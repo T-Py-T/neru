@@ -42,6 +42,14 @@ var (
 	HintsBorderColorLight = solidRGBHex(defaultThemeLightAccent)
 	// HintsBorderColorDark is the fallback dark border color for hints.
 	HintsBorderColorDark = solidRGBHex(defaultThemeDarkAccent)
+	// HintsBoundaryBackgroundColorLight is the fallback light fill color for hint target boundaries.
+	HintsBoundaryBackgroundColorLight = applyAlpha(defaultThemeLightAccent, "14")
+	// HintsBoundaryBackgroundColorDark is the fallback dark fill color for hint target boundaries.
+	HintsBoundaryBackgroundColorDark = applyAlpha(defaultThemeDarkAccentAlt, "1A")
+	// HintsBoundaryBorderColorLight is the fallback light stroke color for hint target boundaries.
+	HintsBoundaryBorderColorLight = applyAlpha(defaultThemeLightAccent, "73")
+	// HintsBoundaryBorderColorDark is the fallback dark stroke color for hint target boundaries.
+	HintsBoundaryBorderColorDark = applyAlpha(defaultThemeDarkAccentAlt, "73")
 
 	// GridBackgroundColorLight is the fallback light background color for grid cells.
 	GridBackgroundColorLight = applyAlpha(defaultThemeLightSurface, "99")
@@ -101,6 +109,15 @@ var (
 	ModeIndicatorBorderColorLight = solidRGBHex(defaultThemeLightAccent)
 	// ModeIndicatorBorderColorDark is the fallback dark border color for the mode indicator.
 	ModeIndicatorBorderColorDark = solidRGBHex(defaultThemeDarkAccent)
+
+	// MouseActionBackgroundColorLight is the fallback light fill color for mouse action indicators.
+	MouseActionBackgroundColorLight = applyAlpha(defaultThemeLightAccentAlt, "30")
+	// MouseActionBackgroundColorDark is the fallback dark fill color for mouse action indicators.
+	MouseActionBackgroundColorDark = applyAlpha(defaultThemeDarkAccentAlt, "40")
+	// MouseActionBorderColorLight is the fallback light border color for mouse action indicators.
+	MouseActionBorderColorLight = solidRGBHex(defaultThemeLightAccentAlt)
+	// MouseActionBorderColorDark is the fallback dark border color for mouse action indicators.
+	MouseActionBorderColorDark = solidRGBHex(defaultThemeDarkAccentAlt)
 
 	// StickyModifiersBackgroundColorLight is the fallback light background color for sticky modifiers.
 	StickyModifiersBackgroundColorLight = applyAlpha(defaultThemeLightSurface, "F2")
@@ -213,6 +230,21 @@ func (c *Config) ResolveThemeDefaults() {
 	mergeColorWithDefault(&c.Hints.UI.BorderColor, solidThemedColor(
 		c.Theme.Light.Accent, c.Theme.Dark.Accent,
 	))
+	mergeColorWithDefault(&c.Hints.SearchInputUI.BackgroundColor, themedColor(
+		c.Theme.Light.Surface, c.Theme.Dark.Surface, "F2",
+	))
+	mergeColorWithDefault(&c.Hints.SearchInputUI.TextColor, solidThemedColor(
+		c.Theme.Light.Text, c.Theme.Dark.Text,
+	))
+	mergeColorWithDefault(&c.Hints.SearchInputUI.BorderColor, solidThemedColor(
+		c.Theme.Light.Accent, c.Theme.Dark.Accent,
+	))
+	mergeColorWithDefault(&c.Hints.BoundaryHighlight.BackgroundColor, themedColor(
+		c.Theme.Light.Accent, c.Theme.Dark.AccentAlt, "1A",
+	))
+	mergeColorWithDefault(&c.Hints.BoundaryHighlight.BorderColor, themedColor(
+		c.Theme.Light.Accent, c.Theme.Dark.AccentAlt, "73",
+	))
 
 	mergeColorWithDefault(&c.Grid.UI.BackgroundColor, themedColor(
 		c.Theme.Light.Surface, c.Theme.Dark.Surface, "99",
@@ -264,6 +296,13 @@ func (c *Config) ResolveThemeDefaults() {
 	))
 	mergeColorWithDefault(&c.ModeIndicator.UI.BorderColor, solidThemedColor(
 		c.Theme.Light.Accent, c.Theme.Dark.Accent,
+	))
+
+	mergeColorWithDefault(&c.MouseAction.UI.BackgroundColor, themedColor(
+		c.Theme.Light.AccentAlt, c.Theme.Dark.AccentAlt, "30",
+	))
+	mergeColorWithDefault(&c.MouseAction.UI.BorderColor, solidThemedColor(
+		c.Theme.Light.AccentAlt, c.Theme.Dark.AccentAlt,
 	))
 
 	mergeColorWithDefault(&c.StickyModifiers.UI.BackgroundColor, themedColor(

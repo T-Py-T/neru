@@ -393,6 +393,7 @@ type Config struct {
 	Grid            GridConfig            `json:"grid"            toml:"grid"`
 	RecursiveGrid   RecursiveGridConfig   `json:"recursiveGrid"   toml:"recursive_grid"`
 	VirtualPointer  VirtualPointerConfig  `json:"virtualPointer"  toml:"virtual_pointer"`
+	MouseAction     MouseActionConfig     `json:"mouseAction"     toml:"mouse_action_indicator"`
 	Scroll          ScrollConfig          `json:"scroll"          toml:"scroll"`
 	ModeIndicator   ModeIndicatorConfig   `json:"modeIndicator"   toml:"mode_indicator"`
 	StickyModifiers StickyModifiersConfig `json:"stickyModifiers" toml:"sticky_modifiers"`
@@ -421,12 +422,13 @@ type ThemeConfig struct {
 // GeneralConfig defines general application-wide settings.
 type GeneralConfig struct {
 	ExcludedApps                      []string `json:"excludedApps"                      toml:"excluded_apps"`
-	AccessibilityCheckOnStart         bool     `json:"accessibilityCheckOnStart"         toml:"accessibility_check_on_start"`
 	PassthroughUnboundedKeys          bool     `json:"passthroughUnboundedKeys"          toml:"passthrough_unbounded_keys"`
 	ShouldExitAfterPassthrough        bool     `json:"shouldExitAfterPassthrough"        toml:"should_exit_after_passthrough"`
 	PassthroughUnboundedKeysBlacklist []string `json:"passthroughUnboundedKeysBlacklist" toml:"passthrough_unbounded_keys_blacklist"`
 	HideOverlayInScreenShare          bool     `json:"hideOverlayInScreenShare"          toml:"hide_overlay_in_screen_share"`
 	KBLayoutToUse                     string   `json:"kbLayoutToUse"                     toml:"kb_layout_to_use"`
+	ExecShell                         string   `json:"execShell"                         toml:"exec_shell"`
+	ExecShellArgs                     []string `json:"execShellArgs"                     toml:"exec_shell_args"`
 }
 
 // ModeIndicatorUI defines the visual/appearance settings for the mode indicator.
@@ -489,8 +491,13 @@ type StickyModifiersConfig struct {
 // AppConfig defines application-specific settings for role customization.
 type AppConfig struct {
 	BundleID             string                         `json:"bundleId"             toml:"bundle_id"`
+	Strategy             string                         `json:"strategy"             toml:"strategy"`
 	AdditionalClickable  []string                       `json:"additionalClickable"  toml:"additional_clickable_roles"`
 	IgnoreClickableCheck bool                           `json:"ignoreClickableCheck" toml:"ignore_clickable_check"`
+	VisibleCheckEnabled  bool                           `json:"visibleCheckEnabled"  toml:"visible_check_enabled"`
+	ScrollStep           *int                           `json:"scrollStep"           toml:"scroll_step,omitempty"`
+	ScrollStepHalf       *int                           `json:"scrollStepHalf"       toml:"scroll_step_half,omitempty"`
+	ScrollStepFull       *int                           `json:"scrollStepFull"       toml:"scroll_step_full,omitempty"`
 	Hotkeys              map[string]StringOrStringArray `json:"hotkeys"              toml:"hotkeys"`
 }
 
@@ -516,6 +523,10 @@ type ScrollConfig struct {
 	ScrollStepHalf int `json:"scrollStepHalf" toml:"scroll_step_half"`
 	ScrollStepFull int `json:"scrollStepFull" toml:"scroll_step_full"`
 
+	InvertScroll bool `json:"invertScroll" toml:"invert_scroll"`
+
+	AppConfigs []AppConfig `json:"appConfigs" toml:"app_configs"`
+
 	Hotkeys map[string]StringOrStringArray `json:"hotkeys" toml:"-"`
 }
 
@@ -527,29 +538,94 @@ type HintsUI struct {
 	PaddingX         int    `json:"paddingX"         toml:"padding_x"`
 	PaddingY         int    `json:"paddingY"         toml:"padding_y"`
 	BorderWidth      int    `json:"borderWidth"      toml:"border_width"`
+	Placement        string `json:"placement"        toml:"placement"`
 	BackgroundColor  Color  `json:"backgroundColor"  toml:"background_color"`
 	TextColor        Color  `json:"textColor"        toml:"text_color"`
 	MatchedTextColor Color  `json:"matchedTextColor" toml:"matched_text_color"`
 	BorderColor      Color  `json:"borderColor"      toml:"border_color"`
 }
 
+// BoundaryHighlightUI defines the optional target boundary highlight for hints mode.
+type BoundaryHighlightUI struct {
+	Enabled         bool  `json:"enabled"         toml:"enabled"`
+	BorderWidth     int   `json:"borderWidth"     toml:"border_width"`
+	BorderRadius    int   `json:"borderRadius"    toml:"border_radius"`
+	BorderColor     Color `json:"borderColor"     toml:"border_color"`
+	BackgroundColor Color `json:"backgroundColor" toml:"background_color"`
+}
+
+// SearchInputUI defines the visual/appearance settings for hints text search.
+type SearchInputUI struct {
+	FontSize        int    `json:"fontSize"        toml:"font_size"`
+	FontFamily      string `json:"fontFamily"      toml:"font_family"`
+	BorderRadius    int    `json:"borderRadius"    toml:"border_radius"`
+	PaddingX        int    `json:"paddingX"        toml:"padding_x"`
+	PaddingY        int    `json:"paddingY"        toml:"padding_y"`
+	BorderWidth     int    `json:"borderWidth"     toml:"border_width"`
+	Position        string `json:"position"        toml:"position"`
+	XOffset         int    `json:"xOffset"         toml:"x_offset"`
+	YOffset         int    `json:"yOffset"         toml:"y_offset"`
+	Width           int    `json:"width"           toml:"width"`
+	BackgroundColor Color  `json:"backgroundColor" toml:"background_color"`
+	TextColor       Color  `json:"textColor"       toml:"text_color"`
+	BorderColor     Color  `json:"borderColor"     toml:"border_color"`
+}
+
+// HintsVisionConfig defines tunable settings for vision-based hint detection.
+type HintsVisionConfig struct {
+	DetectText             bool    `json:"detectText"             toml:"detect_text"`
+	DetectRectangles       bool    `json:"detectRectangles"       toml:"detect_rectangles"`
+	RequestTimeoutMS       int     `json:"requestTimeoutMs"       toml:"request_timeout_ms"`
+	MinimumConfidence      float64 `json:"minimumConfidence"      toml:"minimum_confidence"`
+	MergeIOUThreshold      float64 `json:"mergeIouThreshold"      toml:"merge_iou_threshold"`
+	RectangleMaxCandidates int     `json:"rectangleMaxCandidates" toml:"rectangle_max_candidates"`
+	RectangleMinSize       float64 `json:"rectangleMinSize"       toml:"rectangle_min_size"`
+	RectangleMinAspect     float64 `json:"rectangleMinAspect"     toml:"rectangle_min_aspect"`
+	RectangleMaxAspect     float64 `json:"rectangleMaxAspect"     toml:"rectangle_max_aspect"`
+
+	ButtonMinConfidence           float64 `json:"buttonMinConfidence"           toml:"button_min_confidence"`
+	ButtonMinAspect               float64 `json:"buttonMinAspect"               toml:"button_min_aspect"`
+	ButtonMaxAspect               float64 `json:"buttonMaxAspect"               toml:"button_max_aspect"`
+	ButtonIconMaxSize             int     `json:"buttonIconMaxSize"             toml:"button_icon_max_size"`
+	LinkMinAspect                 float64 `json:"linkMinAspect"                 toml:"link_min_aspect"`
+	LinkMaxHeight                 int     `json:"linkMaxHeight"                 toml:"link_max_height"`
+	LinkMinWidth                  int     `json:"linkMinWidth"                  toml:"link_min_width"`
+	ImageMinSize                  int     `json:"imageMinSize"                  toml:"image_min_size"`
+	CheckboxMaxSize               int     `json:"checkboxMaxSize"               toml:"checkbox_max_size"`
+	GenericClickableMinConfidence float64 `json:"genericClickableMinConfidence" toml:"generic_clickable_min_confidence"`
+}
+
+// Strategy constants for element detection.
+const (
+	StrategyAXTree = "axtree"
+	StrategyVision = "vision"
+)
+
 // HintsConfig defines the visual and behavioral settings for hints mode.
 type HintsConfig struct {
-	Enabled           bool    `json:"enabled"           toml:"enabled"`
-	HintCharacters    string  `json:"hintCharacters"    toml:"hint_characters"`
-	MaxDepth          int     `json:"maxDepth"          toml:"max_depth"`
-	ParallelThreshold int     `json:"parallelThreshold" toml:"parallel_threshold"`
-	UI                HintsUI `json:"ui"                toml:"ui"`
+	Enabled           bool                `json:"enabled"           toml:"enabled"`
+	Strategy          string              `json:"strategy"          toml:"strategy"`
+	HintCharacters    string              `json:"hintCharacters"    toml:"hint_characters"`
+	MaxDepth          int                 `json:"maxDepth"          toml:"max_depth"`
+	UI                HintsUI             `json:"ui"                toml:"ui"`
+	SearchInputUI     SearchInputUI       `json:"searchInputUi"     toml:"search_input_ui"`
+	BoundaryHighlight BoundaryHighlightUI `json:"boundaryHighlight" toml:"boundary_highlight"`
+	Vision            HintsVisionConfig   `json:"vision"            toml:"vision"`
 
-	IncludeMenubarHints           bool     `json:"includeMenubarHints"           toml:"include_menubar_hints"`
-	AdditionalMenubarHintsTargets []string `json:"additionalMenubarHintsTargets" toml:"additional_menubar_hints_targets"`
-	IncludeDockHints              bool     `json:"includeDockHints"              toml:"include_dock_hints"`
-	IncludeNCHints                bool     `json:"includeNcHints"                toml:"include_nc_hints"`
-	IncludeStageManagerHints      bool     `json:"includeStageManagerHints"      toml:"include_stage_manager_hints"`
-	DetectMissionControl          bool     `json:"detectMissionControl"          toml:"detect_mission_control"`
+	IncludeMenubarHints           bool                `json:"includeMenubarHints"           toml:"include_menubar_hints"`
+	AdditionalMenubarHintsTargets []string            `json:"additionalMenubarHintsTargets" toml:"additional_menubar_hints_targets"`
+	IncludeDockHints              bool                `json:"includeDockHints"              toml:"include_dock_hints"`
+	IncludeNCHints                bool                `json:"includeNcHints"                toml:"include_nc_hints"`
+	IncludeStageManagerHints      bool                `json:"includeStageManagerHints"      toml:"include_stage_manager_hints"`
+	IncludePIPHints               bool                `json:"includePipHints"               toml:"include_pip_hints"`
+	IncludeScreenCaptureHints     bool                `json:"includeScreenCaptureHints"     toml:"include_screen_capture_hints"`
+	DetectMissionControl          bool                `json:"detectMissionControl"          toml:"detect_mission_control"`
+	OnMissionControlActivated     StringOrStringArray `json:"onMissionControlActivated"     toml:"on_mission_control_activated"`
+	OnMissionControlDeactivated   StringOrStringArray `json:"onMissionControlDeactivated"   toml:"on_mission_control_deactivated"`
 
 	ClickableRoles       []string `json:"clickableRoles"       toml:"clickable_roles"`
 	IgnoreClickableCheck bool     `json:"ignoreClickableCheck" toml:"ignore_clickable_check"`
+	VisibleCheckEnabled  bool     `json:"visibleCheckEnabled"  toml:"visible_check_enabled"`
 
 	AppConfigs []AppConfig `json:"appConfigs" toml:"app_configs"`
 
@@ -663,6 +739,33 @@ type VirtualPointerConfig struct {
 	UI      VirtualPointerUI `json:"ui"      toml:"ui"`
 }
 
+// MouseActionUI defines the visual settings for mouse action indicators.
+type MouseActionUI struct {
+	Size            int    `json:"size"            toml:"size"`
+	BorderWidth     int    `json:"borderWidth"     toml:"border_width"`
+	BackgroundColor Color  `json:"backgroundColor" toml:"background_color"`
+	BorderColor     Color  `json:"borderColor"     toml:"border_color"`
+	Shape           string `json:"shape"           toml:"shape"`
+}
+
+// MouseActionAnimation defines animation settings for mouse action indicators.
+type MouseActionAnimation struct {
+	DurationMS   int     `json:"durationMs"   toml:"duration_ms"`
+	StartScale   float64 `json:"startScale"   toml:"start_scale"`
+	EndScale     float64 `json:"endScale"     toml:"end_scale"`
+	StartOpacity float64 `json:"startOpacity" toml:"start_opacity"`
+	EndOpacity   float64 `json:"endOpacity"   toml:"end_opacity"`
+	Easing       string  `json:"easing"       toml:"easing"`
+}
+
+// MouseActionConfig defines settings for transient mouse action indicators.
+type MouseActionConfig struct {
+	Enabled   bool                 `json:"enabled"   toml:"enabled"`
+	Actions   []string             `json:"actions"   toml:"actions"`
+	UI        MouseActionUI        `json:"ui"        toml:"ui"`
+	Animation MouseActionAnimation `json:"animation" toml:"animation"`
+}
+
 // AllKeysIncludingLayers returns a combined string of all unique keys from the
 // top-level config and all layers. Used for conflict validation.
 func (c *RecursiveGridConfig) AllKeysIncludingLayers() string {
@@ -690,9 +793,8 @@ func (c *RecursiveGridConfig) AllKeysIncludingLayers() string {
 
 // LoggingConfig defines the logging behavior and file management settings.
 type LoggingConfig struct {
-	LogLevel          string `json:"logLevel"          toml:"log_level"`
-	LogFile           string `json:"logFile"           toml:"log_file"`
-	StructuredLogging bool   `json:"structuredLogging" toml:"structured_logging"`
+	LogLevel string `json:"logLevel" toml:"log_level"`
+	LogFile  string `json:"logFile"  toml:"log_file"`
 
 	// New options for log rotation and file logging control
 	DisableFileLogging bool `json:"disableFileLogging" toml:"disable_file_logging"`
@@ -723,6 +825,7 @@ type AdditionalAXSupport struct {
 	AdditionalElectronBundles []string `json:"additionalElectronBundles" toml:"additional_electron_bundles"`
 	AdditionalChromiumBundles []string `json:"additionalChromiumBundles" toml:"additional_chromium_bundles"`
 	AdditionalFirefoxBundles  []string `json:"additionalFirefoxBundles"  toml:"additional_firefox_bundles"`
+	AdditionalWebKitBundles   []string `json:"additionalWebKitBundles"   toml:"additional_webkit_bundles"`
 }
 
 // SystrayConfig defines system tray settings.
@@ -798,6 +901,11 @@ func (c *Config) Validate() error {
 	}
 
 	err = c.ValidateVirtualPointer()
+	if err != nil {
+		return err
+	}
+
+	err = c.ValidateMouseAction()
 	if err != nil {
 		return err
 	}
@@ -928,6 +1036,28 @@ func (c *Config) ValidateGeneral() error {
 				key,
 			)
 		}
+	}
+
+	if c.General.ExecShell == "" {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"general.exec_shell cannot be empty",
+		)
+	}
+
+	if !strings.HasPrefix(c.General.ExecShell, "/") {
+		return derrors.Newf(
+			derrors.CodeInvalidConfig,
+			"general.exec_shell must be an absolute path (got: %q)",
+			c.General.ExecShell,
+		)
+	}
+
+	if len(c.General.ExecShellArgs) == 0 {
+		return derrors.New(
+			derrors.CodeInvalidConfig,
+			"general.exec_shell_args cannot be empty",
+		)
 	}
 
 	return nil
@@ -1182,7 +1312,7 @@ func (c *Config) HotkeysForMode(modeName string) map[string]StringOrStringArray 
 
 // HotkeysForModeAndApp returns the effective per-mode hotkeys map for the given mode
 // and focused app bundle ID. For modes without app-specific overrides, it returns the
-// base mode hotkeys unchanged. Hints, Grid, and RecursiveGrid modes support
+// base mode hotkeys unchanged. Hints, Grid, RecursiveGrid, and Scroll modes support
 // per-app hotkey overrides through [[<mode>.app_configs]].
 func (c *Config) HotkeysForModeAndApp(
 	modeName, bundleID string,
@@ -1200,6 +1330,8 @@ func (c *Config) HotkeysForModeAndApp(
 		appConfig = c.Grid.AppConfigForBundleID(bundleID)
 	case modeNameRecursiveGrid:
 		appConfig = c.RecursiveGrid.AppConfigForBundleID(bundleID)
+	case modeNameScroll:
+		appConfig = c.Scroll.AppConfigForBundleID(bundleID)
 	}
 
 	if appConfig == nil || len(appConfig.Hotkeys) == 0 {
@@ -1268,6 +1400,18 @@ func (c *RecursiveGridConfig) HasAppHotkeyOverrides() bool {
 	return false
 }
 
+// HasAppHotkeyOverrides reports whether any [[scroll.app_configs]] entry has a
+// non-empty Hotkeys map.
+func (c *ScrollConfig) HasAppHotkeyOverrides() bool {
+	for idx := range c.AppConfigs {
+		if len(c.AppConfigs[idx].Hotkeys) > 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
 // AppConfigForBundleID returns the matching hints app config for the given bundle ID.
 func (c *HintsConfig) AppConfigForBundleID(bundleID string) *AppConfig {
 	for idx := range c.AppConfigs {
@@ -1292,6 +1436,17 @@ func (c *GridConfig) AppConfigForBundleID(bundleID string) *AppConfig {
 
 // AppConfigForBundleID returns the matching recursive grid app config for the given bundle ID.
 func (c *RecursiveGridConfig) AppConfigForBundleID(bundleID string) *AppConfig {
+	for idx := range c.AppConfigs {
+		if c.AppConfigs[idx].BundleID == bundleID {
+			return &c.AppConfigs[idx]
+		}
+	}
+
+	return nil
+}
+
+// AppConfigForBundleID returns the matching scroll app config for the given bundle ID.
+func (c *ScrollConfig) AppConfigForBundleID(bundleID string) *AppConfig {
 	for idx := range c.AppConfigs {
 		if c.AppConfigs[idx].BundleID == bundleID {
 			return &c.AppConfigs[idx]
@@ -1338,6 +1493,18 @@ func (c *Config) ShouldIgnoreClickableCheckForApp(bundleID string) bool {
 
 	// Fall back to global ignore_clickable_check
 	return c.Hints.IgnoreClickableCheck
+}
+
+// ShouldEnableVisibleCheckForApp returns whether the visibility hit-test check should be performed
+// for a specific app bundle ID. It first checks for app-specific configuration, then falls back
+// to the global setting. Default is false (visibility check skipped).
+func (c *Config) ShouldEnableVisibleCheckForApp(bundleID string) bool {
+	appConfig := c.Hints.AppConfigForBundleID(bundleID)
+	if appConfig != nil {
+		return appConfig.VisibleCheckEnabled
+	}
+
+	return c.Hints.VisibleCheckEnabled
 }
 
 // rolesMapToSlice converts a roles map to a slice.
@@ -1409,6 +1576,11 @@ func (c *Config) ValidateScroll() error {
 		return err
 	}
 
+	err = validateScrollAppConfigs("scroll", c.Scroll.AppConfigs)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -1432,6 +1604,17 @@ func (c *HintsConfig) ClickableRolesForApp(bundleID string) []string {
 	rolesMap := c.buildRolesMap(bundleID)
 
 	return rolesMapToSlice(rolesMap)
+}
+
+// StrategyForApp returns the element detection strategy for the given bundle ID.
+// Falls back to the global HintsConfig.Strategy if no app-specific override is set.
+func (c *HintsConfig) StrategyForApp(bundleID string) string {
+	appConfig := c.AppConfigForBundleID(bundleID)
+	if appConfig != nil && appConfig.Strategy != "" {
+		return appConfig.Strategy
+	}
+
+	return c.Strategy
 }
 
 // buildRolesMap builds a map of clickable roles for the given bundle ID.
@@ -1533,4 +1716,13 @@ var KnownElectronBundles = []string{
 	"com.tinyspeck.slackmacgap",
 	"com.spotify.client",
 	"md.obsidian",
+	"com.hnc.discord",
+	"com.openai.codex",
+	"com.google.antigravity",
+}
+
+// KnownWebKitBundles contains known WebKit-based application bundle identifiers.
+// These applications skip hit-test visibility checks to avoid slow AX API calls.
+var KnownWebKitBundles = []string{
+	"com.apple.Safari",
 }

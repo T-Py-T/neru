@@ -4,6 +4,10 @@ build/
 *.app
 *.dmg
 /neru
+/genman
+
+# Generated man pages
+/man/
 
 # Go
 *.exe

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"strings"
 
 	"go.uber.org/zap"
@@ -17,6 +16,7 @@ import (
 	"github.com/y3owk1n/neru/internal/core/infra/hotkeys"
 	"github.com/y3owk1n/neru/internal/core/infra/logger"
 	overlayAdapter "github.com/y3owk1n/neru/internal/core/infra/overlay"
+	visionAdapter "github.com/y3owk1n/neru/internal/core/infra/vision"
 	"github.com/y3owk1n/neru/internal/core/ports"
 	"github.com/y3owk1n/neru/internal/ui/overlay"
 )
@@ -26,7 +26,6 @@ func initializeLogger(cfg *config.Config) (*zap.Logger, error) {
 	initConfigErr := logger.Init(
 		cfg.Logging.LogLevel,
 		cfg.Logging.LogFile,
-		cfg.Logging.StructuredLogging,
 		cfg.Logging.DisableFileLogging,
 		cfg.Logging.MaxFileSize,
 		cfg.Logging.MaxBackups,
@@ -37,7 +36,7 @@ func initializeLogger(cfg *config.Config) (*zap.Logger, error) {
 		return nil, derrors.Wrap(initConfigErr, derrors.CodeInternal, "failed to initialize logger")
 	}
 
-	logger := logger.Get()
+	logger := logger.Get().Named("app")
 	initializePlatformLogger(logger)
 
 	return logger, nil
@@ -50,22 +49,10 @@ func initializeOverlayManager(logger *zap.Logger) OverlayManager {
 
 // initializeAccessibility checks and configures accessibility permissions and settings.
 func initializeAccessibility(cfg *config.Config, logger *zap.Logger) error {
-	if cfg.General.AccessibilityCheckOnStart {
-		if !accessibilityAdapter.CheckAccessibilityPermissions() {
-			logger.Warn(
-				"Accessibility permissions not granted. Please grant permissions in System Settings.",
-			)
-			logger.Info("⚠️  Neru requires Accessibility permissions to function.")
-			logger.Info("Please go to: System Settings → Privacy & Security → Accessibility")
-			logger.Info("and enable Neru.")
-		}
-	}
-
 	// Apply clickable roles if hints are enabled
 	if cfg.Hints.Enabled {
-		logger.Info("Applying clickable roles",
-			zap.Int("count", len(cfg.Hints.ClickableRoles)),
-			zap.Strings("roles", cfg.Hints.ClickableRoles))
+		logger.Debug("Applying clickable roles",
+			zap.Int("count", len(cfg.Hints.ClickableRoles)))
 		accessibilityAdapter.SetClickableRoles(cfg.Hints.ClickableRoles, logger)
 	}
 
@@ -86,20 +73,18 @@ func initializeAppWatcher(logger *zap.Logger) Watcher {
 }
 
 // initializeAdapters creates and initializes the accessibility and overlay adapters.
-// It also returns a stop function that should be called during shutdown to
-// terminate the accessibility cache's background goroutine.
 func initializeAdapters(
 	cfg *config.Config,
 	cfgService *config.Service,
 	logger *zap.Logger,
 	overlayManager OverlayManager,
 	systemPort ports.SystemPort,
-) (ports.AccessibilityPort, ports.OverlayPort, func()) {
+) (ports.AccessibilityPort, ports.OverlayPort) {
 	excludedBundles := cfg.General.ExcludedApps
 	clickableRoles := cfg.Hints.ClickableRoles
 
-	// Create infrastructure client (nil cache = use default)
-	axClient := accessibilityAdapter.NewInfraAXClient(logger, nil, cfgService)
+	// Create infrastructure client
+	axClient := accessibilityAdapter.NewInfraAXClient(logger, cfgService)
 
 	// Create base accessibility adapter with core functionality
 	accAdapter := accessibilityAdapter.NewAdapter(
@@ -118,9 +103,7 @@ func initializeAdapters(
 		logger,
 	)
 
-	axCache := axClient.Cache()
-
-	return accAdapter, overlayPort, func() { axCache.Stop() }
+	return accAdapter, overlayPort
 }
 
 // initializeServices creates and initializes the domain services.
@@ -141,6 +124,9 @@ func initializeServices(
 		)
 	}
 
+	// Vision adapter - vision-based element detection (optional, used on "vision" strategy)
+	visionPort := visionAdapter.NewAdapter(logger)
+
 	// Hint Service - orchestrates hint generation and display
 	hintService := services.NewHintService(
 		accAdapter,
@@ -149,6 +135,7 @@ func initializeServices(
 		hintGen,
 		cfg.Hints,
 		logger,
+		visionPort,
 	)
 
 	// Grid Service - manages grid-based navigation overlays
@@ -161,6 +148,7 @@ func initializeServices(
 		systemPort,
 		logger,
 	)
+	actionService.UpdateConfig(cfg.MouseAction)
 
 	// Scroll Service - manages scrolling operations
 	scrollService := services.NewScrollService(
@@ -197,7 +185,7 @@ func processHotkeyBindings(cfg *config.Config, logger *zap.Logger) []string {
 			logger.Warn(
 				"Skipping empty hotkey binding",
 				zap.String("key", key),
-				zap.Strings("actions", actions),
+				zap.Int("action_count", len(actions)),
 			)
 
 			continue
@@ -238,8 +226,7 @@ func (a *App) configureEventTapHotkeys(cfg *config.Config, logger *zap.Logger) {
 
 	a.eventTap.SetHotkeys(keys)
 
-	// Use Background context as this is a synchronous cleanup operation
-	err := a.eventTap.Disable(context.Background())
+	err := a.eventTap.Disable(a.ctx)
 	if err != nil {
 		logger.Warn("Failed to disable event tap after setting hotkeys", zap.Error(err))
 	}

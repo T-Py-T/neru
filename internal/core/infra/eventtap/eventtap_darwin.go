@@ -9,9 +9,6 @@ package eventtap
 
 extern void eventTapCallbackBridge(char* key, void* userData);
 extern void eventTapPassthroughBridge(void* userData);
-
-void setEventTapStickyModifierToggle(EventTap tap, int enabled);
-void postEventTapModifierEvent(const char* modifier, int isDown);
 */
 import "C"
 
@@ -63,6 +60,12 @@ const callbackQueueSize = 256
 // NewEventTap initializes a new event tap for capturing global keyboard events.
 // Returns nil if the event tap cannot be created, typically due to missing Accessibility permissions.
 func NewEventTap(callback Callback, logger *zap.Logger) *EventTap {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
+	logger = logger.Named("eventtap")
+
 	eventTap := &EventTap{
 		callback:      callback,
 		logger:        logger,
@@ -70,7 +73,7 @@ func NewEventTap(callback Callback, logger *zap.Logger) *EventTap {
 		stopDispatch:  make(chan struct{}),
 	}
 
-	eventTap.handle = C.createEventTap(C.EventTapCallback(C.eventTapCallbackBridge), nil)
+	eventTap.handle = C.NeruCreateEventTap(C.EventTapCallback(C.eventTapCallbackBridge), nil)
 	if eventTap.handle == nil {
 		logger.Error("Failed to create event tap - check Accessibility permissions")
 
@@ -91,7 +94,7 @@ func NewEventTap(callback Callback, logger *zap.Logger) *EventTap {
 func (et *EventTap) Enable() {
 	et.logger.Debug("Enabling event tap")
 	if et.handle != nil {
-		C.enableEventTap(et.handle)
+		C.NeruEnableEventTap(et.handle)
 		et.logger.Debug("Event tap enabled")
 	} else {
 		et.logger.Warn("Cannot enable nil event tap")
@@ -116,8 +119,6 @@ func (et *EventTap) SetHotkeys(hotkeys []string) {
 			cHotkeys[index] = C.CString(hotkey)
 
 			defer C.free(unsafe.Pointer(cHotkeys[index])) //nolint:nlreturn
-
-			et.logger.Debug("Adding hotkey", zap.String("hotkey", hotkey))
 		} else {
 			cHotkeys[index] = nil
 		}
@@ -129,7 +130,7 @@ func (et *EventTap) SetHotkeys(hotkeys []string) {
 		cHotkeysPtr = &cHotkeys[0]
 	}
 
-	C.setEventTapHotkeys(et.handle, cHotkeysPtr, C.int(len(cHotkeys)))
+	C.NeruSetEventTapHotkeys(et.handle, cHotkeysPtr, C.int(len(cHotkeys)))
 	et.logger.Debug("Event tap hotkeys set")
 }
 
@@ -154,8 +155,6 @@ func (et *EventTap) SetModifierPassthrough(enabled bool, blacklist []string) {
 			cKeys[index] = C.CString(key)
 
 			defer C.free(unsafe.Pointer(cKeys[index])) //nolint:nlreturn
-
-			et.logger.Debug("Adding modifier passthrough blacklist key", zap.String("key", key))
 		} else {
 			cKeys[index] = nil
 		}
@@ -171,7 +170,12 @@ func (et *EventTap) SetModifierPassthrough(enabled bool, blacklist []string) {
 		enabledValue = 1
 	}
 
-	C.setEventTapModifierPassthrough(et.handle, C.int(enabledValue), cKeysPtr, C.int(len(cKeys)))
+	C.NeruSetEventTapModifierPassthrough(
+		et.handle,
+		C.int(enabledValue),
+		cKeysPtr,
+		C.int(len(cKeys)),
+	)
 	et.logger.Debug("Event tap modifier passthrough set")
 }
 
@@ -192,8 +196,6 @@ func (et *EventTap) SetInterceptedModifierKeys(keys []string) {
 			cKeys[index] = C.CString(key)
 
 			defer C.free(unsafe.Pointer(cKeys[index])) //nolint:nlreturn
-
-			et.logger.Debug("Adding intercepted modifier key", zap.String("key", key))
 		} else {
 			cKeys[index] = nil
 		}
@@ -204,7 +206,7 @@ func (et *EventTap) SetInterceptedModifierKeys(keys []string) {
 		cKeysPtr = &cKeys[0]
 	}
 
-	C.setEventTapInterceptedModifierKeys(et.handle, cKeysPtr, C.int(len(cKeys)))
+	C.NeruSetEventTapInterceptedModifierKeys(et.handle, cKeysPtr, C.int(len(cKeys)))
 	et.logger.Debug("Intercepted modifier keys set")
 }
 
@@ -223,12 +225,12 @@ func (et *EventTap) SetPassthroughCallback(callback PassthroughCallback) {
 	et.passthroughCallback = callback
 
 	if callback != nil {
-		C.setEventTapPassthroughCallback(
+		C.NeruSetEventTapPassthroughCallback(
 			et.handle,
 			C.EventTapPassthroughCallback(C.eventTapPassthroughBridge),
 		)
 	} else {
-		C.setEventTapPassthroughCallback(et.handle, nil)
+		C.NeruSetEventTapPassthroughCallback(et.handle, nil)
 	}
 }
 
@@ -247,7 +249,7 @@ func (et *EventTap) SetStickyModifierToggle(enabled bool) {
 		cEnabled = C.int(1)
 	}
 
-	C.setEventTapStickyModifierToggle(et.handle, cEnabled)
+	C.NeruSetEventTapStickyModifierToggle(et.handle, cEnabled)
 }
 
 // SetKeyboardLayout configures the reference keyboard layout used by key translation.
@@ -267,14 +269,14 @@ func (et *EventTap) PostModifierEvent(modifier string, isDown bool) {
 		cDown = C.int(1)
 	}
 
-	C.postEventTapModifierEvent(cModifier, cDown)
+	C.NeruPostEventTapModifierEvent(cModifier, cDown)
 }
 
 // Disable deactivates the event tap, stopping keyboard event capture.
 func (et *EventTap) Disable() {
 	et.logger.Debug("Disabling event tap")
 	if et.handle != nil {
-		C.disableEventTap(et.handle)
+		C.NeruDisableEventTap(et.handle)
 		et.logger.Debug("Event tap disabled")
 	} else {
 		et.logger.Warn("Cannot disable nil event tap")
@@ -306,7 +308,7 @@ func (et *EventTap) Destroy() {
 	et.Disable()
 
 	// Destroy the tap
-	C.destroyEventTap(et.handle)
+	C.NeruDestroyEventTap(et.handle)
 	et.handle = nil
 
 	// Clear callbacks to prevent any lingering references
@@ -322,8 +324,6 @@ func (et *EventTap) Destroy() {
 // handleKeyCallback processes key press events received from the C event tap darwin.
 // It forwards the key information to the registered callback function if one exists.
 func (et *EventTap) handleKeyCallback(key string) {
-	et.logger.Debug("Key pressed", zap.String("key", key))
-
 	et.callbackMu.RLock()
 	callback := et.callback
 	et.callbackMu.RUnlock()

@@ -5,6 +5,7 @@ package overlay
 /*
 #cgo CFLAGS: -x objective-c -fobjc-arc
 #include "../../core/infra/platform/darwin/overlay.h"
+#include <stdlib.h>
 */
 import "C"
 
@@ -35,14 +36,23 @@ const (
 	NSWindowSharingReadOnly = 1
 )
 
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+
+	return 0
+}
+
 // Manager manages multiple overlay windows.
 type Manager struct {
-	window C.OverlayWindow
-	logger *zap.Logger
-	mu     sync.RWMutex
-	mode   Mode
-	subs   map[uint64]func(StateChange)
-	nextID uint64
+	window            C.OverlayWindow
+	logger            *zap.Logger
+	mu                sync.RWMutex
+	mode              Mode
+	subs              map[uint64]func(StateChange)
+	nextID            uint64
+	hideInScreenShare bool
 
 	// Overlay renderers
 	hintOverlay            *hints.Overlay
@@ -60,7 +70,7 @@ var (
 // Init initializes the singleton overlay manager with a new overlay window.
 func Init(logger *zap.Logger) *Manager {
 	once.Do(func() {
-		window := C.createOverlayWindow()
+		window := C.NeruCreateOverlayWindow()
 		manager = &Manager{
 			window: window,
 			logger: logger,
@@ -315,6 +325,34 @@ func (m *Manager) DrawHintsWithStyle(hs []*hints.Hint, style hints.StyleMode) er
 	return nil
 }
 
+// DrawHintSearchInput draws the hints search input using the hint overlay renderer.
+func (m *Manager) DrawHintSearchInput(
+	query string,
+	resultCount int,
+	frame hints.SearchInputFrame,
+	style hints.SearchInputStyle,
+) error {
+	if m.hintOverlay == nil {
+		return nil
+	}
+
+	err := m.hintOverlay.DrawSearchInput(query, resultCount, frame, style)
+	if err != nil {
+		return derrors.Wrap(err, derrors.CodeOverlayFailed, "failed to draw hint search input")
+	}
+
+	return nil
+}
+
+// HideHintSearchInput hides the hints search input.
+func (m *Manager) HideHintSearchInput() {
+	if m.hintOverlay == nil {
+		return
+	}
+
+	m.hintOverlay.HideSearchInput()
+}
+
 // DrawModeIndicator renders a mode indicator using the shared overlay renderer.
 func (m *Manager) DrawModeIndicator(xCoordinate, yCoordinate int) {
 	if m.modeIndicatorOverlay == nil {
@@ -341,6 +379,44 @@ func (m *Manager) DrawStickyModifiersIndicator(xCoordinate, yCoordinate int, sym
 	}
 
 	m.stickyModifiersOverlay.Draw(xCoordinate, yCoordinate, symbols)
+}
+
+// DrawMouseActionIndicator renders a transient mouse action indicator in its own native window.
+func (m *Manager) DrawMouseActionIndicator(
+	point image.Point,
+	style ports.MouseActionIndicatorStyle,
+) {
+	m.mu.RLock()
+	hideInScreenShare := m.hideInScreenShare
+	m.mu.RUnlock()
+
+	backgroundColor := C.CString(style.BackgroundColor)
+	borderColor := C.CString(style.BorderColor)
+	shape := C.CString(style.Shape)
+	easing := C.CString(style.Easing)
+
+	defer C.free(unsafe.Pointer(backgroundColor)) //nolint:nlreturn
+	defer C.free(unsafe.Pointer(borderColor))     //nolint:nlreturn
+	defer C.free(unsafe.Pointer(shape))           //nolint:nlreturn
+	defer C.free(unsafe.Pointer(easing))          //nolint:nlreturn
+
+	C.NeruShowMouseActionIndicator(
+		C.CGPoint{x: C.double(point.X), y: C.double(point.Y)},
+		C.MouseActionIndicatorStyle{
+			size:              C.int(style.Size),
+			borderWidth:       C.int(style.BorderWidth),
+			backgroundColor:   backgroundColor,
+			borderColor:       borderColor,
+			shape:             shape,
+			durationMS:        C.int(style.DurationMS),
+			startScale:        C.double(style.StartScale),
+			endScale:          C.double(style.EndScale),
+			startOpacity:      C.double(style.StartOpacity),
+			endOpacity:        C.double(style.EndOpacity),
+			easing:            easing,
+			hideInScreenShare: C.int(boolToInt(style.HideInScreenShare || hideInScreenShare)),
+		},
+	)
 }
 
 // DrawGrid renders a grid with the specified style using the grid overlay renderer.
@@ -430,6 +506,8 @@ func (m *Manager) SetHideUnmatched(hide bool) {
 func (m *Manager) SetSharingType(hide bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	m.hideInScreenShare = hide
 
 	sharingType := C.int(NSWindowSharingReadOnly)
 	if hide {

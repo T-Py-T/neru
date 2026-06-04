@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/y3owk1n/neru/internal/core/domain/element"
@@ -16,12 +17,22 @@ const (
 	// MinCharactersLength is the minimum length for characters.
 	MinCharactersLength = 2
 
-	// CountsCapacity is the capacity for counts.
-	CountsCapacity = 5
+	// maxLabelCacheEntries caps the global label cache to prevent unbounded growth.
+	maxLabelCacheEntries = 64
 )
 
-// labelCache caches generated labels by count for instant reuse.
-var labelCache sync.Map // map[string][]string (key: "chars:count")
+// labelCacheEntry holds a cached label slice with access tracking.
+type labelCacheEntry struct {
+	labels   []string
+	lastUsed time.Time
+}
+
+// labelCache is a bounded LRU cache for generated labels.
+var (
+	labelCacheMu   sync.Mutex
+	labelCache     = make(map[string]*labelCacheEntry)
+	labelCacheKeys []string // insertion-order tracking for LRU eviction
+)
 
 // singleCharCache caches single-character strings to avoid allocations.
 var singleCharCache sync.Map // map[rune]string
@@ -34,8 +45,7 @@ var stringBuilderPool = sync.Pool{
 }
 
 // AlphabetGenerator generates hint labels using an alphabet-based strategy.
-// It uses a prefix-avoidance algorithm to ensure no single-character label
-// conflicts with the start of a multi-character label.
+// It uses fixed-length base-N encoding within each tier to spread labels across the alphabet.
 type AlphabetGenerator struct {
 	characters       string
 	uppercaseChars   string
@@ -68,7 +78,7 @@ func NewAlphabetGenerator(characters string) (*AlphabetGenerator, error) {
 	charCount := len(characters)
 
 	// Calculate max hints: up to 3 chars
-	// Max capacity for length 3 prefix-free code is N^3
+	// Max capacity for fixed-length 3-char base-N encoding is N^3
 	n := charCount
 	maxHints := n * n * n
 
@@ -96,15 +106,6 @@ func (g *AlphabetGenerator) Generate(
 		return nil, nil
 	}
 
-	if len(elements) > g.maxHints {
-		return nil, derrors.Newf(
-			derrors.CodeHintGenerationFailed,
-			"too many elements: %d exceeds maximum %d",
-			len(elements),
-			g.maxHints,
-		)
-	}
-
 	// Check context cancellation
 	select {
 	case <-ctx.Done():
@@ -130,6 +131,10 @@ func (g *AlphabetGenerator) Generate(
 		// Then X (left to right)
 		return boundI.Min.X < boundJ.Min.X
 	})
+
+	if len(sorted) > g.maxHints {
+		sorted = sorted[:g.maxHints]
+	}
 
 	// Generate labels (with caching)
 	labels := g.generateLabels(len(sorted))
@@ -190,7 +195,7 @@ func (g *AlphabetGenerator) UpdateCharacters(characters string) error {
 
 	uppercaseChars := uppercaseBuilder.String()
 	charCount := len(characters)
-	// Max capacity for length 3 prefix-free code is N^3
+	// Max capacity for fixed-length 3-char base-N encoding is N^3
 	n := charCount
 	maxHints := n * n * n
 
@@ -209,29 +214,66 @@ func (g *AlphabetGenerator) UpdateCharacters(characters string) error {
 	return nil
 }
 
-// generateLabels generates alphabet-based hint labels using a prefix-avoidance strategy.
-// It ensures no label is a prefix of another to prevent ambiguity during input.
-// Returns uppercase labels sorted by length then alphabetically.
-// Uses a level-based approach where each level represents labels of increasing length.
-// Results are cached for instant reuse on repeated counts.
+// generateLabels generates fixed-length base-N alphabet labels.
+// For counts up to the alphabet size, returns single characters.
+// For larger counts, progressively generates 2-char, 3-char, etc. labels to satisfy the count.
+// Results are cached in a bounded LRU cache for instant reuse on repeated counts.
 func (g *AlphabetGenerator) generateLabels(count int) []string {
 	if count == 0 {
 		return nil
 	}
 
-	// Check cache first (key: "chars:count")
+	// Check bounded LRU cache first (key: "chars:count")
 	cacheKey := g.uppercaseChars + ":" + strconv.Itoa(count)
-	if cached, ok := labelCache.Load(cacheKey); ok {
-		if labels, ok := cached.([]string); ok {
-			return labels
-		}
+
+	labelCacheMu.Lock()
+	if entry, ok := labelCache[cacheKey]; ok {
+		entry.lastUsed = time.Now()
+		labels := entry.labels
+		labelCacheMu.Unlock()
+
+		return labels
 	}
+	labelCacheMu.Unlock()
 
 	// Generate labels if not cached
 	labels := g.computeLabels(count)
 
-	// Store in cache for future use
-	labelCache.Store(cacheKey, labels)
+	// Store in bounded LRU cache for future use.
+	// Double-check under lock: another goroutine may have computed and cached
+	// the same key while we were computing (TOCTOU).
+	labelCacheMu.Lock()
+	if entry, ok := labelCache[cacheKey]; ok {
+		// Another goroutine beat us — use its result, update access time.
+		entry.lastUsed = time.Now()
+		labelCacheMu.Unlock()
+
+		return entry.labels
+	}
+
+	if len(labelCache) >= maxLabelCacheEntries {
+		// Evict least recently used entry
+		oldestIdx := 0
+
+		oldestTime := labelCache[labelCacheKeys[0]].lastUsed
+		for i := 1; i < len(labelCacheKeys); i++ {
+			t := labelCache[labelCacheKeys[i]].lastUsed
+			if t.Before(oldestTime) {
+				oldestTime = t
+				oldestIdx = i
+			}
+		}
+
+		oldestKey := labelCacheKeys[oldestIdx]
+		delete(labelCache, oldestKey)
+
+		labelCacheKeys[oldestIdx] = labelCacheKeys[len(labelCacheKeys)-1]
+		labelCacheKeys = labelCacheKeys[:len(labelCacheKeys)-1]
+	}
+
+	labelCache[cacheKey] = &labelCacheEntry{labels: labels, lastUsed: time.Now()}
+	labelCacheKeys = append(labelCacheKeys, cacheKey)
+	labelCacheMu.Unlock()
 
 	return labels
 }
@@ -242,106 +284,47 @@ func (g *AlphabetGenerator) computeLabels(count int) []string {
 	numChars := len(chars)
 	labels := make([]string, 0, count)
 
-	// Calculate distribution of labels across different lengths (levels)
-	// counts[i] stores number of labels of length i+1
-	// Uses greedy algorithm to minimize average label length while ensuring prefix-free property
-	counts := make([]int, 0, CountsCapacity)
+	if count <= numChars {
+		for i := range count {
+			char := chars[i]
+			if cached, ok := singleCharCache.Load(char); ok {
+				if str, ok := cached.(string); ok {
+					labels = append(labels, str)
 
-	remainingTarget := count
-	availableSlots := numChars // Slots available at current level (length 1)
+					continue
+				}
+			}
 
-	// Determine how many labels to keep at each level
-	for remainingTarget > 0 {
-		// Calculate capacity if all current slots are expanded to next level
-		nextLevelCapacity := availableSlots * numChars
-
-		var keep int
-
-		switch {
-		case availableSlots >= remainingTarget:
-			// Can satisfy remaining target at current level
-			keep = remainingTarget
-		case nextLevelCapacity < remainingTarget:
-			// Need to expand everything to reach target, keep none at current level
-			keep = 0
-		default:
-			// Keep as many as possible at current level while ensuring next level can handle remainder
-			// Formula derived from: availableSlots*N - keep*(N-1) >= remainingTarget
-			keep = (availableSlots*numChars - remainingTarget) / (numChars - 1)
+			labels = append(labels, string(char))
 		}
 
-		counts = append(counts, keep)
-		remainingTarget -= keep
-
-		// Update slots for next level: remaining slots expanded by branching factor
-		availableSlots = (availableSlots - keep) * numChars
-
-		if availableSlots == 0 && remainingTarget > 0 {
-			// Should not happen if maxHints check passed
-			break
-		}
+		return labels
 	}
 
-	var current []int
+	length := 2
+	if count > numChars*numChars {
+		length = 3
+	}
 
-	// Generate labels for each level using base-N arithmetic
-	for level, keep := range counts {
-		length := level + 1
-
-		if length == 1 {
-			// Generate single-character labels
-			for i := range keep {
-				char := chars[i]
-				if cached, ok := singleCharCache.Load(char); ok {
-					if str, ok := cached.(string); ok {
-						labels = append(labels, str)
-
-						continue
-					}
-				}
-
-				labels = append(labels, string(char))
-			}
-			// Start next level from after the kept labels
-			current = []int{keep}
-		} else {
-			// Generate multi-character labels by expanding prefixes
-			// 'current' represents the starting point in base-N numbering
-
-			// Ensure current array has correct length for this level
-			for len(current) < length {
-				current = append(current, 0)
-			}
-
-			// Generate 'keep' labels starting from current position
-			for range keep {
-				// Build label string from current indices using pooled builder
-				stringBuilder, ok := stringBuilderPool.Get().(*strings.Builder)
-				if !ok {
-					stringBuilder = &strings.Builder{}
-				}
-
-				stringBuilder.Reset()
-				stringBuilder.Grow(length)
-
-				for _, index := range current {
-					stringBuilder.WriteRune(chars[index])
-				}
-
-				labels = append(labels, stringBuilder.String())
-				stringBuilderPool.Put(stringBuilder)
-
-				// Increment current position (like adding 1 in base-N)
-				for pos := len(current) - 1; pos >= 0; pos-- {
-					current[pos]++
-					if current[pos] < numChars {
-						break
-					}
-					// Carry over to next position
-					current[pos] = 0
-				}
-			}
+	for index := range count {
+		stringBuilder, ok := stringBuilderPool.Get().(*strings.Builder)
+		if !ok {
+			stringBuilder = &strings.Builder{}
 		}
+
+		stringBuilder.Reset()
+		stringBuilder.Grow(length)
+
+		v := index
+		for range length {
+			digit := v % numChars
+			v /= numChars
+
+			stringBuilder.WriteRune(chars[digit])
+		}
+
+		labels = append(labels, stringBuilder.String())
+		stringBuilderPool.Put(stringBuilder)
 	}
 
 	return labels

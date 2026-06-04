@@ -2,6 +2,7 @@ package accessibility
 
 import (
 	"context"
+	"sync"
 
 	"go.uber.org/zap"
 
@@ -9,50 +10,22 @@ import (
 	"github.com/y3owk1n/neru/internal/core/ports"
 )
 
-// addSupplementaryElements adds menubar, dock, and notification center elements based on filter.
-// The missionControlActive parameter should be obtained from the main CollectElements function
-// to ensure consistency with the frontmost window check.
-func (a *Adapter) addSupplementaryElements(
-	ctx context.Context,
-	elements []*element.Element,
-	filter ports.ElementFilter,
-	missionControlActive bool,
-) []*element.Element {
-	a.logger.Debug("Adding supplementary elements",
-		zap.Bool("mission_control_active", missionControlActive),
-		zap.Bool("include_menubar", filter.IncludeMenubar),
-		zap.Bool("include_dock", filter.IncludeDock),
-		zap.Bool("include_nc", filter.IncludeNotificationCenter),
-		zap.Bool("include_stage_manager", filter.IncludeStageManager))
-
-	// Add menubar elements
-	if !missionControlActive && filter.IncludeMenubar {
-		elements = a.addMenubarElements(ctx, elements, filter)
-	}
-
-	// Add dock elements
-	if filter.IncludeDock {
-		elements = a.addDockElements(ctx, elements)
-	}
-
-	// Add notification center elements (only when Mission Control is active)
-	if missionControlActive && filter.IncludeNotificationCenter {
-		elements = a.addNotificationCenterElements(ctx, elements)
-	}
-
-	// Add stage manager elements
-	if filter.IncludeStageManager {
-		elements = a.addStageManagerElements(ctx, elements)
-	}
-
-	return elements
-}
+const (
+	// dockTreeDepth limits tree depth for the flat dock hierarchy (AXApplication → AXDockItem).
+	dockTreeDepth = 5
+	// stageManagerTreeDepth limits tree depth for the WindowManager app.
+	stageManagerTreeDepth = 4
+	// flatAppTreeDepth limits tree depth for simple single-window apps like PIP and screen capture.
+	flatAppTreeDepth = 3
+	// menubarTreeDepth limits tree depth for the menu bar (AXMenuBar → AXMenuBarItem → AXMenuItem).
+	menubarTreeDepth = 3
+)
 
 // addMenubarElements adds menubar clickable elements.
 // Temporarily modifies clickable roles to include AXMenuBarItem, collects menubar elements,
 // and processes additional menubar targets from configuration.
 func (a *Adapter) addMenubarElements(
-	_ context.Context,
+	ctx context.Context,
 	elements []*element.Element,
 	filter ports.ElementFilter,
 ) []*element.Element {
@@ -60,12 +33,13 @@ func (a *Adapter) addMenubarElements(
 
 	// Create local allowed roles including AXMenuBarItem for additional targets
 	originalRoles := a.client.ClickableRoles()
-	menubarRoles := make([]string, len(originalRoles)+1)
+	menubarRoles := make([]string, len(originalRoles)+2) //nolint:mnd
 	copy(menubarRoles, originalRoles)
-	menubarRoles[len(originalRoles)] = "AXMenuBarItem"
+	menubarRoles[len(originalRoles)] = string(element.RoleMenuBarItem)
+	menubarRoles[len(originalRoles)+1] = string(element.RoleMenu)
 
 	// Get menubar elements
-	menubarNodes, menubarNodesErr := a.client.MenuBarClickableElements(false)
+	menubarNodes, menubarNodesErr := a.client.MenuBarClickableElements(ctx, menubarTreeDepth)
 	if menubarNodesErr != nil {
 		a.logger.Warn("Failed to get menubar elements", zap.Error(menubarNodesErr))
 	} else {
@@ -75,7 +49,7 @@ func (a *Adapter) addMenubarElements(
 			node.Release()
 
 			if elementErr != nil {
-				a.logger.Debug("Failed to convert menubar element", zap.Error(elementErr))
+				a.logger.Warn("Failed to convert menubar element", zap.Error(elementErr))
 
 				continue
 			}
@@ -88,43 +62,67 @@ func (a *Adapter) addMenubarElements(
 		a.logger.Debug("Included menubar elements", zap.Int("count", len(menubarNodes)))
 	}
 
-	// Get additional menubar targets
-	for _, bundleID := range filter.AdditionalMenubarTargets {
-		additionalNodes, err := a.client.ClickableElementsFromBundleID(
-			bundleID,
-			menubarRoles,
-			false,
-		)
-		if err != nil {
-			a.logger.Warn("Failed to get additional menubar elements",
+	// Get additional menubar targets in parallel
+	if len(filter.AdditionalMenubarTargets) > 0 {
+		var waitGroup sync.WaitGroup
+
+		var resultsMutex sync.Mutex
+
+		collectAdditionalTarget := func(bundleID string) {
+			defer waitGroup.Done()
+
+			additionalNodes, err := a.client.ClickableElementsFromBundleID(
+				ctx,
+				bundleID,
+				menubarRoles,
+				0,
+			)
+			if err != nil {
+				a.logger.Warn("Failed to get additional menubar elements",
+					zap.String("bundle_id", bundleID),
+					zap.Error(err))
+
+				return
+			}
+
+			var localElements []*element.Element
+
+			for _, node := range additionalNodes {
+				elem, elemErr := a.convertToDomainElement(node)
+
+				node.Release()
+
+				if elemErr != nil {
+					a.logger.Debug(
+						"Failed to convert additional menubar element",
+						zap.Error(elemErr),
+					)
+
+					continue
+				}
+
+				if a.MatchesFilter(elem, filter) {
+					localElements = append(localElements, elem)
+				}
+			}
+
+			resultsMutex.Lock()
+
+			elements = append(elements, localElements...)
+			resultsMutex.Unlock()
+
+			a.logger.Debug("Included additional menubar elements",
 				zap.String("bundle_id", bundleID),
-				zap.Error(err))
-
-			continue
+				zap.Int("count", len(localElements)))
 		}
 
-		for _, node := range additionalNodes {
-			element, elementErr := a.convertToDomainElement(node)
+		for _, bundleID := range filter.AdditionalMenubarTargets {
+			waitGroup.Add(1)
 
-			node.Release()
-
-			if elementErr != nil {
-				a.logger.Debug(
-					"Failed to convert additional menubar element",
-					zap.Error(elementErr),
-				)
-
-				continue
-			}
-
-			if a.MatchesFilter(element, filter) {
-				elements = append(elements, element)
-			}
+			go collectAdditionalTarget(bundleID)
 		}
 
-		a.logger.Debug("Included additional menubar elements",
-			zap.String("bundle_id", bundleID),
-			zap.Int("count", len(additionalNodes)))
+		waitGroup.Wait()
 	}
 
 	return elements
@@ -134,7 +132,7 @@ func (a *Adapter) addMenubarElements(
 // Temporarily modifies clickable roles to include AXDockItem, finds the dock application,
 // validates it, and collects clickable elements from the dock tree.
 func (a *Adapter) addDockElements(
-	_ context.Context,
+	ctx context.Context,
 	elements []*element.Element,
 ) []*element.Element {
 	const dockBundleID = "com.apple.dock"
@@ -143,12 +141,12 @@ func (a *Adapter) addDockElements(
 	originalRoles := a.client.ClickableRoles()
 	dockRoles := make([]string, len(originalRoles)+1)
 	copy(dockRoles, originalRoles)
-	dockRoles[len(originalRoles)] = "AXDockItem"
+	dockRoles[len(originalRoles)] = string(element.RoleDockItem)
 
 	// Get dock application by bundle ID
-	dockApp, dockAppErr := a.client.ApplicationByBundleID(dockBundleID)
+	dockApp, dockAppErr := a.client.ApplicationByBundleID(ctx, dockBundleID)
 	if dockAppErr != nil || dockApp == nil {
-		a.logger.Debug("Dock application not found")
+		a.logger.Warn("Dock application not found")
 
 		return elements
 	}
@@ -162,7 +160,7 @@ func (a *Adapter) addDockElements(
 		return elements
 	}
 
-	if appInfo.Role != "AXApplication" {
+	if appInfo.Role != string(element.RoleApplication) {
 		a.logger.Warn("Got incorrect element for dock, expected AXApplication",
 			zap.String("actual_role", appInfo.Role),
 			zap.String("title", appInfo.Title))
@@ -171,7 +169,7 @@ func (a *Adapter) addDockElements(
 	}
 
 	// Build tree and find clickable elements
-	dockNodes, dockNodesErr := a.client.ClickableNodes(dockApp, true, dockRoles)
+	dockNodes, dockNodesErr := a.client.ClickableNodes(ctx, dockApp, dockRoles, dockTreeDepth)
 	if dockNodesErr != nil {
 		a.logger.Warn("Failed to get dock elements", zap.Error(dockNodesErr))
 
@@ -199,14 +197,25 @@ func (a *Adapter) addDockElements(
 
 // addNotificationCenterElements adds notification center clickable elements.
 func (a *Adapter) addNotificationCenterElements(
-	_ context.Context,
+	ctx context.Context,
 	elements []*element.Element,
 ) []*element.Element {
 	const ncBundleID = "com.apple.notificationcenterui"
 
 	a.logger.Debug("Adding notification center elements")
 
-	ncNodes, ncNodesErr := a.client.ClickableElementsFromBundleID(ncBundleID, nil, false)
+	// Lots of notification roles are AXGroup, so we need to enable it here
+	originalRoles := a.client.ClickableRoles()
+	ncRoles := make([]string, len(originalRoles)+1)
+	copy(ncRoles, originalRoles)
+	ncRoles[len(originalRoles)] = string(element.RoleGroup)
+
+	ncNodes, ncNodesErr := a.client.ClickableElementsFromBundleID(
+		ctx,
+		ncBundleID,
+		ncRoles,
+		0,
+	)
 	if ncNodesErr != nil {
 		a.logger.Warn("Failed to get notification center elements", zap.Error(ncNodesErr))
 
@@ -234,15 +243,15 @@ func (a *Adapter) addNotificationCenterElements(
 
 // addStageManagerElements adds stage manager center clickable elements.
 func (a *Adapter) addStageManagerElements(
-	_ context.Context,
+	ctx context.Context,
 	elements []*element.Element,
 ) []*element.Element {
 	const wmBundleID = "com.apple.WindowManager"
 
 	// Get window manager application by bundle ID
-	wmApp, wmAppErr := a.client.ApplicationByBundleID(wmBundleID)
+	wmApp, wmAppErr := a.client.ApplicationByBundleID(ctx, wmBundleID)
 	if wmAppErr != nil || wmApp == nil {
-		a.logger.Debug("Window manager application not found")
+		a.logger.Warn("Window manager application not found")
 
 		return elements
 	}
@@ -256,7 +265,7 @@ func (a *Adapter) addStageManagerElements(
 		return elements
 	}
 
-	if appInfo.Role != "AXApplication" {
+	if appInfo.Role != string(element.RoleApplication) {
 		a.logger.Warn("Got incorrect element for window manager, expected AXApplication",
 			zap.String("actual_role", appInfo.Role),
 			zap.String("title", appInfo.Title))
@@ -265,7 +274,7 @@ func (a *Adapter) addStageManagerElements(
 	}
 
 	// Build tree and find clickable elements
-	wmNodes, wmNodesErr := a.client.ClickableNodes(wmApp, true, nil)
+	wmNodes, wmNodesErr := a.client.ClickableNodes(ctx, wmApp, nil, stageManagerTreeDepth)
 	if wmNodesErr != nil {
 		a.logger.Warn("Failed to get window manager elements", zap.Error(wmNodesErr))
 
@@ -287,6 +296,82 @@ func (a *Adapter) addStageManagerElements(
 	}
 
 	a.logger.Debug("Included window manager elements", zap.Int("count", len(wmNodes)))
+
+	return elements
+}
+
+// addPIPElements adds macOS Picture in Picture controls from PIPAgent.
+func (a *Adapter) addPIPElements(
+	ctx context.Context,
+	elements []*element.Element,
+) []*element.Element {
+	const pipBundleID = "com.apple.PIPAgent"
+
+	pipNodes, pipNodesErr := a.client.ClickableElementsFromBundleID(
+		ctx,
+		pipBundleID,
+		nil,
+		flatAppTreeDepth,
+	)
+	if pipNodesErr != nil {
+		a.logger.Warn("Failed to get Picture in Picture elements", zap.Error(pipNodesErr))
+
+		return elements
+	}
+
+	for _, node := range pipNodes {
+		element, elementErr := a.convertToDomainElement(node)
+
+		node.Release()
+
+		if elementErr != nil {
+			a.logger.Warn("Failed to convert Picture in Picture element", zap.Error(elementErr))
+
+			continue
+		}
+
+		elements = append(elements, element)
+	}
+
+	a.logger.Debug("Included Picture in Picture elements", zap.Int("count", len(pipNodes)))
+
+	return elements
+}
+
+// addScreenCaptureElements makes the screencapture small ui clickable.
+func (a *Adapter) addScreenCaptureElements(
+	ctx context.Context,
+	elements []*element.Element,
+) []*element.Element {
+	const screenCaptureBundleID = "com.apple.screencaptureui"
+
+	screenCaptureNodes, screenCaptureNodesErr := a.client.ClickableElementsFromBundleID(
+		ctx,
+		screenCaptureBundleID,
+		nil,
+		flatAppTreeDepth,
+	)
+	if screenCaptureNodesErr != nil {
+		a.logger.Warn("Failed to get Screen Capture elements", zap.Error(screenCaptureNodesErr))
+
+		return elements
+	}
+
+	for _, node := range screenCaptureNodes {
+		element, elementErr := a.convertToDomainElement(node)
+
+		node.Release()
+
+		if elementErr != nil {
+			a.logger.Warn("Failed to convert Screen Capture element", zap.Error(elementErr))
+
+			continue
+		}
+
+		elements = append(elements, element)
+	}
+
+	a.logger.Debug("Included Screen Capture elements", zap.Int("count", len(screenCaptureNodes)))
 
 	return elements
 }

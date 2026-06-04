@@ -22,6 +22,9 @@ static NSMutableDictionary *hotkeyCallbacks = nil;
 static EventHandlerRef eventHandlerRef = NULL;
 static dispatch_queue_t hotkeyQueue = nil;
 
+static const int HotkeyEventPressed = 1;
+static const int HotkeyEventReleased = 2;
+
 #pragma mark - Storage Functions
 
 /// Initialize storage
@@ -33,10 +36,12 @@ static void initializeStorage(void) {
 		hotkeyQueue = dispatch_queue_create("com.neru.hotkeys", DISPATCH_QUEUE_SERIAL);
 
 		// Install event handler only once
-		EventTypeSpec eventType;
-		eventType.eventClass = kEventClassKeyboard;
-		eventType.eventKind = kEventHotKeyPressed;
-		InstallApplicationEventHandler(&hotkeyHandler, 1, &eventType, NULL, &eventHandlerRef);
+		EventTypeSpec eventTypes[2];
+		eventTypes[0].eventClass = kEventClassKeyboard;
+		eventTypes[0].eventKind = kEventHotKeyPressed;
+		eventTypes[1].eventClass = kEventClassKeyboard;
+		eventTypes[1].eventKind = kEventHotKeyReleased;
+		InstallApplicationEventHandler(&hotkeyHandler, 2, eventTypes, NULL, &eventHandlerRef);
 	});
 }
 
@@ -48,27 +53,31 @@ static void initializeStorage(void) {
 /// @param userData User data pointer
 /// @return OSStatus
 static OSStatus hotkeyHandler(EventHandlerCallRef nextHandler, EventRef event, void *userData) {
-	EventHotKeyID hotkeyID;
-	GetEventParameter(event, kEventParamDirectObject, typeEventHotKeyID, NULL, sizeof(hotkeyID), NULL, &hotkeyID);
+	@autoreleasepool {
+		EventHotKeyID hotkeyID;
+		GetEventParameter(event, kEventParamDirectObject, typeEventHotKeyID, NULL, sizeof(hotkeyID), NULL, &hotkeyID);
 
-	int hotkeyId = (int)hotkeyID.id;
+		int hotkeyId = (int)hotkeyID.id;
+		UInt32 eventKind = GetEventKind(event);
+		int callbackEventKind = eventKind == kEventHotKeyReleased ? HotkeyEventReleased : HotkeyEventPressed;
 
-	// Thread-safe callback retrieval
-	__block HotkeyCallback callback = NULL;
-	__block void *callbackUserData = NULL;
+		// Thread-safe callback retrieval
+		__block HotkeyCallback callback = NULL;
+		__block void *callbackUserData = NULL;
 
-	dispatch_sync(hotkeyQueue, ^{
-		NSNumber *key = @(hotkeyId);
-		NSDictionary *callbackInfo = hotkeyCallbacks[key];
-		if (callbackInfo) {
-			callback = [callbackInfo[@"callback"] pointerValue];
-			callbackUserData = [callbackInfo[@"userData"] pointerValue];
+		dispatch_sync(hotkeyQueue, ^{
+			NSNumber *key = @(hotkeyId);
+			NSDictionary *callbackInfo = hotkeyCallbacks[key];
+			if (callbackInfo) {
+				callback = [callbackInfo[@"callback"] pointerValue];
+				callbackUserData = [callbackInfo[@"userData"] pointerValue];
+			}
+		});
+
+		// Invoke callback outside the lock
+		if (callback) {
+			callback(hotkeyId, callbackEventKind, callbackUserData);
 		}
-	});
-
-	// Invoke callback outside the lock
-	if (callback) {
-		callback(hotkeyId, callbackUserData);
 	}
 
 	return noErr;
@@ -83,7 +92,7 @@ static OSStatus hotkeyHandler(EventHandlerCallRef nextHandler, EventRef event, v
 /// @param callback Callback function
 /// @param userData User data pointer
 /// @return 1 on success, 0 on failure
-int registerHotkey(int keyCode, int modifiers, int hotkeyId, HotkeyCallback callback, void *userData) {
+int NeruRegisterHotkey(int keyCode, int modifiers, int hotkeyId, HotkeyCallback callback, void *userData) {
 	initializeStorage();
 
 	// Convert modifiers to Carbon format
@@ -126,7 +135,7 @@ int registerHotkey(int keyCode, int modifiers, int hotkeyId, HotkeyCallback call
 
 /// Unregister hotkey
 /// @param hotkeyId Hotkey identifier
-void unregisterHotkey(int hotkeyId) {
+void NeruUnregisterHotkey(int hotkeyId) {
 	if (!hotkeyRefs)
 		return;
 
@@ -150,7 +159,7 @@ void unregisterHotkey(int hotkeyId) {
 }
 
 /// Unregister all hotkeys
-void unregisterAllHotkeys(void) {
+void NeruUnregisterAllHotkeys(void) {
 	if (!hotkeyRefs)
 		return;
 
@@ -172,7 +181,7 @@ void unregisterAllHotkeys(void) {
 
 /// Cleanup (call this before app termination)
 void cleanupHotkeys(void) {
-	unregisterAllHotkeys();
+	NeruUnregisterAllHotkeys();
 
 	if (eventHandlerRef) {
 		RemoveEventHandler(eventHandlerRef);
@@ -190,7 +199,7 @@ void cleanupHotkeys(void) {
 /// @param keyCode Output parameter for key code
 /// @param modifiers Output parameter for modifiers
 /// @return 1 on success, 0 on failure
-int parseKeyString(const char *keyString, int *keyCode, int *modifiers) {
+int NeruParseKeyString(const char *keyString, int *keyCode, int *modifiers) {
 	if (!keyString || !keyCode || !modifiers)
 		return 0;
 
@@ -230,7 +239,7 @@ int parseKeyString(const char *keyString, int *keyCode, int *modifiers) {
 			return 0;
 
 		// Map key name to key code using shared keymap
-		CGKeyCode keyCodeValue = keyNameToCode(mainKey);
+		CGKeyCode keyCodeValue = NeruKeyNameToCode(mainKey);
 		if (keyCodeValue == 0xFFFF) {
 			return 0;
 		}

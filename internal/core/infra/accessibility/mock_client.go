@@ -1,6 +1,7 @@
 package accessibility
 
 import (
+	"context"
 	"image"
 	"sync"
 
@@ -15,6 +16,8 @@ type MockAXClient struct {
 	MockFrontmostWindowErr error
 	MockAllWindows         []AXWindow
 	MockAllWindowsErr      error
+	MockHintWindows        []AXWindow
+	MockHintWindowsErr     error
 
 	MockFocusedApp    AXApp
 	MockFocusedAppErr error
@@ -40,34 +43,54 @@ type MockAXClient struct {
 	MockMissionControlActive bool
 
 	LastCalledBundleID         string
+	LastCalledMaxDepth         int
 	LastClickableNodesRoles    []string
 	LastBundleRoles            []string
-	LastMenuBarStrictFiltering bool
 	ClickableNodesRolesHistory [][]string
 }
 
 // FrontmostWindow returns the configured frontmost window or error.
-func (m *MockAXClient) FrontmostWindow() (AXWindow, error) {
+func (m *MockAXClient) FrontmostWindow(_ context.Context) (AXWindow, error) {
 	return m.MockFrontmostWindow, m.MockFrontmostWindowErr
 }
 
 // AllWindows returns the configured windows or error.
-func (m *MockAXClient) AllWindows() ([]AXWindow, error) {
+func (m *MockAXClient) AllWindows(_ context.Context) ([]AXWindow, error) {
 	return m.MockAllWindows, m.MockAllWindowsErr
 }
 
+// FrontmostAndPopoverWindows returns configured hint windows or falls back to
+// the frontmost window. When neither is configured, returns empty to match
+// production semantics (focused window + popover siblings, not arbitrary windows).
+func (m *MockAXClient) FrontmostAndPopoverWindows(_ context.Context) ([]AXWindow, error) {
+	if m.MockHintWindows != nil || m.MockHintWindowsErr != nil {
+		return m.MockHintWindows, m.MockHintWindowsErr
+	}
+
+	if m.MockFrontmostWindow != nil {
+		return []AXWindow{m.MockFrontmostWindow}, m.MockFrontmostWindowErr
+	}
+
+	return nil, nil
+}
+
 // FocusedApplication returns the configured focused application or error.
-func (m *MockAXClient) FocusedApplication() (AXApp, error) {
+func (m *MockAXClient) FocusedApplication(_ context.Context) (AXApp, error) {
 	return m.MockFocusedApp, m.MockFocusedAppErr
 }
 
 // ApplicationByBundleID returns the configured application by bundle ID or error.
-func (m *MockAXClient) ApplicationByBundleID(_ string) (AXApp, error) {
+func (m *MockAXClient) ApplicationByBundleID(_ context.Context, _ string) (AXApp, error) {
 	return m.MockFocusedApp, m.MockFocusedAppErr // Reuse focused app for simplicity or add specific field
 }
 
 // ClickableNodes returns the configured clickable nodes or error.
-func (m *MockAXClient) ClickableNodes(_ AXElement, _ bool, roles []string) ([]AXNode, error) {
+func (m *MockAXClient) ClickableNodes(
+	_ context.Context,
+	_ AXElement,
+	roles []string,
+	_ int,
+) ([]AXNode, error) {
 	m.mu.Lock()
 	m.LastClickableNodesRoles = roles
 	m.ClickableNodesRolesHistory = append(m.ClickableNodesRolesHistory, roles)
@@ -77,9 +100,9 @@ func (m *MockAXClient) ClickableNodes(_ AXElement, _ bool, roles []string) ([]AX
 }
 
 // MenuBarClickableElements returns the configured menu bar nodes or error.
-func (m *MockAXClient) MenuBarClickableElements(strictFiltering bool) ([]AXNode, error) {
+func (m *MockAXClient) MenuBarClickableElements(_ context.Context, maxDepth int) ([]AXNode, error) {
 	m.mu.Lock()
-	m.LastMenuBarStrictFiltering = strictFiltering
+	m.LastCalledMaxDepth = maxDepth
 	m.mu.Unlock()
 
 	return m.MockMenuBarNodes, m.MockMenuBarNodesErr
@@ -87,12 +110,14 @@ func (m *MockAXClient) MenuBarClickableElements(strictFiltering bool) ([]AXNode,
 
 // ClickableElementsFromBundleID returns the configured nodes for bundle ID or error.
 func (m *MockAXClient) ClickableElementsFromBundleID(
+	_ context.Context,
 	bundleID string,
 	roles []string,
-	strictFiltering bool,
+	maxDepth int,
 ) ([]AXNode, error) {
 	m.mu.Lock()
 	m.LastCalledBundleID = bundleID
+	m.LastCalledMaxDepth = maxDepth
 	m.LastBundleRoles = roles
 	m.mu.Unlock()
 
@@ -154,11 +179,6 @@ func (m *MockAXClient) IsMissionControlActive() bool {
 	return m.MockMissionControlActive
 }
 
-// ClearCache is a no-op for mock.
-func (m *MockAXClient) ClearCache() {
-	// No-op
-}
-
 // Mock implementations for Window, App, Node
 
 // MockWindow is a mock implementation of AXWindow.
@@ -189,6 +209,8 @@ func (a *MockApp) Info() (*AXAppInfo, error) {
 	return a.MockInfo, nil
 }
 
+var _ AXNode = (*MockNode)(nil)
+
 // MockNode is a mock implementation of AXNode.
 type MockNode struct {
 	MockID          string
@@ -196,6 +218,8 @@ type MockNode struct {
 	MockRole        string
 	MockTitle       string
 	MockDescription string
+	MockValue       string
+	MockSearchText  string
 	MockClickable   bool
 }
 
@@ -222,6 +246,16 @@ func (n *MockNode) Title() string {
 // Description returns the configured description.
 func (n *MockNode) Description() string {
 	return n.MockDescription
+}
+
+// Value returns the configured value.
+func (n *MockNode) Value() string {
+	return n.MockValue
+}
+
+// SearchText returns the configured search text.
+func (n *MockNode) SearchText() string {
+	return n.MockSearchText
 }
 
 // IsClickable returns the configured clickable state.

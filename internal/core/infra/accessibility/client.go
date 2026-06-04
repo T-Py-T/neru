@@ -1,6 +1,7 @@
 package accessibility
 
 import (
+	"context"
 	"image"
 
 	"github.com/y3owk1n/neru/internal/core/domain/action"
@@ -20,16 +21,23 @@ type AXWindow interface {
 // AXClient defines the interface for accessibility operations.
 type AXClient interface {
 	// Window and App operations
-	FrontmostWindow() (AXWindow, error)
-	AllWindows() ([]AXWindow, error)
-	FocusedApplication() (AXApp, error)
-	ApplicationByBundleID(bundleID string) (AXApp, error)
-	ClickableNodes(root AXElement, includeOffscreen bool, roles []string) ([]AXNode, error)
-	MenuBarClickableElements(strictFiltering bool) ([]AXNode, error)
+	FrontmostWindow(ctx context.Context) (AXWindow, error)
+	AllWindows(ctx context.Context) ([]AXWindow, error)
+	FrontmostAndPopoverWindows(ctx context.Context) ([]AXWindow, error)
+	FocusedApplication(ctx context.Context) (AXApp, error)
+	ApplicationByBundleID(ctx context.Context, bundleID string) (AXApp, error)
+	ClickableNodes(
+		ctx context.Context,
+		root AXElement,
+		roles []string,
+		maxDepth int,
+	) ([]AXNode, error)
+	MenuBarClickableElements(ctx context.Context, maxDepth int) ([]AXNode, error)
 	ClickableElementsFromBundleID(
+		ctx context.Context,
 		bundleID string,
 		roles []string,
-		strictFiltering bool,
+		maxDepth int,
 	) ([]AXNode, error)
 	ActiveScreenBounds() image.Rectangle
 
@@ -49,9 +57,6 @@ type AXClient interface {
 	SetClickableRoles(roles []string)
 	ClickableRoles() []string
 	IsMissionControlActive() bool
-
-	// Cache
-	ClearCache()
 }
 
 // AXAppInfo contains information about an application.

@@ -11,7 +11,6 @@ import (
 	"github.com/BurntSushi/toml"
 	"go.uber.org/zap"
 
-	"github.com/y3owk1n/neru/internal/core"
 	derrors "github.com/y3owk1n/neru/internal/core/errors"
 )
 
@@ -104,6 +103,26 @@ func removeBindingsForSingleAction(bindings map[string][]string, action string) 
 		existingAction, ok := isBuiltInGlobalModeAction(existingActions)
 		if ok && existingAction == action {
 			delete(bindings, key)
+		}
+	}
+}
+
+// removeLauncherBindingsForDisabledModes removes launcher keybindings for modes
+// that are explicitly disabled in the config.
+func removeLauncherBindingsForDisabledModes(cfg *Config) {
+	modeActions := map[string]bool{
+		modeNameHints:         cfg.Hints.Enabled,
+		modeNameGrid:          cfg.Grid.Enabled,
+		modeNameRecursiveGrid: cfg.RecursiveGrid.Enabled,
+	}
+
+	for key, actions := range cfg.Hotkeys.Bindings {
+		if len(actions) == 1 {
+			if action, ok := isBuiltInGlobalModeAction(actions); ok {
+				if modeEnabled, found := modeActions[action]; found && !modeEnabled {
+					delete(cfg.Hotkeys.Bindings, key)
+				}
+			}
 		}
 	}
 }
@@ -231,7 +250,7 @@ func NewService(
 	return &Service{
 		config:        cfg,
 		path:          path,
-		logger:        logger,
+		logger:        logger.Named("config"),
 		alertProvider: alertProvider,
 	}
 }
@@ -265,7 +284,10 @@ func (s *Service) LoadWithValidation(path string) *LoadResult {
 		configResult.Config = DefaultConfig()
 
 		if explicitPath {
-			configResult.ValidationError = core.WrapConfigFailed(statErr, "config file not found")
+			configResult.ValidationError = derrors.WrapConfigFailed(
+				statErr,
+				"config file not found",
+			)
 		} else {
 			s.logger.Info("Config file not found, using default configuration")
 			// Clear ConfigPath for auto-discovered missing files
@@ -284,7 +306,7 @@ func (s *Service) LoadWithValidation(path string) *LoadResult {
 
 	_, decodeErr := toml.DecodeFile(configResult.ConfigPath, &raw)
 	if decodeErr != nil {
-		configResult.ValidationError = core.WrapConfigFailed(decodeErr, "parse config file")
+		configResult.ValidationError = derrors.WrapConfigFailed(decodeErr, "parse config file")
 		configResult.Config = DefaultConfig()
 
 		return configResult
@@ -293,7 +315,7 @@ func (s *Service) LoadWithValidation(path string) *LoadResult {
 	// Decode into typed config struct (separate pass for validation)
 	_, err := toml.DecodeFile(configResult.ConfigPath, configResult.Config)
 	if err != nil {
-		configResult.ValidationError = core.WrapConfigFailed(err, "parse config file")
+		configResult.ValidationError = derrors.WrapConfigFailed(err, "parse config file")
 		configResult.Config = DefaultConfig()
 
 		return configResult
@@ -318,7 +340,7 @@ func (s *Service) LoadWithValidation(path string) *LoadResult {
 			configResult.Config = DefaultConfig()
 
 			s.logger.Warn("Invalid hotkeys section type",
-				zap.Any("value", hot),
+				zap.String("value_type", fmt.Sprintf("%T", hot)),
 				zap.Error(configResult.ValidationError))
 
 			return configResult
@@ -385,7 +407,7 @@ func (s *Service) LoadWithValidation(path string) *LoadResult {
 					configResult.Config = DefaultConfig()
 					s.logger.Warn("Invalid hotkey configuration",
 						zap.String("key", key),
-						zap.Any("value", value),
+						zap.String("value_type", fmt.Sprintf("%T", value)),
 						zap.Error(configResult.ValidationError))
 
 					return configResult
@@ -400,7 +422,7 @@ func (s *Service) LoadWithValidation(path string) *LoadResult {
 					configResult.Config = DefaultConfig()
 					s.logger.Warn("Invalid hotkey configuration",
 						zap.String("key", key),
-						zap.Any("value", value),
+						zap.String("value_type", fmt.Sprintf("%T", value)),
 						zap.Error(configResult.ValidationError))
 
 					return configResult
@@ -542,9 +564,18 @@ func (s *Service) LoadWithValidation(path string) *LoadResult {
 		}
 	}
 
+	if scrollRaw, ok := raw["scroll"].(map[string]any); ok {
+		if result := validateAppConfigsHotkeys(s.logger, "scroll", scrollRaw); result != nil {
+			return result
+		}
+	}
+
 	validateErr := configResult.Config.Validate()
 	if validateErr != nil {
-		configResult.ValidationError = core.WrapConfigFailed(validateErr, "validate configuration")
+		configResult.ValidationError = derrors.WrapConfigFailed(
+			validateErr,
+			"validate configuration",
+		)
 		configResult.Config = DefaultConfig()
 
 		s.logger.Warn("Configuration validation failed",
@@ -554,6 +585,8 @@ func (s *Service) LoadWithValidation(path string) *LoadResult {
 	}
 
 	s.logger.Info("Configuration loaded successfully")
+
+	removeLauncherBindingsForDisabledModes(configResult.Config)
 
 	return configResult
 }
@@ -690,7 +723,7 @@ func (s *Service) Reload(ctx context.Context, path string) error {
 		// Check if context was canceled during send
 		select {
 		case <-ctx.Done():
-			return core.WrapContextCanceled(ctx, "notify config watchers")
+			return derrors.WrapContextCanceled(ctx, "notify config watchers")
 		default:
 		}
 	}

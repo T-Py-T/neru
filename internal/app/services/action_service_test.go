@@ -8,13 +8,15 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/app/services"
+	"github.com/y3owk1n/neru/internal/config"
 	"github.com/y3owk1n/neru/internal/core/domain/action"
+	"github.com/y3owk1n/neru/internal/core/ports"
 	portmocks "github.com/y3owk1n/neru/internal/core/ports/mocks"
 )
 
 func newTestActionService(
 	acc *portmocks.MockAccessibilityPort,
-	sys *portmocks.SystemMock,
+	sys *portmocks.MockSystemPort,
 ) *services.ActionService {
 	return services.NewActionService(acc, &portmocks.MockOverlayPort{}, sys, zap.NewNop())
 }
@@ -43,7 +45,7 @@ func TestPerformActionAtPoint_ParsesAndDispatches(t *testing.T) {
 			return nil
 		},
 	}
-	service := newTestActionService(acc, &portmocks.SystemMock{})
+	service := newTestActionService(acc, &portmocks.MockSystemPort{})
 
 	err := service.PerformActionAtPoint(
 		ctx,
@@ -60,8 +62,145 @@ func TestPerformActionAtPoint_ParsesAndDispatches(t *testing.T) {
 	}
 }
 
+func TestPerformActionAtPoint_DrawsMouseActionIndicatorWhenEnabled(t *testing.T) {
+	ctx := context.Background()
+
+	acc := &portmocks.MockAccessibilityPort{
+		PerformActionAtPointFunc: func(
+			context.Context,
+			action.Type,
+			image.Point,
+			action.Modifiers,
+		) error {
+			return nil
+		},
+	}
+
+	var (
+		gotPoint image.Point
+		gotStyle ports.MouseActionIndicatorStyle
+	)
+
+	drawn := false
+	overlay := &portmocks.MockOverlayPort{
+		DrawMouseActionIndicatorFunc: func(
+			point image.Point,
+			style ports.MouseActionIndicatorStyle,
+		) {
+			drawn = true
+			gotPoint = point
+			gotStyle = style
+		},
+	}
+
+	service := services.NewActionService(acc, overlay, &portmocks.MockSystemPort{}, zap.NewNop())
+	cfg := config.DefaultConfig().MouseAction
+	cfg.Enabled = true
+	cfg.Actions = []string{"left_click"}
+	service.UpdateConfig(cfg)
+
+	point := image.Point{X: 10, Y: 20}
+
+	err := service.PerformActionAtPoint(ctx, "left_click", point, 0)
+	if err != nil {
+		t.Fatalf("PerformActionAtPoint() error = %v", err)
+	}
+
+	if !drawn {
+		t.Fatal("expected mouse action indicator to be drawn")
+	}
+
+	if gotPoint != point {
+		t.Fatalf("unexpected indicator point: %v", gotPoint)
+	}
+
+	if gotStyle.Size != cfg.UI.Size || gotStyle.DurationMS != cfg.Animation.DurationMS {
+		t.Fatalf("unexpected indicator style: %+v", gotStyle)
+	}
+}
+
+func TestPerformActionAtPoint_DoesNotDrawMouseActionIndicatorWhenDisabled(t *testing.T) {
+	ctx := context.Background()
+
+	acc := &portmocks.MockAccessibilityPort{
+		PerformActionAtPointFunc: func(
+			context.Context,
+			action.Type,
+			image.Point,
+			action.Modifiers,
+		) error {
+			return nil
+		},
+	}
+
+	drawn := false
+	overlay := &portmocks.MockOverlayPort{
+		DrawMouseActionIndicatorFunc: func(
+			image.Point,
+			ports.MouseActionIndicatorStyle,
+		) {
+			drawn = true
+		},
+	}
+
+	service := services.NewActionService(acc, overlay, &portmocks.MockSystemPort{}, zap.NewNop())
+	cfg := config.DefaultConfig().MouseAction
+	cfg.Enabled = false
+	cfg.Actions = []string{"left_click"}
+	service.UpdateConfig(cfg)
+
+	err := service.PerformActionAtPoint(ctx, "left_click", image.Point{X: 10, Y: 20}, 0)
+	if err != nil {
+		t.Fatalf("PerformActionAtPoint() error = %v", err)
+	}
+
+	if drawn {
+		t.Fatal("expected mouse action indicator NOT to be drawn when disabled")
+	}
+}
+
+func TestPerformActionAtPoint_DoesNotDrawMouseActionIndicatorForUnlistedAction(t *testing.T) {
+	ctx := context.Background()
+
+	acc := &portmocks.MockAccessibilityPort{
+		PerformActionAtPointFunc: func(
+			context.Context,
+			action.Type,
+			image.Point,
+			action.Modifiers,
+		) error {
+			return nil
+		},
+	}
+
+	drawn := false
+	overlay := &portmocks.MockOverlayPort{
+		DrawMouseActionIndicatorFunc: func(
+			image.Point,
+			ports.MouseActionIndicatorStyle,
+		) {
+			drawn = true
+		},
+	}
+
+	service := services.NewActionService(acc, overlay, &portmocks.MockSystemPort{}, zap.NewNop())
+	cfg := config.DefaultConfig().MouseAction
+	cfg.Enabled = true
+	cfg.Actions = []string{"left_click"}
+	service.UpdateConfig(cfg)
+
+	err := service.PerformActionAtPoint(ctx, "right_click", image.Point{X: 10, Y: 20}, 0)
+	if err != nil {
+		t.Fatalf("PerformActionAtPoint() error = %v", err)
+	}
+
+	if drawn {
+		t.Fatal("expected mouse action indicator NOT to be drawn for unlisted action")
+	}
+}
+
 func TestPerformActionAtPoint_InvalidAction(t *testing.T) {
-	service := newTestActionService(&portmocks.MockAccessibilityPort{}, &portmocks.SystemMock{})
+	service := newTestActionService(&portmocks.MockAccessibilityPort{}, &portmocks.MockSystemPort{})
 
 	err := service.PerformActionAtPoint(context.Background(), "not_real", image.Point{}, 0)
 	if err == nil {
@@ -76,7 +215,7 @@ func TestMoveMouseTo_ClampsToScreenBounds(t *testing.T) {
 
 	waitCalled := false
 
-	sys := &portmocks.SystemMock{
+	sys := &portmocks.MockSystemPort{
 		ScreenBoundsFunc: func(context.Context) (image.Rectangle, error) {
 			return image.Rect(0, 0, 100, 100), nil
 		},
@@ -112,7 +251,7 @@ func TestMoveMouseRelative_UsesCurrentCursorPosition(t *testing.T) {
 
 	var moved image.Point
 
-	sys := &portmocks.SystemMock{
+	sys := &portmocks.MockSystemPort{
 		CursorPositionFunc: func(context.Context) (image.Point, error) {
 			return image.Point{X: 40, Y: 40}, nil
 		},
@@ -143,7 +282,7 @@ func TestMoveCursorToPointAndWait_WaitsForCursorIdle(t *testing.T) {
 	moved := false
 	waitCalled := false
 
-	sys := &portmocks.SystemMock{
+	sys := &portmocks.MockSystemPort{
 		MoveCursorToPointFunc: func(_ context.Context, p image.Point, _ bool) error {
 			moved = true
 

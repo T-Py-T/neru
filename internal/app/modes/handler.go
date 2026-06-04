@@ -90,10 +90,15 @@ type Handler struct {
 	postModifierEvent          func(modifier string, isDown bool)
 	refreshHotkeys             func()
 	executeHotkeyAction        func(key, actionStr string) error
+	shutdown                   func()
 	refreshHintsTimer          *time.Timer
 	modeSession                uint64
 	hotkeyLastKey              string
 	hotkeyLastKeyTime          int64
+
+	textInput                  ports.TextInputPort
+	hintSearchTextInputActive  bool
+	hintSearchEventTapDisabled bool
 
 	// Pending modifier taps waiting to be committed after a short "no follow-up"
 	// window. A regular key press cancels all pending taps.
@@ -115,10 +120,24 @@ type Handler struct {
 	indicatorTicker *time.Ticker
 	indicatorStopCh chan struct{}
 	indicatorDoneCh chan struct{}
+
+	// Cycle hint state
+	cycleHintIndex int
+
+	// Base context for Handler methods. Injected by the App via NewHandler so
+	// all Handler operations observe app-level cancellation.
+	ctx context.Context //nolint:containedctx
+
+	// heldRepeatingKey tracks which key is currently held for custom repeat.
+	// When non-empty, macOS native key-down events for this key are suppressed
+	// and a custom goroutine drives the repeat at heldRepeatInterval.
+	heldRepeatingKey    string
+	heldRepeatingCancel context.CancelFunc
 }
 
 // NewHandler creates a new mode handler.
 func NewHandler(
+	ctx context.Context,
 	config *configpkg.Config,
 	logger *zap.Logger,
 	appState *state.AppState,
@@ -144,8 +163,16 @@ func NewHandler(
 	postModifierEvent func(modifier string, isDown bool),
 	refreshHotkeys func(),
 	executeHotkeyAction func(key, actionStr string) error,
+	shutdown func(),
+	textInput ports.TextInputPort,
 	systemPort ports.SystemPort,
 ) *Handler {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
+	logger = logger.Named("modes")
+
 	// Initialize screen bounds for coordinate conversion.
 	// Use a background context since this runs during startup.
 	// CodeNotSupported is expected on non-darwin platforms and is silently ignored;
@@ -162,6 +189,7 @@ func NewHandler(
 	}
 
 	handler := &Handler{
+		ctx:                        ctx,
 		config:                     config,
 		logger:                     logger,
 		appState:                   appState,
@@ -189,8 +217,11 @@ func NewHandler(
 		postModifierEvent:          postModifierEvent,
 		refreshHotkeys:             refreshHotkeys,
 		executeHotkeyAction:        executeHotkeyAction,
+		shutdown:                   shutdown,
+		textInput:                  textInput,
 		themeProvider:              systemPort,
 		system:                     systemPort,
+		cycleHintIndex:             -1,
 	}
 
 	// Initialize mode implementations
@@ -229,7 +260,7 @@ func (h *Handler) RefreshHintsForScreenChange(
 	// Re-read screen bounds under the lock so the onUpdate callback
 	// uses coordinates that match the resized overlay.
 	if h.system != nil {
-		b, err := h.system.ScreenBounds(context.Background())
+		b, err := h.system.ScreenBounds(ctx)
 		if err == nil {
 			h.screenBounds = b
 		} else if !derrors.IsNotSupported(err) {
@@ -237,12 +268,28 @@ func (h *Handler) RefreshHintsForScreenChange(
 		}
 	}
 
+	// Escape any active IME search session before refreshing hints on the new
+	// screen. The old IME session is bound to the previous screen and loses
+	// focus during the space transition, causing subsequent keystrokes to be
+	// forwarded to the frontmost app instead.
+	if h.hints != nil && h.hints.Context != nil && h.hints.Context.SearchActive() {
+		h.cancelHintSearch()
+	}
+
 	// Get current filter options from context
 	filterRoles := h.hints.Context.FilterRoles()
 	filterTextContains := h.hints.Context.FilterTextContains()
+	strategyOverride := h.hints.Context.StrategyOverride()
 
-	// Show hints with filters preserved
-	domainHints, showHintsErr := hintService.ShowHints(ctx, filterRoles, filterTextContains)
+	// Generate hints with filters preserved; SetHints below performs the
+	// single redraw after active-screen filtering.
+	domainHints, showHintsErr := hintService.GenerateHints(
+		ctx,
+		filterRoles,
+		filterTextContains,
+		"",
+		strategyOverride,
+	)
 	if showHintsErr != nil {
 		h.logger.Error("Failed to refresh hints after screen change", zap.Error(showHintsErr))
 		h.exitModeLocked()
@@ -267,7 +314,14 @@ func (h *Handler) RefreshHintsForScreenChange(
 		return false
 	}
 
-	h.hints.Context.SetHints(domainHint.NewCollection(filtered))
+	setHintsErr := h.hints.Context.SetHints(
+		domainHint.NewCollection(filtered),
+	)
+	if setHintsErr != nil {
+		h.logger.Error("Failed to refresh hints for screen change", zap.Error(setHintsErr))
+
+		return false
+	}
 
 	return true
 }
@@ -349,7 +403,7 @@ func (h *Handler) RefreshRecursiveGridForScreenChange() bool {
 	// Re-read screen bounds under the lock so the overlay uses coordinates
 	// that match the resized window.
 	if h.system != nil {
-		b, err := h.system.ScreenBounds(context.Background())
+		b, err := h.system.ScreenBounds(h.ctx)
 		if err == nil {
 			h.screenBounds = b
 		} else if !derrors.IsNotSupported(err) {
@@ -549,7 +603,7 @@ func (h *Handler) ResetCurrentMode() {
 			}
 
 			err := h.actionService.MoveCursorToPoint(
-				context.Background(),
+				h.ctx,
 				absoluteCenter,
 			)
 			if err != nil {
@@ -569,8 +623,13 @@ func (h *Handler) BackspaceCurrentMode() {
 	switch h.appState.CurrentMode() {
 	case domain.ModeHints:
 		if h.hints != nil && h.hints.Context != nil && h.hints.Context.Manager() != nil {
-			h.hints.Context.Manager().HandleBackspace()
+			backspaceErr := h.hints.Context.Manager().HandleBackspace()
+			if backspaceErr != nil {
+				h.logger.Error("Hint backspace failed", zap.Error(backspaceErr))
+			}
 		}
+
+		h.cycleHintIndex = -1
 	case domain.ModeGrid:
 		if h.grid != nil && h.grid.Manager != nil {
 			h.grid.Manager.HandleBackspace()
@@ -597,7 +656,7 @@ func (h *Handler) BackspaceCurrentMode() {
 			}
 
 			err := h.actionService.MoveCursorToPoint(
-				context.Background(),
+				h.ctx,
 				absoluteCenter,
 			)
 			if err != nil {
@@ -612,12 +671,228 @@ func (h *Handler) BackspaceCurrentMode() {
 	}
 }
 
+// StartHintSearch activates text filtering for hints mode.
+func (h *Handler) StartHintSearch() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	return h.startHintSearchLocked()
+}
+
+// CycleHint cycles through visible hints in hints mode, selecting the next or previous one.
+func (h *Handler) CycleHint(ctx context.Context, backward bool) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.appState.CurrentMode() != domain.ModeHints {
+		return derrors.New(derrors.CodeInvalidInput, "cycle_hint requires hints mode")
+	}
+
+	if h.hints == nil || h.hints.Context == nil {
+		return derrors.New(derrors.CodeActionFailed, "hints component not available")
+	}
+
+	manager := h.hints.Context.Manager()
+	if manager == nil {
+		return derrors.New(derrors.CodeActionFailed, "hints manager not available")
+	}
+
+	filteredHints := manager.FilteredHints()
+	if len(filteredHints) == 0 {
+		filteredHints = h.hints.Context.Hints().All()
+	}
+
+	if len(filteredHints) == 0 {
+		return derrors.New(derrors.CodeActionFailed, "no hints available")
+	}
+
+	if h.cycleHintIndex >= len(filteredHints) {
+		h.cycleHintIndex = len(filteredHints) - 1
+	}
+
+	switch {
+	case h.cycleHintIndex < 0:
+		h.cycleHintIndex = 0
+		if backward {
+			h.cycleHintIndex = len(filteredHints) - 1
+		}
+	default:
+		if backward {
+			if h.cycleHintIndex > 0 {
+				h.cycleHintIndex--
+			} else {
+				h.cycleHintIndex = len(filteredHints) - 1
+			}
+		} else {
+			if h.cycleHintIndex < len(filteredHints)-1 {
+				h.cycleHintIndex++
+			} else {
+				h.cycleHintIndex = 0
+			}
+		}
+	}
+
+	selectedHint := filteredHints[h.cycleHintIndex]
+
+	center := selectedHint.Element().Center()
+
+	moveErr := h.actionService.MoveCursorToPoint(ctx, center)
+	if moveErr != nil {
+		h.logger.Error("Failed to move cursor during cycle_hint", zap.Error(moveErr))
+
+		return derrors.New(derrors.CodeActionFailed, "failed to move cursor: "+moveErr.Error())
+	}
+
+	pendingAction := h.hints.Context.PendingAction()
+	if pendingAction != nil {
+		cursorFollowSelection := h.hints.Context.CursorFollowSelection()
+		filterRoles := h.hints.Context.FilterRoles()
+		filterTextContains := h.hints.Context.FilterTextContains()
+		startWithSearch := h.hints.Context.StartWithSearch()
+		strategyOverride := h.hints.Context.StrategyOverride()
+
+		h.executeActionAtPoint(pendingAction, center, true, func() {
+			h.activateHintModeInternal(
+				nil,
+				nil,
+				filterRoles,
+				filterTextContains,
+				&startWithSearch,
+				&strategyOverride,
+			)
+
+			// Restore state so subsequent cycles continue to execute the action
+			if h.appState.CurrentMode() == domain.ModeHints &&
+				h.hints != nil && h.hints.Context != nil {
+				h.hints.Context.SetPendingAction(pendingAction)
+				h.hints.Context.SetRepeat(true)
+				h.hints.Context.SetCursorFollowSelection(cursorFollowSelection)
+				h.hints.Context.SetFilterRoles(filterRoles)
+				h.hints.Context.SetFilterTextContains(filterTextContains)
+				h.hints.Context.SetStartWithSearch(startWithSearch)
+				h.hints.Context.SetStrategyOverride(strategyOverride)
+			}
+		})
+	}
+
+	return nil
+}
+
+func (h *Handler) startHintSearchLocked() error {
+	if h.appState.CurrentMode() != domain.ModeHints {
+		return derrors.New(derrors.CodeInvalidInput, "search_hints requires hints mode")
+	}
+
+	if h.hints == nil || h.hints.Context == nil {
+		return derrors.New(derrors.CodeActionFailed, "hints component not available")
+	}
+
+	if h.hints.Context.SourceHints() == nil {
+		return derrors.New(derrors.CodeActionFailed, "hints not available")
+	}
+
+	h.stopHintSearchTextInputLocked(true)
+	h.hints.Context.SetSearchQuery("")
+	h.hints.Context.SetSearchActive(true)
+
+	setHintsErr := h.hints.Context.SetVisibleHints(
+		h.hints.Context.SourceHints(),
+	)
+	if setHintsErr != nil {
+		return setHintsErr
+	}
+
+	h.cycleHintIndex = -1
+	h.drawHintSearchInput()
+
+	if h.textInput != nil {
+		searchFrame := h.searchInputFrame()
+		position := searchFrame.Position()
+		height := estimatedSearchInputHeight(h.config.Hints.SearchInputUI)
+		textInputFrame := ports.TextInputFrame{
+			X:      position.X,
+			Y:      position.Y,
+			Width:  searchFrame.Width(),
+			Height: height,
+		}
+
+		started, _ := h.textInput.StartHintSearchSession(
+			h.ctx,
+			ports.TextInputCallbacks{
+				OnQueryChanged: func(query string) {
+					h.mu.Lock()
+					defer h.mu.Unlock()
+
+					if h.appState.CurrentMode() != domain.ModeHints || h.hints == nil ||
+						h.hints.Context == nil {
+						return
+					}
+
+					if !h.hints.Context.SearchActive() {
+						return
+					}
+
+					h.hints.Context.SetSearchQuery(query)
+					h.applyHintSearchFilter()
+				},
+				OnConfirm: func() {
+					h.mu.Lock()
+					defer h.mu.Unlock()
+
+					if h.appState.CurrentMode() != domain.ModeHints {
+						return
+					}
+
+					h.confirmHintSearch()
+				},
+				OnCancel: func() {
+					h.mu.Lock()
+					defer h.mu.Unlock()
+
+					if h.appState.CurrentMode() != domain.ModeHints {
+						return
+					}
+
+					h.cancelHintSearch()
+				},
+			},
+			textInputFrame,
+		)
+
+		if started {
+			h.hintSearchTextInputActive = true
+			if h.disableEventTap != nil {
+				h.disableEventTap()
+				h.hintSearchEventTapDisabled = true
+			}
+		}
+	}
+
+	return nil
+}
+
+func (h *Handler) stopHintSearchTextInputLocked(keepEventTapDisabled bool) {
+	if h.hintSearchTextInputActive && h.textInput != nil {
+		// Use Background context since this may be called during cleanup,
+		// after h.ctx has already been canceled.
+		_ = h.textInput.StopHintSearchSession(context.Background())
+	}
+
+	h.hintSearchTextInputActive = false
+
+	if h.hintSearchEventTapDisabled && h.enableEventTap != nil &&
+		h.appState.CurrentMode() == domain.ModeHints && !keepEventTapDisabled {
+		h.enableEventTap()
+		h.hintSearchEventTapDisabled = false
+	}
+}
+
 func (h *Handler) focusedBundleID() string {
 	if h.actionService == nil {
 		return ""
 	}
 
-	bundleID, err := h.actionService.FocusedAppBundleID(context.Background())
+	bundleID, err := h.actionService.FocusedAppBundleID(h.ctx)
 	if err != nil {
 		h.logger.Debug("Failed to get focused app bundle ID for mode hotkeys", zap.Error(err))
 
@@ -625,4 +900,15 @@ func (h *Handler) focusedBundleID() string {
 	}
 
 	return bundleID
+}
+
+// stopHeldRepeatLocked cancels any running held-key repeat goroutine.
+// Caller must hold h.mu.
+func (h *Handler) stopHeldRepeatLocked() {
+	if h.heldRepeatingCancel != nil {
+		h.heldRepeatingCancel()
+		h.heldRepeatingCancel = nil
+	}
+
+	h.heldRepeatingKey = ""
 }

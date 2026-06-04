@@ -16,6 +16,7 @@ import (
 	domainGrid "github.com/y3owk1n/neru/internal/core/domain/grid"
 	"github.com/y3owk1n/neru/internal/core/infra/appwatcher"
 	"github.com/y3owk1n/neru/internal/core/infra/hotkeys"
+	"github.com/y3owk1n/neru/internal/core/ports"
 	"github.com/y3owk1n/neru/internal/ui/overlay"
 )
 
@@ -229,6 +230,12 @@ func (m *mockOverlayManager) DrawHintsWithStyle(
 func (m *mockOverlayManager) DrawModeIndicator(_, _ int)                      {}
 func (m *mockOverlayManager) DrawStickyModifiersIndicator(_, _ int, _ string) {}
 
+func (m *mockOverlayManager) DrawMouseActionIndicator(
+	_ image.Point,
+	_ ports.MouseActionIndicatorStyle,
+) {
+}
+
 func (m *mockOverlayManager) DrawGrid(
 	_ *domainGrid.Grid,
 	_ string,
@@ -255,6 +262,17 @@ func (m *mockOverlayManager) UpdateGridMatches(_ string)                   {}
 func (m *mockOverlayManager) ShowSubgrid(_ *domainGrid.Cell, _ grid.Style) {}
 func (m *mockOverlayManager) SetHideUnmatched(_ bool)                      {}
 func (m *mockOverlayManager) SetSharingType(_ bool)                        {}
+
+func (m *mockOverlayManager) DrawHintSearchInput(
+	_ string,
+	_ int,
+	_ hints.SearchInputFrame,
+	_ hints.SearchInputStyle,
+) error {
+	return nil
+}
+
+func (m *mockOverlayManager) HideHintSearchInput() {}
 
 type mockHotkeyService struct {
 	mu         sync.RWMutex
@@ -306,3 +324,6 @@ func (m *mockAppWatcher) OnActivate(_ appwatcher.AppCallback)   {}
 func (m *mockAppWatcher) OnDeactivate(_ appwatcher.AppCallback) {}
 func (m *mockAppWatcher) OnTerminate(_ appwatcher.AppCallback)  {}
 func (m *mockAppWatcher) OnScreenParametersChanged(_ func())    {}
+func (m *mockAppWatcher) OnMissionControlActivated(_ func())    {}
+func (m *mockAppWatcher) OnMissionControlDeactivated(_ func())  {}
+func (m *mockAppWatcher) SetMCDetection(_ bool)                 {}

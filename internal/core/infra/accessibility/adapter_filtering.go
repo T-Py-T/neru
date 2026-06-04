@@ -9,35 +9,40 @@ import (
 )
 
 // MatchesFilter checks if an element matches the given filter criteria.
+// NOTE: Filter search strings (TitleContains, DescriptionContains, ValueContains,
+// and TextContainsList) must be pre-lowercased by the caller before invoking MatchesFilter
+// to ensure case-insensitive matching without redundant allocations.
 func (a *Adapter) MatchesFilter(
-	element *element.Element,
+	elem *element.Element,
 	filter ports.ElementFilter,
 ) bool {
 	// Check minimum size
-	bounds := element.Bounds()
+	bounds := elem.Bounds()
 	if bounds.Dx() < filter.MinSize.X || bounds.Dy() < filter.MinSize.Y {
 		return false
 	}
 
 	// Check role inclusion
 	if len(filter.Roles) > 0 {
-		found := slices.Contains(filter.Roles, element.Role())
+		found := slices.Contains(filter.Roles, elem.Role())
 		if !found {
 			return false
 		}
 	}
 
 	// Check role exclusion
-	if slices.Contains(filter.ExcludeRoles, element.Role()) {
+	if slices.Contains(filter.ExcludeRoles, elem.Role()) {
 		return false
 	}
 
 	// Check title contains filter
+	// NOTE: filter.TitleContains is expected to be pre-lowercased by the caller (e.g. ClickableElements).
+	// Direct callers of MatchesFilter must also lowercase filter strings before passing them.
 	titleMatched := false
 	if filter.TitleContains != "" {
-		title := element.Title()
+		title := elem.Title()
 		if title != "" &&
-			strings.Contains(strings.ToLower(title), strings.ToLower(filter.TitleContains)) {
+			strings.Contains(strings.ToLower(title), filter.TitleContains) {
 			titleMatched = true
 		}
 	}
@@ -45,11 +50,11 @@ func (a *Adapter) MatchesFilter(
 	// Check description contains filter
 	descMatched := false
 	if filter.DescriptionContains != "" {
-		description := element.Description()
+		description := elem.Description()
 		if description != "" &&
 			strings.Contains(
 				strings.ToLower(description),
-				strings.ToLower(filter.DescriptionContains),
+				filter.DescriptionContains,
 			) {
 			descMatched = true
 		}
@@ -58,9 +63,9 @@ func (a *Adapter) MatchesFilter(
 	// Check value contains filter
 	valueMatched := false
 	if filter.ValueContains != "" {
-		value := element.Value()
+		value := textForFilter(elem)
 		if value != "" &&
-			strings.Contains(strings.ToLower(value), strings.ToLower(filter.ValueContains)) {
+			strings.Contains(strings.ToLower(value), filter.ValueContains) {
 			valueMatched = true
 		}
 	}
@@ -68,16 +73,15 @@ func (a *Adapter) MatchesFilter(
 	// Check any of the additional text substrings match (OR logic)
 	textListMatched := false
 	if len(filter.TextContainsList) > 0 {
-		title := element.Title()
-		description := element.Description()
+		title := elem.Title()
+		description := elem.Description()
 
-		value := element.Value()
-		for _, text := range filter.TextContainsList {
-			if text == "" {
+		value := textForFilter(elem)
+		for _, textLower := range filter.TextContainsList {
+			if textLower == "" {
 				continue
 			}
 
-			textLower := strings.ToLower(text)
 			if (title != "" && strings.Contains(strings.ToLower(title), textLower)) ||
 				(description != "" && strings.Contains(strings.ToLower(description), textLower)) ||
 				(value != "" && strings.Contains(strings.ToLower(value), textLower)) {
@@ -97,4 +101,19 @@ func (a *Adapter) MatchesFilter(
 	}
 
 	return true
+}
+
+func textForFilter(elem *element.Element) string {
+	value := elem.Value()
+
+	searchText := elem.SearchText()
+	if searchText == "" {
+		return value
+	}
+
+	if value == "" {
+		return searchText
+	}
+
+	return value + " " + searchText
 }
