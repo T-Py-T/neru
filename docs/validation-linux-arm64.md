@@ -6,6 +6,21 @@ Step-by-step recipe for **building and running Neru from a Git checkout** on an 
 
 ---
 
+## How to run the commands
+
+New to the Linux terminal? Read this once, then work through the guide top to bottom.
+
+1. **Open a terminal.** On KDE Plasma, launch **Konsole** (or press `Ctrl+Alt+T`). On other desktops, open the app called "Terminal".
+2. **Run one grey box at a time.** Copy a whole box, paste it into the terminal (`Ctrl+Shift+V` in Konsole), press **Enter**, and wait for it to finish before moving on to the next box.
+3. **Lines starting with `#` are notes, not commands.** Pasting them does nothing — that's fine.
+4. **Commands with `sudo` ask for your password.** Nothing shows on screen as you type it; that's normal. Type it and press Enter.
+5. **Replace `<you>`** in any path with your own Linux username (run `whoami` if you're unsure).
+6. **If a box prints an error, stop** and check [section 12 (common gotchas)](#12-common-gotchas-on-aarch64) before continuing.
+
+> Not sure which guide you need? Run `uname -m`. If it prints `aarch64`, you're in the right place. If it prints `x86_64`, use [validation-linux-amd64.md](./validation-linux-amd64.md) instead.
+
+---
+
 ## 0. Assumptions
 
 - **Arch:** `uname -m` → `aarch64`
@@ -165,7 +180,7 @@ disable_file_logging = false
 
 ### 6A. systemd user service (persistent — recommended for KDE)
 
-Create the unit:
+Create the service file. Paste the **entire** box below in one go (including the `cat ...` line and the final `EOF`) — it writes the file for you:
 
 ```bash
 mkdir -p ~/.config/systemd/user
