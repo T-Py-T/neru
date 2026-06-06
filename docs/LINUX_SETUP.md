@@ -1,11 +1,12 @@
 # Linux Setup & Testing Guide
 
-Neru provides native Linux support through two display server backends:
+Neru provides native Linux support through these display server backends:
 
 - **X11** — works with any X11-based session (XOrg, i3, etc.)
 - **Wayland (wlroots)** — works with wlroots-based compositors (Sway, Hyprland, niri, River)
+- **Wayland (KDE Plasma)** — KWin implements the same wlr-style client protocols (layer-shell, virtual-pointer, xdg-output) Neru already uses, so KDE Plasma sessions run through the wlroots client path.
 
-> **GNOME and KDE Wayland** are not yet supported. These compositors use their own private protocols instead of the wlroots protocols. See the placeholder files in `internal/core/infra/platform/linux/wayland_gnome/` and `wayland_kde/` for contribution guidance.
+> **GNOME Wayland** is not yet supported. GNOME Shell uses its own private protocols instead of the wlr protocols. See the placeholder files in `internal/core/infra/platform/linux/wayland_gnome/` for contribution guidance.
 
 ---
 
@@ -33,8 +34,8 @@ Neru provides native Linux support through two display server backends:
 | River      | wayland-wlroots | ✅ Supported     | Full virtual-pointer and layer-shell support            |
 | X11 / XOrg | x11             | ✅ Supported     | XTest for input, XRandR for screens                     |
 | i3         | x11             | ✅ Supported     | Runs under X11                                          |
+| KDE Plasma | wayland-kde     | ✅ Supported     | KWin implements the wlr client protocols; runs the wlroots path |
 | GNOME      | wayland-gnome   | 🔲 Not Supported | Needs libei + GNOME Shell extension; see PLACEHOLDER.md |
-| KDE Plasma | wayland-kde     | 🔲 Not Supported | Needs KDE-specific protocols; see PLACEHOLDER.md        |
 
 ---
 
@@ -266,6 +267,19 @@ binds {
 }
 ```
 
+#### KDE Plasma Example
+
+KDE Plasma Wayland cannot register global hotkeys from inside Neru, so bind
+`neru <mode>` in **System Settings -> Shortcuts -> Custom Shortcuts**. Use the
+absolute path to the binary so KWin resolves it reliably:
+
+| Action         | Command                                       |
+| -------------- | --------------------------------------------- |
+| Hints          | `/home/<you>/.local/bin/neru hints`           |
+| Grid           | `/home/<you>/.local/bin/neru grid`            |
+| Recursive grid | `/home/<you>/.local/bin/neru recursive_grid`  |
+| Scroll         | `/home/<you>/.local/bin/neru scroll`          |
+
 ### 2. Application Exclusions
 
 On Linux, applications are identified by their X11 `WM_CLASS` (X11) or process name from `/proc/<pid>/cmdline` (Wayland). Use these exact identifiers in your `excluded_apps` list.
@@ -304,7 +318,7 @@ systemctl --user enable --now neru
 
 1. **Wayland global hotkeys**: Must be configured in the compositor, not in Neru's config. See [Hotkey Configuration](#1-hotkey-configuration).
 2. **Accessibility (AT-SPI)**: Full AT-SPI integration for clickable element discovery (hints mode) is currently unavailable natively under Wayland without relying on experimental plugins. Grid mode and scroll mode both work perfectly without AT-SPI.
-3. **Dark mode / Theme polling detection**: Not yet implemented. Output will fall back to default theme definitions.
+3. **Dark mode detection**: Detected via the `org.freedesktop.appearance` xdg-desktop-portal interface, with a `~/.config/kdeglobals` fallback, so `neru doctor` reports the current color scheme on any desktop that ships a portal. Restyling overlays to match the detected theme is not yet wired up.
 4. **Notifications**: Desktop notifications (`org.freedesktop.Notifications`) will log to stdout/file instead of pushing to DBus.
 5. **Wayland modified clicks need evdev access**: On wlroots compositors, reliable
    modified pointer actions depend on the `evdev` keyboard-capture path described
@@ -321,7 +335,7 @@ You're running under X11 or a TTY. Neru will automatically use the X11 backend w
 
 ### "compositor does not support zwlr_virtual_pointer_v1"
 
-Your Wayland compositor does not currently implement `wlr` unstable protocols. This typically occurs under strictly isolated GNOME or KDE sessions. Check the placeholder docs to learn how libei implementations will govern GNOME support in the future.
+Your Wayland compositor does not currently implement `wlr` unstable protocols. This typically occurs under GNOME Shell, which uses its own private protocols. Check the placeholder docs to learn how libei implementations will govern GNOME support in the future.
 
 ### "failed to connect to Wayland compositor"
 

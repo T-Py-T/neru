@@ -1,25 +1,26 @@
-package logger_test
+//nolint:testpackage // Exercises the unexported defaultLogFilePath helper directly.
+package logger
 
 import (
 	"path/filepath"
 	"runtime"
 	"testing"
-
-	"github.com/y3owk1n/neru/internal/core/infra/logger"
 )
+
+const goosWindows = "windows"
 
 func TestDefaultLogFilePath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == goosWindows {
 		t.Setenv("USERPROFILE", home)
 		t.Setenv("HOMEDRIVE", "")
 		t.Setenv("HOMEPATH", "")
 		t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	}
 
-	got, err := logger.DefaultLogFilePath()
+	got, err := defaultLogFilePath()
 	if err != nil {
 		t.Fatalf("DefaultLogFilePath() error = %v", err)
 	}
@@ -29,7 +30,7 @@ func TestDefaultLogFilePath(t *testing.T) {
 	switch runtime.GOOS {
 	case "darwin":
 		want = filepath.Join(home, "Library", "Logs", "neru", "app.log")
-	case "windows":
+	case goosWindows:
 		want = filepath.Join(home, "AppData", "Local", "neru", "log", "app.log")
 	default:
 		want = filepath.Join(home, ".local", "state", "neru", "log", "app.log")
