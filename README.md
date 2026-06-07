@@ -190,6 +190,16 @@ macOS is fully featured and stable. Support for Linux (X11 & Wayland) is activel
 
 ---
 
+## 🎮 Community Projects
+
+### [Neru Dojo](https://github.com/bernatGene/neru-dojo) 🥋
+
+A browser-based training game built by the community to help you build muscle memory with Neru's recursive grid and hints modes. Practice target acquisition, sharpen your reaction time, and refine your mouseless precision in a fun, low-stakes environment.
+
+👉 **[Play Neru Dojo](https://bernatgene.github.io/neru-dojo/)** — no install needed, works in any browser.
+
+---
+
 ## 🤝 Contributing
 
 Neru has a modular, clean hexagonal architecture (Ports & Adapters) written in Go and Objective-C, making it exceptionally easy to add features or platform adapters.
