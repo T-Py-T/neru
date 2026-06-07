@@ -7,6 +7,7 @@ package linux
 #cgo linux CFLAGS: -DWLR_CPLUSPLUS
 #include <stdlib.h>
 #include "wlroots_client.h"
+#include "evdev.h"
 */
 import "C"
 
@@ -40,6 +41,19 @@ type wlrootsState struct {
 	client  *C.NeruWlrootsClient
 	screens []wlrootsScreen
 	ready   bool
+
+	// hasVirtualPointer reports whether the compositor advertises
+	// zwlr_virtual_pointer_v1. When false (notably KWin/KDE), pointer moves
+	// and clicks are injected through the uinput device below instead.
+	hasVirtualPointer bool
+
+	// uinput absolute-pointer fallback for compositors without
+	// zwlr_virtual_pointer_v1. Created once with the desktop extent; originX/Y
+	// is the bounding-box origin so compositor coordinates map onto the device.
+	uinputFD    C.int
+	uinputReady bool
+	originX     int
+	originY     int
 }
 
 var globalWlrootsState = &wlrootsState{}
@@ -67,15 +81,12 @@ func ensureWlrootsState() error {
 		)
 	}
 
-	if C.neru_wlr_has_virtual_pointer(client) == 0 { //nolint:nlreturn
-		C.neru_wlr_disconnect(client)
-
-		return derrors.New(
-			derrors.CodeActionFailed,
-			"Wayland compositor does not support zwlr_virtual_pointer_v1 protocol; "+
-				"this protocol is required and is provided by wlroots-based compositors (Sway, Hyprland, niri, River)",
-		)
-	}
+	// zwlr_virtual_pointer_v1 is the native injection path (Sway, Hyprland,
+	// niri, River). KWin/KDE intentionally does not implement it, so its
+	// absence is no longer fatal: screen bounds and the overlay still come up
+	// via xdg_output + zwlr_layer_shell_v1, and pointer moves/clicks fall back
+	// to a uinput device set up below.
+	hasVirtualPointer := C.neru_wlr_has_virtual_pointer(client) != 0
 
 	// Initialize cursor position to screen center. Wayland has no
 	// protocol to query global pointer position, so we track it
@@ -128,7 +139,89 @@ func ensureWlrootsState() error {
 
 	globalWlrootsState.client = client
 	globalWlrootsState.screens = screens
+	globalWlrootsState.hasVirtualPointer = hasVirtualPointer
+
+	// On compositors without a virtual pointer, stand up the uinput device now
+	// so move/click have an injection path. Failure here is non-fatal: the
+	// overlay still works, and pointer ops will report a clear error.
+	if !hasVirtualPointer {
+		globalWlrootsState.setupUinputPointerLocked(screens)
+	}
+
 	globalWlrootsState.ready = true
+
+	return nil
+}
+
+// setupUinputPointerLocked creates the persistent uinput absolute-pointer
+// device sized to the full desktop extent. Caller must hold the write lock.
+func (st *wlrootsState) setupUinputPointerLocked(screens []wlrootsScreen) {
+	if len(screens) == 0 {
+		return
+	}
+
+	bounds := screens[0].Bounds
+	for _, screen := range screens[1:] {
+		bounds = bounds.Union(screen.Bounds)
+	}
+
+	var fd C.int
+	if C.neru_uinput_create_pointer(C.int(bounds.Dx()), C.int(bounds.Dy()), &fd) == 0 {
+		return
+	}
+
+	st.uinputFD = fd
+	st.originX = bounds.Min.X
+	st.originY = bounds.Min.Y
+	st.uinputReady = true
+}
+
+// wlrootsUinputMoveLocked moves the uinput pointer to an absolute compositor
+// coordinate and updates the cached cursor. Caller must hold the lock.
+func wlrootsUinputMoveLocked(point image.Point) error {
+	st := globalWlrootsState
+	if !st.uinputReady {
+		return derrors.New(
+			derrors.CodeActionFailed,
+			"uinput pointer device unavailable; ensure /dev/uinput is writable (see LINUX_SETUP udev rule)",
+		)
+	}
+
+	if C.neru_uinput_move_abs(st.uinputFD, C.int(point.X-st.originX), C.int(point.Y-st.originY)) == 0 {
+		return derrors.Newf(
+			derrors.CodeActionFailed,
+			"failed to move uinput pointer to (%d, %d)",
+			point.X, point.Y,
+		)
+	}
+
+	C.neru_wlr_set_cursor(st.client, C.int(point.X), C.int(point.Y))
+
+	return nil
+}
+
+// wlrootsUinputButtonLocked emits a uinput button press or release. Caller must
+// hold the lock.
+func wlrootsUinputButtonLocked(button int, pressed bool) error {
+	st := globalWlrootsState
+	if !st.uinputReady {
+		return derrors.New(
+			derrors.CodeActionFailed,
+			"uinput pointer device unavailable; ensure /dev/uinput is writable (see LINUX_SETUP udev rule)",
+		)
+	}
+
+	pressedInt := C.int(0)
+	if pressed {
+		pressedInt = C.int(1)
+	}
+
+	if C.neru_uinput_button(st.uinputFD, C.int(button), pressedInt) == 0 {
+		return derrors.New(
+			derrors.CodeActionFailed,
+			"failed to emit uinput button event",
+		)
+	}
 
 	return nil
 }
@@ -242,8 +335,13 @@ func wlrootsMoveCursorToPoint(point image.Point) error {
 	}
 
 	globalWlrootsState.mu.Lock()
-	client := globalWlrootsState.client
 	defer globalWlrootsState.mu.Unlock()
+
+	if !globalWlrootsState.hasVirtualPointer {
+		return wlrootsUinputMoveLocked(point)
+	}
+
+	client := globalWlrootsState.client
 
 	if C.neru_wlr_move_absolute(client, C.int(point.X), C.int(point.Y)) == 0 { //nolint:nlreturn
 		return derrors.Newf(
@@ -265,8 +363,20 @@ func wlrootsClick(point image.Point, button int) error {
 	}
 
 	globalWlrootsState.mu.Lock()
-	client := globalWlrootsState.client
 	defer globalWlrootsState.mu.Unlock()
+
+	if !globalWlrootsState.hasVirtualPointer {
+		if moveErr := wlrootsUinputMoveLocked(point); moveErr != nil {
+			return moveErr
+		}
+		if downErr := wlrootsUinputButtonLocked(button, true); downErr != nil {
+			return downErr
+		}
+
+		return wlrootsUinputButtonLocked(button, false)
+	}
+
+	client := globalWlrootsState.client
 
 	// Move to target.
 	if C.neru_wlr_move_absolute(client, C.int(point.X), C.int(point.Y)) == 0 { //nolint:nlreturn
@@ -299,8 +409,17 @@ func wlrootsButtonEvent(point image.Point, button int, pressed bool) error {
 	}
 
 	globalWlrootsState.mu.Lock()
-	client := globalWlrootsState.client
 	defer globalWlrootsState.mu.Unlock()
+
+	if !globalWlrootsState.hasVirtualPointer {
+		if moveErr := wlrootsUinputMoveLocked(point); moveErr != nil {
+			return moveErr
+		}
+
+		return wlrootsUinputButtonLocked(button, pressed)
+	}
+
+	client := globalWlrootsState.client
 
 	// Move to target.
 	if C.neru_wlr_move_absolute(client, C.int(point.X), C.int(point.Y)) == 0 { //nolint:nlreturn
@@ -335,8 +454,13 @@ func wlrootsButtonRelease(button int) error {
 	}
 
 	globalWlrootsState.mu.Lock()
-	client := globalWlrootsState.client
 	defer globalWlrootsState.mu.Unlock()
+
+	if !globalWlrootsState.hasVirtualPointer {
+		return wlrootsUinputButtonLocked(button, false)
+	}
+
+	client := globalWlrootsState.client
 
 	if C.neru_wlr_button(client, C.int(button), 0) == 0 { //nolint:nlreturn
 		return derrors.New(

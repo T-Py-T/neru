@@ -527,6 +527,17 @@ int neru_wlr_get_cursor(NeruWlrootsClient *c, int *x, int *y) {
 	return c->cursor_initialized;
 }
 
+// Update the cached cursor position. Used by the uinput fallback path, where
+// pointer moves happen outside the virtual-pointer protocol and so do not
+// otherwise update the cache that neru_wlr_get_cursor reads.
+void neru_wlr_set_cursor(NeruWlrootsClient *c, int x, int y) {
+	if (!c)
+		return;
+	c->cursor_x = x;
+	c->cursor_y = y;
+	c->cursor_initialized = 1;
+}
+
 int neru_wlr_screen_count(NeruWlrootsClient *c) {
 	if (!c)
 		return 0;

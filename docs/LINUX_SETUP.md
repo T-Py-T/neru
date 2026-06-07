@@ -4,7 +4,7 @@ Neru provides native Linux support through these display server backends:
 
 - **X11** — works with any X11-based session (XOrg, i3, etc.)
 - **Wayland (wlroots)** — works with wlroots-based compositors (Sway, Hyprland, niri, River)
-- **Wayland (KDE Plasma)** — KWin implements the same wlr-style client protocols (layer-shell, virtual-pointer, xdg-output) Neru already uses, so KDE Plasma sessions run through the wlroots client path.
+- **Wayland (KDE Plasma)** — partial. KWin exposes `zwlr_layer_shell_v1` and `zxdg_output_manager_v1` (so overlays and screen geometry work) but **not** `zwlr_virtual_pointer_v1`, so pointer move/click do not work through the shared wlroots path. See [Measured Compositor Protocol Support](#measured-compositor-protocol-support).
 
 > **GNOME Wayland** is not yet supported. GNOME Shell uses its own private protocols instead of the wlr protocols. See the placeholder files in `internal/core/infra/platform/linux/wayland_gnome/` for contribution guidance.
 
@@ -13,6 +13,7 @@ Neru provides native Linux support through these display server backends:
 ## Table of Contents
 
 - [Supported Compositors & Backends](#supported-compositors--backends)
+- [Install-Time Environment Adjustments (Non-Code)](#install-time-environment-adjustments-non-code)
 - [Wayland Keyboard Capture Permissions](#wayland-keyboard-capture-permissions)
 - [Using nix home manager](#using-nix-home-manager)
 - [Build Dependencies](#build-dependencies)
@@ -34,8 +35,102 @@ Neru provides native Linux support through these display server backends:
 | River      | wayland-wlroots | ✅ Supported     | Full virtual-pointer and layer-shell support            |
 | X11 / XOrg | x11             | ✅ Supported     | XTest for input, XRandR for screens                     |
 | i3         | x11             | ✅ Supported     | Runs under X11                                          |
-| KDE Plasma | wayland-kde     | ✅ Supported     | KWin implements the wlr client protocols; runs the wlroots path |
+| KDE Plasma | wayland-kde     | Partial          | Overlay + screen geometry work; pointer move/click do not (KWin lacks `zwlr_virtual_pointer_v1`) |
 | GNOME      | wayland-gnome   | 🔲 Not Supported | Needs libei + GNOME Shell extension; see PLACEHOLDER.md |
+
+> **KDE pointer injection does not work through the current backend (confirmed,
+> not assumed).** Neru's Wayland pointer path hard-requires
+> `zwlr_virtual_pointer_v1`, but KWin 6.6.4 does not expose it (measured directly
+> with `wayland-info`; see
+> [Measured Compositor Protocol Support](#measured-compositor-protocol-support)).
+> The overlay renders because `zwlr_layer_shell_v1` is present, but the cursor
+> cannot move or click. KDE needs a desktop-specific input path, not the shared
+> wlroots path.
+
+---
+
+## Install-Time Environment Adjustments (Non-Code)
+
+These are changes to the **host environment**, not to Neru's code, that a Linux
+install must account for. A from-source build, a Homebrew formula, or a distro
+package each needs to either perform these or clearly tell the user to. Keep this
+list current as new environment requirements are discovered.
+
+| #   | Adjustment                                                  | Why it is needed                                                                 | Backends affected      | Persists across reboot?      |
+| --- | ----------------------------------------------------------- | -------------------------------------------------------------------------------- | ---------------------- | ---------------------------- |
+| 1   | Install build dependencies (see [Build Dependencies](#build-dependencies)) | Compile the native CGO backends; a prebuilt binary still needs the matching runtime shared libs present | All Linux              | Yes (packages stay installed) |
+| 2   | Add the user to the `input` group: `sudo usermod -aG input "$USER"` | `evdev` keyboard capture for reliable modified clicks and sticky modifiers; see [Wayland Keyboard Capture Permissions](#wayland-keyboard-capture-permissions) | Wayland (wlroots, KDE) | Yes, but requires a re-login to take effect |
+| 3   | Bind `neru <mode>` in the compositor's own keybinding config (Sway/Hyprland/niri config, or KDE System Settings -> Custom Shortcuts); see [Hotkey Configuration](#1-hotkey-configuration) | Wayland has no global-hotkey protocol, so Neru cannot register hotkeys itself | All Wayland            | Yes (user config)            |
+
+Notes:
+
+- Item 1 is the only one X11 needs; on X11 global hotkeys work natively via `XGrabKey`.
+- Item 2 only changes the effective permission **after a full logout/login or reboot**;
+  the running session keeps its old group set. Without it, Neru falls back to the
+  less capable overlay-focused keyboard path.
+- Item 3 is user configuration by nature and cannot be automated by a package; the
+  most an installer can do is ship example snippets.
+
+### Not Fixable At Install Time (Compositor Capability Gaps)
+
+Some requirements are properties of the **compositor**, not the host, so no install
+step can add them:
+
+- **`zwlr_virtual_pointer_v1`** — required for pointer move/click. Neru's wlroots
+  backend fails at init with `CodeActionFailed` if the compositor does not advertise
+  it, and there is no fallback to KWin's native `org_kde_kwin_fake_input`. wlroots
+  compositors (Sway, Hyprland, niri, River) provide it; **KWin 6.6.4 does not**
+  (confirmed below).
+- **`zwp_virtual_keyboard_manager_v1`** — required for sticky-modifier key injection
+  on Wayland; same all-or-nothing behavior.
+
+### Measured Compositor Protocol Support
+
+The clean way to answer "will Neru work on compositor X" is to enumerate the
+Wayland globals it advertises, with no build or install required:
+
+```bash
+# Run inside the graphical session (needs WAYLAND_DISPLAY).
+wayland-info | grep -E 'zwlr_layer_shell|zwlr_virtual_pointer|zwp_virtual_keyboard|fake_input|xdg_output'
+```
+
+Neru's wlroots path needs **both** `zwlr_layer_shell_v1` (overlay) and
+`zwlr_virtual_pointer_v1` (pointer). If both are present, the shared wlroots path
+works as-is; if the pointer protocol is missing, the compositor needs a
+desktop-specific input path instead.
+
+| Protocol                            | Purpose                       | wlroots (Sway/Hyprland/niri/River) | KWin 6.6.4 (KDE Plasma) |
+| ----------------------------------- | ----------------------------- | ---------------------------------- | ----------------------- |
+| `zwlr_layer_shell_v1`               | overlay surfaces              | yes                                | yes (v5)                |
+| `zxdg_output_manager_v1`            | screen geometry / xdg-output  | yes                                | yes (v3)                |
+| `zwlr_virtual_pointer_v1`           | pointer move / click          | yes                                | **no**                  |
+| `zwp_virtual_keyboard_manager_v1`   | sticky-modifier key injection | yes                                | **no**                  |
+| `org_kde_kwin_fake_input`           | KWin-native input emulation   | n/a                                | **no** (not advertised) |
+
+**Conclusion for KDE:** the overlay half works, the input half does not. A future
+KDE input path would have to go through something KWin actually exposes (the
+`org.freedesktop.portal.RemoteDesktop` / libei route is the likely candidate,
+which is also the planned GNOME path), gated on the `wayland-kde` backend so it
+never touches the shared wlroots implementation.
+
+> **Reusing this for other desktops (e.g. COSMIC):** run the same `wayland-info`
+> check in that session. If it lists both `zwlr_layer_shell_v1` and
+> `zwlr_virtual_pointer_v1`, support is the straightforward shared-wlroots case;
+> if not, it needs the same desktop-specific input path KDE will need.
+
+### Open Questions for Maintainers (Packaging)
+
+Before this lands, we should ask the repo owner how the build/packaging process is
+expected to handle the OS-specific steps above:
+
+- How should the **Homebrew formula** (or distro packages) handle the `input` group
+  membership (item 2)? Homebrew on Linux runs unprivileged and should not modify
+  system groups or invoke `sudo`, so this likely has to be a documented post-install
+  manual step (a `caveats` message), not an automated action.
+- Which **runtime shared libraries** must be present on the target system for a bottled
+  binary, and how is that expressed in the formula?
+- Is manual compositor keybinding setup (item 3) acceptable as the supported path, or
+  should we ship per-compositor example configs?
 
 ---
 
@@ -177,14 +272,31 @@ sudo pacman -S \
 ## Building
 
 ```bash
-# Build for current platform
+# Build for the current host architecture (recommended for local dev/testing).
+# No arch flag needed: Go targets the host arch automatically.
 just build
 
-# Build specifically for Linux
-just build-linux
+# Build an explicitly-named Linux arch. NOTE: this recipe defaults to amd64.
+just build-linux arm64   # Apple Silicon / arm64 hosts (e.g. UTM VMs on a Mac)
+just build-linux amd64   # x86_64 hosts
 
 # Cross-compilation from macOS is NOT supported for Linux targets
 # because the native backends require CGo and Linux system headers.
+```
+
+### Architecture note (Apple Silicon / UTM)
+
+On an Apple Silicon Mac, UTM VMs are **arm64**. Use the native `just build`
+there — it produces an arm64 binary with no extra flags. Only the
+`just build-linux` recipe needs an explicit arch, and it **defaults to amd64**,
+so pass `arm64` on these VMs (`just build-linux arm64`); running it bare
+cross-compiles for amd64 with CGO and fails without an amd64 toolchain.
+
+Verify what you built:
+
+```bash
+go env GOARCH        # expect: arm64
+file bin/neru        # expect: ... ARM aarch64
 ```
 
 ---
