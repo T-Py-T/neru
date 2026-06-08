@@ -304,7 +304,7 @@ systemctl --user enable --now neru
 
 1. **Wayland global hotkeys**: Must be configured in the compositor, not in Neru's config. See [Hotkey Configuration](#1-hotkey-configuration).
 2. **Accessibility (AT-SPI)**: Full AT-SPI integration for clickable element discovery (hints mode) is currently unavailable natively under Wayland without relying on experimental plugins. Grid mode and scroll mode both work perfectly without AT-SPI.
-3. **Dark mode / Theme polling detection**: Not yet implemented. Output will fall back to default theme definitions.
+3. **Dark mode detection**: Detected via the `org.freedesktop.appearance` xdg-desktop-portal interface, with a `~/.config/kdeglobals` fallback, so `neru doctor` reports the current color scheme on any desktop that ships a portal. Restyling overlays to match the detected theme is not yet wired up.
 4. **Notifications**: Desktop notifications (`org.freedesktop.Notifications`) will log to stdout/file instead of pushing to DBus.
 5. **Wayland modified clicks need evdev access**: On wlroots compositors, reliable
    modified pointer actions depend on the `evdev` keyboard-capture path described
