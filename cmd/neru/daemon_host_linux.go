@@ -24,8 +24,17 @@ func (linuxDaemonHost) Run(application *app.App) error {
 	// action past the IPC timeout. No-op on wlroots / X11.
 	go func() {
 		if err := linux.WarmWaylandInput(); err != nil {
-			application.Logger().Debug("Wayland input warm-up skipped", zap.Error(err))
+			// Surface at WARN: on KDE this means the libei/RemoteDesktop
+			// session did not establish (consent not approved in time, or
+			// portal unavailable), so the first action falls back to a slow
+			// lazy connect that can exceed the IPC client timeout.
+			application.Logger().Warn(
+				"Wayland input warm-up failed; first action may be slow until the RemoteDesktop consent prompt is approved",
+				zap.Error(err),
+			)
+			return
 		}
+		application.Logger().Info("Wayland input warm-up complete")
 	}()
 
 	return application.Run()
