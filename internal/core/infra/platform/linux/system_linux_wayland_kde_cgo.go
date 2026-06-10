@@ -15,9 +15,26 @@ import (
 	derrors "github.com/y3owk1n/neru/internal/core/errors"
 )
 
-// libeiConnectTimeoutMs bounds how long the first input op waits for the user
-// to approve (or dismiss) the RemoteDesktop portal consent dialog.
+// This file is the KDE Plasma Wayland input slot (compositor sub-slot "kde",
+// sibling to the "wlroots" slot). KWin does not implement
+// zwlr_virtual_pointer_v1, so input is injected through libei via the
+// org.freedesktop.portal.RemoteDesktop portal. The libei mechanism itself
+// (libei_client.c) is DE-agnostic; if another compositor (e.g. GNOME) later
+// routes input through libei, factor the shared pieces out rather than
+// duplicating them here. Runtime selection happens in
+// system_linux_wayland_input.go via the LinuxBackend family.
+
+// libeiConnectTimeoutMs bounds how long a lazy (mid-action) input op waits for
+// the libei/RemoteDesktop session. Kept short: if warm-up did not already
+// establish the session, the hints/grid overlay is on screen and would hide the
+// consent dialog, so blocking long here just stalls the UI.
 const libeiConnectTimeoutMs = 30000
+
+// libeiWarmupTimeoutMs bounds the startup warm-up wait. It is long because the
+// consent dialog appears while no overlay is up, giving the user a comfortable
+// window to find and approve the one-time "Remote Control" prompt. Once
+// approved here, every later action reuses the session with no further wait.
+const libeiWarmupTimeoutMs = 120000
 
 // libeiState owns the libei/RemoteDesktop session used for input injection on
 // compositors without zwlr_virtual_pointer_v1 (KWin/KDE). The session is
@@ -33,11 +50,17 @@ var globalLibeiState = &libeiState{}
 
 // ensureLocked establishes the portal session on first use. The caller holds mu.
 func (s *libeiState) ensureLocked() error {
+	return s.ensureLockedTimeout(libeiConnectTimeoutMs)
+}
+
+// ensureLockedTimeout establishes the portal session with an explicit connect
+// timeout. The caller holds mu.
+func (s *libeiState) ensureLockedTimeout(timeoutMs int) error {
 	if s.ready {
 		return nil
 	}
 
-	client := C.neru_ei_connect(C.int(libeiConnectTimeoutMs))
+	client := C.neru_ei_connect(C.int(timeoutMs))
 	if client == nil {
 		return derrors.New(
 			derrors.CodeActionFailed,
@@ -62,7 +85,7 @@ func libeiEnsure() error {
 	globalLibeiState.mu.Lock()
 	defer globalLibeiState.mu.Unlock()
 
-	return globalLibeiState.ensureLocked()
+	return globalLibeiState.ensureLockedTimeout(libeiWarmupTimeoutMs)
 }
 
 func libeiMoveAbs(x, y int) error {

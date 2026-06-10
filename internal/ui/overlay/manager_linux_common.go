@@ -830,6 +830,64 @@ func badgeBounds(posX, posY int, text string, style overlayBadgeStyle) image.Rec
 	)
 }
 
+// hintLabelBounds computes a small, text-sized badge rect for a hint label,
+// centered horizontally on the target and offset vertically by placement.
+// posX, posY is the target element center. This mirrors the macOS behavior:
+// the badge is sized to the label text plus padding (NOT the element bounds),
+// so labels stay compact and sit slightly off the element's center.
+func hintLabelBounds(posX, posY int, label string, style hints.StyleMode) image.Rectangle {
+	fontSize := float64(style.FontSize())
+	if fontSize <= 0 {
+		fontSize = 1
+	}
+
+	paddingX := resolveAutoPadding(fontSize, style.PaddingX(), true)
+	paddingY := resolveAutoPadding(fontSize, style.PaddingY(), false)
+
+	width := estimateTextWidth(label, fontSize) + paddingX*paddingMultiplier
+	height := estimateTextHeight(fontSize) + paddingY*paddingMultiplier
+
+	// Keep short (1-char) labels from rendering as thin slivers.
+	if width < height {
+		width = height
+	}
+
+	minX := posX - width/centeredRectDivisor
+
+	const placementGap = 2
+
+	var minY int
+
+	switch style.Placement() {
+	case "top":
+		minY = posY - height - placementGap
+	case "center":
+		minY = posY - height/centeredRectDivisor
+	default: // "bottom" (config default): just below the element center
+		minY = posY + placementGap
+	}
+
+	return image.Rect(minX, minY, minX+width, minY+height)
+}
+
+// hintCornerRadius resolves the badge corner radius. A negative config value
+// means "auto", which renders a full pill (radius = half the height), matching
+// the macOS default look.
+func hintCornerRadius(borderRadius, height int) float64 {
+	maxRadius := float64(height) / 2.0
+
+	if borderRadius < 0 {
+		return maxRadius
+	}
+
+	radius := float64(borderRadius)
+	if radius > maxRadius {
+		radius = maxRadius
+	}
+
+	return radius
+}
+
 func expandRect(rect image.Rectangle, amount int) image.Rectangle {
 	return image.Rect(
 		rect.Min.X-amount,

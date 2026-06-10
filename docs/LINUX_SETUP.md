@@ -445,19 +445,30 @@ systemctl --user enable --now neru
 ## Known Limitations
 
 1. **Wayland global hotkeys**: Must be configured in the compositor, not in Neru's config. See [Hotkey Configuration](#1-hotkey-configuration).
-2. **Accessibility (AT-SPI)**: Full AT-SPI integration for clickable element discovery (hints mode) is currently unavailable natively under Wayland without relying on experimental plugins. Grid mode and scroll mode both work perfectly without AT-SPI.
+2. **Accessibility (AT-SPI)**: Hints mode discovers clickable elements through an AT-SPI D-Bus client (validated on KDE Plasma). It needs the AT-SPI stack enabled (`org.a11y.Bus`) — Neru turns it on at daemon start — and translates AT-SPI roles to the AX role names used in config. On KDE, element coordinates are corrected with a KWin geometry bridge, since AT-SPI reports window-relative positions under Wayland. Coverage depends on each app exposing an AT-SPI tree; apps that don't (or toolkits without AT-SPI) yield no hints. Grid and scroll modes work without AT-SPI.
 3. **Dark mode detection**: Detected via the `org.freedesktop.appearance` xdg-desktop-portal interface, with a `~/.config/kdeglobals` fallback, so `neru doctor` reports the current color scheme on any desktop that ships a portal. Restyling overlays to match the detected theme is not yet wired up.
 4. **Notifications**: Desktop notifications (`org.freedesktop.Notifications`) will log to stdout/file instead of pushing to DBus.
 5. **Wayland modified clicks need evdev access**: On wlroots compositors, reliable
    modified pointer actions depend on the `evdev` keyboard-capture path described
    above. Without `/dev/input/event*` access, Neru falls back to a less capable
    overlay-focused path.
-6. **KDE input needs RemoteDesktop consent**: On KDE Plasma, input goes through
-   `libei` via the RemoteDesktop portal, which shows a one-time "Remote Control"
-   consent prompt the first time Neru injects input in a session. Approve it (you
-   can tick "remember" where offered) or input will fail with `CodeActionFailed`.
-   Modifier keys require the portal to grant a keyboard device; if it grants only
-   a pointer, modified clicks degrade.
+6. **KDE input needs RemoteDesktop consent (re-prompts every daemon launch)**:
+   On KDE Plasma, input goes through `libei` via the RemoteDesktop portal, which
+   shows a "Remote Control" consent prompt before Neru can inject input. Approve
+   it or input fails with `CodeActionFailed`. The grant is held for the **whole
+   daemon lifetime** — approve once and every later hint/grid action reuses the
+   same session with no further prompt. However, the prompt **reappears on every
+   fresh daemon start** (reboot, logout/login, or manual relaunch): the helper
+   library Neru uses (`liboeffis`) does not expose the portal's restore-token /
+   `persist_mode`, so KDE cannot remember the decision across launches and there
+   is no honored "remember this" option. Startup warm-up surfaces the prompt
+   before the first hint so the overlay does not hide it; if warm-up is not
+   approved in time, the next input action re-surfaces it.
+   *Future work:* bypass `liboeffis` and drive `org.freedesktop.portal.RemoteDesktop`
+   directly with a stored `restore_token` + `persist_mode` so the grant survives
+   daemon restarts.
+   Modifier keys also require the portal to grant a keyboard device; if it grants
+   only a pointer, modified clicks degrade.
 7. **Screen resolution is read once at startup**: Neru enumerates output geometry
    (`xdg_output` logical size) when the daemon starts and caches it. If the
    resolution changes afterward — common when resizing a VM window, and also on
