@@ -139,6 +139,8 @@ func (h *IPCControllerInfo) handleStatus(_ context.Context, _ ipc.Command) ipc.R
 		}
 	}
 
+	capabilities := capabilitiesMap(h.systemCapabilities())
+
 	status := map[string]any{
 		"enabled":                h.appState.IsEnabled(),
 		"mode":                   domain.ModeString(h.appState.CurrentMode()),
@@ -146,8 +148,8 @@ func (h *IPCControllerInfo) handleStatus(_ context.Context, _ ipc.Command) ipc.R
 		"hints_enabled":          cfg.Hints.Enabled,
 		"grid_enabled":           cfg.Grid.Enabled,
 		"recursive_grid_enabled": cfg.RecursiveGrid.Enabled,
-		"capabilities":           capabilitiesMap(h.systemCapabilities()),
-		"profile":                profileMap(platform.CurrentProfile()),
+		"capabilities":           capabilities,
+		"profile":                profileMap(profileFromCapabilities(capabilities)),
 	}
 
 	return ipc.Response{
@@ -330,7 +332,7 @@ func (h *IPCControllerInfo) handleHealth(ctx context.Context, _ ipc.Command) ipc
 		"config":       configPath,
 		"mode":         mode,
 		"capabilities": capabilities,
-		"profile":      profileMap(platform.CurrentProfile()),
+		"profile":      profileMap(profileFromCapabilities(capabilities)),
 		"components":   components,
 	}
 
@@ -384,7 +386,44 @@ func capabilitiesMap(capabilities ports.PlatformCapabilities) map[string]any {
 		out["dark_mode_detection_detail"] = detail
 	}
 
+	// Surface the Detail of any non-supported capability so `neru doctor` can
+	// print the fix-it hint (e.g. "add your user to the 'input' group") next to
+	// the unhealthy row. Only stubs carry actionable hints; supported rows stay
+	// terse.
+	addStubDetail(out, "process", capabilities.Process)
+	addStubDetail(out, "screen", capabilities.Screen)
+	addStubDetail(out, "cursor", capabilities.Cursor)
+	addStubDetail(out, "accessibility", capabilities.Accessibility)
+	addStubDetail(out, "overlay", capabilities.Overlay)
+	addStubDetail(out, "notifications", capabilities.Notifications)
+	addStubDetail(out, "global_hotkeys", capabilities.GlobalHotkeys)
+	addStubDetail(out, "keyboard_event_tap", capabilities.KeyboardEventTap)
+	addStubDetail(out, "app_watcher", capabilities.AppWatcher)
+
 	return out
+}
+
+// addStubDetail surfaces a capability's Detail as a sibling "<name>_detail"
+// field when the capability is not supported, so `neru doctor` can render the
+// fix-it hint next to the unhealthy row.
+func addStubDetail(out map[string]any, name string, capability ports.FeatureCapability) {
+	if capability.Detail != "" && !capability.Supported() {
+		out[name+"_detail"] = capability.Detail
+	}
+}
+
+// profileFromCapabilities derives the runtime profile from the live capability
+// snapshot so `neru doctor` reports the backend Neru actually detected (e.g.
+// "linux/wayland-kde") rather than a static contributor plan. Non-Linux
+// platforms keep the single-DE static profile.
+func profileFromCapabilities(capabilities map[string]any) platform.Profile {
+	platformLabel, _ := capabilities["platform"].(string)
+
+	if backend, ok := strings.CutPrefix(platformLabel, "linux/"); ok {
+		return platform.LinuxProfileForBackend(backend)
+	}
+
+	return platform.CurrentProfile()
 }
 
 func profileMap(profile platform.Profile) map[string]any {

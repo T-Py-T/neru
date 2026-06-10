@@ -27,6 +27,10 @@ func TestDarwinCapabilities_ReportSupportedFeatures(t *testing.T) {
 }
 
 func TestNonDarwinCapabilities_ReportStubbedFeatures(t *testing.T) {
+	// Notifications are genuinely unimplemented on both Linux and Windows, so
+	// the preset must report them as stub. Linux accessibility is intentionally
+	// excluded here: it is a placeholder that the Linux SystemAdapter overrides
+	// with a live AT-SPI probe at runtime (see probeAccessibility).
 	tests := []struct {
 		name         string
 		capabilities ports.PlatformCapabilities
@@ -41,13 +45,6 @@ func TestNonDarwinCapabilities_ReportStubbedFeatures(t *testing.T) {
 				t.Fatalf("Platform = %q, want %s", testCase.capabilities.Platform, testCase.name)
 			}
 
-			if testCase.capabilities.Accessibility.Status != ports.FeatureStatusStub {
-				t.Fatalf(
-					"Accessibility status = %q, want stub",
-					testCase.capabilities.Accessibility.Status,
-				)
-			}
-
 			if testCase.capabilities.Notifications.Status != ports.FeatureStatusStub {
 				t.Fatalf(
 					"Notifications status = %q, want stub",
@@ -55,6 +52,12 @@ func TestNonDarwinCapabilities_ReportStubbedFeatures(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestWindowsCapabilities_ReportStubbedAccessibility(t *testing.T) {
+	if ports.WindowsCapabilities().Accessibility.Status != ports.FeatureStatusStub {
+		t.Fatal("Windows accessibility status should be stub")
 	}
 }
 

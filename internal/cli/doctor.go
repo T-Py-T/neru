@@ -65,8 +65,12 @@ can use it to verify accessibility permissions before launching.`,
 
 		err = formatter.PrintHealth(cmd, ipcResponse.Success, ipcResponse.Data)
 
+		// doctor is informational: the printed report (with per-item fix-it
+		// hints) is the result. Unimplemented or degraded capabilities are
+		// shown but must not fail the command, mirroring macOS where there is
+		// nothing to fail on. Only genuine errors (bad payload) propagate.
 		if errors.Is(err, cliutil.ErrUnhealthy) {
-			return &silentError{err: err}
+			return nil
 		}
 
 		return err

@@ -58,13 +58,21 @@ func LinuxCapabilities() PlatformCapabilities {
 		Cursor: supportedCapability(
 			"cursor movement/tracking available via XTest and Wayland virtual-pointer",
 		),
-		Accessibility: stubCapability("AT-SPI integration not implemented yet"),
+		// Default placeholder; the Linux SystemAdapter live-probes the AT-SPI
+		// bus and overrides this on each Capabilities() call. See
+		// linux.SystemAdapter.Capabilities and probeAccessibility.
+		Accessibility: supportedCapability(
+			"clickable-element detection via AT-SPI over D-Bus (apps must expose AT-SPI accessibility)",
+		),
 		Overlay: supportedCapability(
 			"native overlays available via X11 windows or Wayland layer-shell + Cairo",
 		),
 		Notifications: stubCapability(
 			"native notifications not implemented yet; target freedesktop notifications",
 		),
+		// Default placeholders; on Wayland backends the Linux SystemAdapter
+		// live-probes evdev (/dev/input) access and overrides both of these.
+		// See linux.SystemAdapter.Capabilities and probeEvdevInput.
 		GlobalHotkeys: supportedCapability(
 			"global hotkeys available via X11 (Wayland relies on compositor bindings)",
 		),

@@ -59,6 +59,20 @@ func (s *SystemAdapter) Capabilities() ports.PlatformCapabilities {
 	value, source, ok := darkModePreference()
 	capabilities.DarkModeDetection = darkModeCapability(value, source, ok)
 
+	// Live-probe the capabilities that actually vary per desktop/compositor so
+	// `neru doctor` reports the real host state instead of a static claim.
+	capabilities.Accessibility = probeAccessibility()
+
+	// Global hotkeys and the keyboard event tap share one input backend. On
+	// Wayland (wlroots + KDE) that is evdev, whose access depends on /dev/input
+	// permissions (the "input" group). X11 uses the X server's own grab, so the
+	// preset value is kept for that backend.
+	if s.backend != backendX11 {
+		inputCapability := probeEvdevInput()
+		capabilities.GlobalHotkeys = inputCapability
+		capabilities.KeyboardEventTap = inputCapability
+	}
+
 	return capabilities
 }
 

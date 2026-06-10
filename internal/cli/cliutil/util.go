@@ -205,6 +205,8 @@ func (f *OutputFormatter) PrintHealth(cmd *cobra.Command, success bool, data any
 	// Sort keys for deterministic output
 	keys := sortedKeys(components)
 
+	capabilityHints := capabilityDetails(healthData["capabilities"])
+
 	componentWidth := maxComponentWidth(keys)
 	for _, key := range keys {
 		value := components[key]
@@ -216,9 +218,21 @@ func (f *OutputFormatter) PrintHealth(cmd *cobra.Command, success bool, data any
 
 		if isHealthyHealthStatus(key, status) {
 			cmd.Printf("  ✅ %-*s %s\n", componentWidth, key, status)
-		} else {
-			cmd.Printf("  ❌ %-*s %s\n", componentWidth, key, status)
+
+			continue
 		}
+
+		// Surface the fix-it hint inline for unhealthy capability rows so the
+		// informational report tells the user what to do (e.g. "add your user
+		// to the 'input' group"), not just that a feature is unavailable.
+		display := status
+		if name, ok := strings.CutPrefix(key, "capability."); ok {
+			if hint := capabilityHints[name]; hint != "" {
+				display = status + " - " + hint
+			}
+		}
+
+		cmd.Printf("  ❌ %-*s %s\n", componentWidth, key, display)
 	}
 
 	if !success {
@@ -226,6 +240,31 @@ func (f *OutputFormatter) PrintHealth(cmd *cobra.Command, success bool, data any
 	}
 
 	return nil
+}
+
+// capabilityDetails extracts the "<name>_detail" sibling fields the daemon
+// surfaces for non-supported capabilities, keyed by the bare capability name
+// (e.g. "global_hotkeys"), so PrintHealth can render the fix-it hint inline.
+func capabilityDetails(raw any) map[string]string {
+	hints := map[string]string{}
+
+	capabilities, ok := raw.(map[string]any)
+	if !ok {
+		return hints
+	}
+
+	for key, value := range capabilities {
+		name, found := strings.CutSuffix(key, "_detail")
+		if !found {
+			continue
+		}
+
+		if detail, ok := value.(string); ok && detail != "" {
+			hints[name] = detail
+		}
+	}
+
+	return hints
 }
 
 // sortedKeys returns the keys of a map sorted alphabetically.
@@ -264,11 +303,13 @@ func isHealthyHealthStatus(componentKey, status string) bool {
 		return true
 	}
 
+	// The platform capability is informational, not pass/fail. Its value may be
+	// enriched with a backend suffix (e.g. "linux/wayland-kde"), so match on the
+	// OS prefix rather than the bare string.
 	if componentKey == "capability.platform" {
-		switch status {
-		case "darwin", "linux", "windows":
-			return true
-		}
+		return strings.HasPrefix(status, "darwin") ||
+			strings.HasPrefix(status, "linux") ||
+			strings.HasPrefix(status, "windows")
 	}
 
 	return false
