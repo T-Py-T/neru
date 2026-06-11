@@ -256,6 +256,78 @@ func TestAlphabetGenerator_Generate(t *testing.T) {
 	}
 }
 
+func TestAlphabetGenerator_DeduplicatesCharacters(t *testing.T) {
+	t.Run("dedup duplicate chars", func(t *testing.T) {
+		generator, err := hint.NewAlphabetGenerator("aab")
+		if err != nil {
+			t.Fatalf("NewAlphabetGenerator() error: %v", err)
+		}
+
+		if got := generator.MaxHints(); got != 8 {
+			t.Errorf("MaxHints() = %d, want 8 (deduped from \"aab\")", got)
+		}
+	})
+
+	t.Run("no dedup needed", func(t *testing.T) {
+		generator, err := hint.NewAlphabetGenerator("abc")
+		if err != nil {
+			t.Fatalf("NewAlphabetGenerator() error: %v", err)
+		}
+
+		if got := generator.MaxHints(); got != 27 {
+			t.Errorf("MaxHints() = %d, want 27", got)
+		}
+	})
+
+	t.Run("rejects below minimum after dedup", func(t *testing.T) {
+		_, err := hint.NewAlphabetGenerator("aA")
+		if err == nil {
+			t.Fatal("NewAlphabetGenerator() expected error for \"aA\" (1 unique char after dedup)")
+		}
+	})
+}
+
+func TestAlphabetGenerator_DeduplicateProducesUniqueLabels(t *testing.T) {
+	// With "aabc", deduped unique chars are "abc" (3 chars).
+	// 3^3 = 27 max hints, so 10 elements should get unique 2-char labels.
+	generator, err := hint.NewAlphabetGenerator("aabc")
+	if err != nil {
+		t.Fatalf("NewAlphabetGenerator() error: %v", err)
+	}
+
+	if got := generator.Characters(); got != "ABC" {
+		t.Fatalf("Characters() = %q, want %q (deduped)", got, "ABC")
+	}
+
+	elements := make([]*element.Element, 10)
+	for i := range elements {
+		elements[i], _ = element.NewElement(
+			element.ID(string(rune('0'+i))),
+			image.Rect(i*10, i*10, i*10+50, i*10+50),
+			element.RoleButton,
+		)
+	}
+
+	hints, err := generator.Generate(context.Background(), elements)
+	if err != nil {
+		t.Fatalf("Generate() error: %v", err)
+	}
+
+	seen := make(map[string]struct{}, len(hints))
+	for _, h := range hints {
+		label := h.Label()
+		if _, ok := seen[label]; ok {
+			t.Errorf("Duplicate label generated: %q (characters=%q)", label, "aabc")
+		}
+
+		seen[label] = struct{}{}
+	}
+
+	if len(seen) != len(hints) {
+		t.Errorf("Got %d unique labels for %d hints", len(seen), len(hints))
+	}
+}
+
 func TestAlphabetGenerator_MaxHints(t *testing.T) {
 	tests := []struct {
 		characters string

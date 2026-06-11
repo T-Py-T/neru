@@ -7,8 +7,7 @@ import (
 )
 
 // defaultLogFilePath returns the platform default neru log file path when
-// [logging].log_file is empty. Layouts match ports.SystemPort.LogDir() for
-// darwin, linux, and windows.
+// [logging].log_file is empty.
 func defaultLogFilePath() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -28,7 +27,7 @@ func defaultLogFilePath() (string, error) {
 
 		logDir = filepath.Join(localAppData, "neru", "log")
 	default:
-		// Linux, *BSD, etc. — XDG-style state dir (matches linux SystemAdapter.LogDir).
+		// the rest are Linux, BSD, etc.
 		logDir = filepath.Join(homeDir, ".local", "state", "neru", "log")
 	}
 

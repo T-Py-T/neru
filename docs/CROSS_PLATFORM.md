@@ -147,6 +147,14 @@ Use these suffixes:
   package + build tags; selection is at runtime (see Linux Backend Model).
 - `*_other.go`: non-target fallback for dispatch-style packages
 
+App-level platform dispatch also follows this pattern. For example,
+[layout_change_darwin.go](file:///Users/kylewong/Dev/neru/internal/app/layout_change_darwin.go)
+re-registers Carbon hotkeys when the keyboard layout changes at runtime, while
+[layout_change_linux.go](file:///Users/kylewong/Dev/neru/internal/app/layout_change_linux.go)
+and
+[layout_change_windows.go](file:///Users/kylewong/Dev/neru/internal/app/layout_change_windows.go)
+are no-ops.
+
 Do not create new ad hoc platform filenames if an existing slot already exists.
 
 Do not create fake empty `darwin` / `linux` / `windows` files just for symmetry.

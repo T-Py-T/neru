@@ -59,11 +59,55 @@ const (
 // Mode name constants used in config lookups (HotkeysForMode, validation).
 // These mirror domain.ModeName* but are defined here to avoid a circular import.
 const (
-	modeNameHints         = "hints"
-	modeNameGrid          = "grid"
-	modeNameRecursiveGrid = "recursive_grid"
-	modeNameScroll        = "scroll"
+	ModeNameHints         = "hints"
+	ModeNameGrid          = "grid"
+	ModeNameRecursiveGrid = "recursive_grid"
+	ModeNameScroll        = "scroll"
 )
+
+// Display-form key name constants used in config files and maps.
+const (
+	KeyDisplaySpace     = "Space"
+	KeyDisplayEscape    = "Escape"
+	KeyDisplayBackspace = "Backspace"
+	KeyDisplayDown      = "Down"
+	KeyDisplayLeft      = "Left"
+	KeyDisplayRight     = "Right"
+	KeyReturn           = "Return"
+)
+
+// Common action command constants.
+const (
+	CmdToggleCursorFollowSelection = "toggle-cursor-follow-selection"
+	CmdMoveMouseUp                 = "action move_mouse_relative --dx=0 --dy=-10"
+)
+
+// Hotkey modifier combo key names.
+const (
+	KeyComboShiftL = "Shift+L"
+	KeyComboShiftR = "Shift+R"
+	KeyComboShiftM = "Shift+M"
+	KeyComboShiftI = "Shift+I"
+	KeyComboShiftU = "Shift+U"
+)
+
+// Common action strings.
+const (
+	CmdIdle           = "idle"
+	CmdLeftClick      = "action left_click"
+	CmdRightClick     = "action right_click"
+	CmdMiddleClick    = "action middle_click"
+	CmdMouseDown      = "action mouse_down"
+	CmdMouseUp        = "action mouse_up"
+	CmdGoTop          = "action go_top"
+	CmdBackspace      = "action backspace"
+	CmdMoveMouseDown  = "action move_mouse_relative --dx=0 --dy=10"
+	CmdMoveMouseLeft  = "action move_mouse_relative --dx=-10 --dy=0"
+	CmdMoveMouseRight = "action move_mouse_relative --dx=10 --dy=0"
+)
+
+// Placement strings for UI configuration.
+const placementBottom = "bottom"
 
 // DisabledSentinel is a special action value that removes a default hotkey binding.
 // Use it in [hotkeys] or [<mode>.hotkeys] to disable a specific default:
@@ -105,22 +149,22 @@ const (
 // The variable is unexported to prevent accidental mutation by other packages.
 var validNamedKeys = map[string]bool{
 	// Special keys
-	"Space":     true,
-	"Return":    true,
-	"Enter":     true, // alias for Return
-	"Escape":    true,
-	"Tab":       true,
-	"Delete":    true,
-	"Backspace": true, // alias for Delete on macOS
+	KeyDisplaySpace:     true,
+	KeyReturn:           true,
+	"Enter":             true, // alias for Return
+	KeyDisplayEscape:    true,
+	"Tab":               true,
+	"Delete":            true,
+	KeyDisplayBackspace: true, // alias for Delete on macOS
 	// Navigation keys
-	"Up":       true,
-	"Down":     true,
-	"Left":     true,
-	"Right":    true,
-	"Home":     true,
-	"End":      true,
-	"PageUp":   true,
-	"PageDown": true,
+	"Up":            true,
+	KeyDisplayDown:  true,
+	KeyDisplayLeft:  true,
+	KeyDisplayRight: true,
+	"Home":          true,
+	"End":           true,
+	"PageUp":        true,
+	"PageDown":      true,
 	// Function keys
 	"F1":  true,
 	"F2":  true,
@@ -400,6 +444,7 @@ type Config struct {
 	Logging         LoggingConfig         `json:"logging"         toml:"logging"`
 	SmoothCursor    SmoothCursorConfig    `json:"smoothCursor"    toml:"smooth_cursor"`
 	SmoothScroll    SmoothScrollConfig    `json:"smoothScroll"    toml:"smooth_scroll"`
+	HeldRepeat      HeldRepeatConfig      `json:"heldRepeat"      toml:"held_repeat"`
 	Systray         SystrayConfig         `json:"systray"         toml:"systray"`
 }
 
@@ -715,8 +760,8 @@ type RecursiveGridConfig struct {
 	Keys string          `json:"keys" toml:"keys"`
 	UI   RecursiveGridUI `json:"ui"   toml:"ui"`
 	// Behavior
-	MinSizeWidth  int `json:"minSizeWidth"  toml:"min_size_width"`  // Default: 25
-	MinSizeHeight int `json:"minSizeHeight" toml:"min_size_height"` // Default: 25
+	MinSizeWidth  int `json:"minSizeWidth"  toml:"min_size_width"`  // Default: 1
+	MinSizeHeight int `json:"minSizeHeight" toml:"min_size_height"` // Default: 1
 	MaxDepth      int `json:"maxDepth"      toml:"max_depth"`       // Default: 10
 	// Per-depth overrides for grid dimensions and keys.
 	// Depths not listed here use the top-level GridCols/GridRows/Keys.
@@ -817,6 +862,13 @@ type SmoothScrollConfig struct {
 	Steps            int     `json:"steps"            toml:"steps"`
 	MaxDuration      int     `json:"maxDuration"      toml:"max_duration"`
 	DurationPerPixel float64 `json:"durationPerPixel" toml:"duration_per_pixel"`
+}
+
+// HeldRepeatConfig defines held-key repeat settings for scroll, page, and mouse-move actions.
+type HeldRepeatConfig struct {
+	Enabled      bool `json:"enabled"      toml:"enabled"`          // Master toggle for held-key repeat
+	InitialDelay int  `json:"initialDelay" toml:"initial_delay_ms"` // Delay before first repeat fires (ms)
+	Interval     int  `json:"interval"     toml:"interval_ms"`      // Interval between subsequent repeats (ms)
 }
 
 // AdditionalAXSupport defines accessibility support for specific application frameworks.
@@ -924,6 +976,12 @@ func (c *Config) Validate() error {
 
 	// Validate smooth scroll settings
 	err = c.ValidateSmoothScroll()
+	if err != nil {
+		return err
+	}
+
+	// Validate held-key repeat settings
+	err = c.ValidateHeldRepeat()
 	if err != nil {
 		return err
 	}
@@ -1104,10 +1162,10 @@ func (c *Config) ValidateModeIndicator() error {
 		cfg  ModeIndicatorModeConfig
 		name string
 	}{
-		{c.ModeIndicator.Scroll, "scroll"},
-		{c.ModeIndicator.Hints, "hints"},
-		{c.ModeIndicator.Grid, "grid"},
-		{c.ModeIndicator.RecursiveGrid, "recursive_grid"},
+		{c.ModeIndicator.Scroll, ModeNameScroll},
+		{c.ModeIndicator.Hints, ModeNameHints},
+		{c.ModeIndicator.Grid, ModeNameGrid},
+		{c.ModeIndicator.RecursiveGrid, ModeNameRecursiveGrid},
 	}
 
 	for _, mode := range modes {
@@ -1324,13 +1382,13 @@ func (c *Config) HotkeysForModeAndApp(
 
 	var appConfig *AppConfig
 	switch modeName {
-	case modeNameHints:
+	case ModeNameHints:
 		appConfig = c.Hints.AppConfigForBundleID(bundleID)
-	case modeNameGrid:
+	case ModeNameGrid:
 		appConfig = c.Grid.AppConfigForBundleID(bundleID)
-	case modeNameRecursiveGrid:
+	case ModeNameRecursiveGrid:
 		appConfig = c.RecursiveGrid.AppConfigForBundleID(bundleID)
-	case modeNameScroll:
+	case ModeNameScroll:
 		appConfig = c.Scroll.AppConfigForBundleID(bundleID)
 	}
 
@@ -1586,13 +1644,13 @@ func (c *Config) ValidateScroll() error {
 
 func (c *Config) baseHotkeysForMode(modeName string) map[string]StringOrStringArray {
 	switch modeName {
-	case modeNameHints:
+	case ModeNameHints:
 		return c.Hints.Hotkeys
-	case modeNameGrid:
+	case ModeNameGrid:
 		return c.Grid.Hotkeys
-	case modeNameRecursiveGrid:
+	case ModeNameRecursiveGrid:
 		return c.RecursiveGrid.Hotkeys
-	case modeNameScroll:
+	case ModeNameScroll:
 		return c.Scroll.Hotkeys
 	default:
 		return nil

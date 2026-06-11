@@ -7,9 +7,6 @@ package stickyindicator
 #cgo CFLAGS: -x objective-c
 #include "../../../core/infra/platform/darwin/overlay.h"
 #include <stdlib.h>
-
-// Callback function that Go can reference.
-extern void resizeStickyIndicatorCompletionCallback(void* context);
 */
 import "C"
 
@@ -24,33 +21,19 @@ import (
 )
 
 const (
-	stickyIndicatorWidth  = 60
-	stickyIndicatorHeight = 20
-
 	// NSWindowSharingNone represents NSWindowSharingNone (0) - hidden from screen sharing.
 	NSWindowSharingNone = 0
 	// NSWindowSharingReadOnly represents NSWindowSharingReadOnly (1) - visible in screen sharing.
 	NSWindowSharingReadOnly = 1
 )
 
-//export resizeStickyIndicatorCompletionCallback
-func resizeStickyIndicatorCompletionCallback(context unsafe.Pointer) {
-	// Read callback context from the C-heap-allocated CallbackContext
-	ctx := *(*overlayutil.CallbackContext)(context)
-	// Free the C-allocated context now that we've copied the values
-	overlayutil.FreeCallbackContext(context)
-	// Delegate to global callback manager
-	overlayutil.CompleteGlobalCallback(ctx.CallbackID, ctx.Generation)
-}
-
 // Overlay manages the rendering of sticky modifiers indicator overlay.
 type Overlay struct {
-	window          C.OverlayWindow
-	uiConfig        config.StickyModifiersUI
-	theme           config.ThemeProvider
-	logger          *zap.Logger
-	callbackManager *overlayutil.CallbackManager
-	styleCache      *overlayutil.StyleCache
+	window     C.OverlayWindow
+	uiConfig   config.StickyModifiersUI
+	theme      config.ThemeProvider
+	logger     *zap.Logger
+	styleCache *overlayutil.StyleCache
 
 	configMu sync.RWMutex
 
@@ -72,16 +55,14 @@ func NewOverlay(
 	if err != nil {
 		return nil, err
 	}
-	base.CallbackManager.SetComponent("stickyindicator")
 
 	return &Overlay{
-		window:          (C.OverlayWindow)(base.Window),
-		uiConfig:        uiConfig,
-		theme:           theme,
-		logger:          logger,
-		callbackManager: base.CallbackManager,
-		styleCache:      base.StyleCache,
-		cachedLabels:    make(map[string]*C.char),
+		window:       (C.OverlayWindow)(base.Window),
+		uiConfig:     uiConfig,
+		theme:        theme,
+		logger:       logger,
+		styleCache:   base.StyleCache,
+		cachedLabels: make(map[string]*C.char),
 	}, nil
 }
 
@@ -93,16 +74,14 @@ func NewOverlayWithWindow(
 	windowPtr unsafe.Pointer,
 ) (*Overlay, error) {
 	base := overlayutil.NewBaseOverlayWithWindow(logger, windowPtr)
-	base.CallbackManager.SetComponent("stickyindicator")
 
 	return &Overlay{
-		window:          (C.OverlayWindow)(base.Window),
-		uiConfig:        uiConfig,
-		theme:           theme,
-		logger:          logger,
-		callbackManager: base.CallbackManager,
-		styleCache:      base.StyleCache,
-		cachedLabels:    make(map[string]*C.char),
+		window:       (C.OverlayWindow)(base.Window),
+		uiConfig:     uiConfig,
+		theme:        theme,
+		logger:       logger,
+		styleCache:   base.StyleCache,
+		cachedLabels: make(map[string]*C.char),
 	}, nil
 }
 
@@ -121,23 +100,21 @@ func (o *Overlay) Clear() {
 	C.NeruClearOverlay(o.window)
 }
 
-// ResizeToActiveScreen adjusts the overlay window size with callback notification.
-// Falls back to a non-callback resize if the callback ID pool is exhausted.
+// ResizeToActiveScreen is a no-op for sticky indicator overlays.
+// The sticky indicator uses a small window positioned dynamically by Draw via
+// NeruPositionAndSizeOverlayToFitHint, so full-screen resizing is unnecessary and
+// would defeat the small-window memory optimization.
 func (o *Overlay) ResizeToActiveScreen() {
-	started := o.callbackManager.StartResizeOperation(func(callbackID uint64, generation uint64) {
-		contextPtr := overlayutil.CallbackIDToPointer(callbackID, generation)
-		C.NeruResizeOverlayToActiveScreenWithCallback(
-			o.window,
-			(C.ResizeCompletionCallback)(C.resizeStickyIndicatorCompletionCallback),
-			contextPtr,
-		)
-	})
-	if !started {
-		C.NeruResizeOverlayToActiveScreen(o.window)
-	}
+	// No-op: positioning is handled dynamically in Draw.
 }
 
 // Draw draws the sticky modifier symbols near the specified cursor position.
+// xCoordinate and yCoordinate are absolute Quartz screen coordinates. The
+// overlay positions a small window around the indicator badge instead of
+// using a full-screen window, saving some memory of backing store per Retina
+// display. The native side clamps the window to a single display to prevent
+// the multi-monitor flicker regression.
+//
 // X/Y offsets from uiConfig are applied internally (under configMu) to match
 // the mode indicator pattern. The caller must call Show() before Draw() for
 // the content to be visible.
@@ -201,19 +178,6 @@ func (o *Overlay) Draw(xCoordinate, yCoordinate int, symbols string) {
 		)
 	})
 
-	hint := C.HintData{
-		label: label,
-		position: C.CGPoint{
-			x: C.double(xCoordinate + xOffset),
-			y: C.double(yCoordinate + yOffset),
-		},
-		size: C.CGSize{
-			width:  stickyIndicatorWidth,
-			height: stickyIndicatorHeight,
-		},
-		matchedPrefixLength: 0,
-	}
-
 	style := C.HintStyle{
 		fontSize:         C.int(o.uiConfig.FontSize),
 		fontFamily:       (*C.char)(cachedStyle.FontFamily),
@@ -226,6 +190,36 @@ func (o *Overlay) Draw(xCoordinate, yCoordinate int, symbols string) {
 		paddingX:         C.int(o.uiConfig.PaddingX),
 		paddingY:         C.int(o.uiConfig.PaddingY),
 		showArrow:        0,
+		forceFlush:       1, // Indicator must flush synchronously to avoid first-show empty-badge flash
+	}
+
+	// Position the small window centered on the indicator's absolute position.
+	// We calculate the hint size dynamically and size/position the window accordingly,
+	// returning the calculated width and height.
+	indicatorAbsX := xCoordinate + xOffset
+	indicatorAbsY := yCoordinate + yOffset
+	var windowWidth, windowHeight C.double
+	C.NeruPositionAndSizeOverlayToFitHint(
+		o.window,
+		C.double(indicatorAbsX),
+		C.double(indicatorAbsY),
+		label,
+		style,
+		&windowWidth,
+		&windowHeight,
+	)
+
+	hint := C.HintData{
+		label: label,
+		position: C.CGPoint{
+			x: C.double(windowWidth / 2),  //nolint:mnd
+			y: C.double(windowHeight / 2), //nolint:mnd
+		},
+		size: C.CGSize{
+			width:  windowWidth,
+			height: windowHeight,
+		},
+		matchedPrefixLength: 0,
 	}
 
 	C.NeruDrawHints(o.window, &hint, 1, style)
@@ -250,18 +244,9 @@ func (o *Overlay) SetSharingType(hide bool) {
 	C.NeruSetOverlaySharingType(o.window, sharingType)
 }
 
-// Cleanup frees Go-side resources (callbackManager, styleCache, labelCache)
-// without destroying the native window.
-func (o *Overlay) Cleanup() {
-	if o.callbackManager != nil {
-		o.callbackManager.Cleanup()
-	}
-	o.freeAllCaches()
-}
-
 // Destroy releases the overlay window resources.
 func (o *Overlay) Destroy() {
-	o.Cleanup()
+	o.freeAllCaches()
 	if o.window != nil {
 		C.NeruDestroyOverlayWindow(o.window)
 		o.window = nil

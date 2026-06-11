@@ -114,6 +114,21 @@ func (c *Config) ValidateHints() error {
 		}
 	}
 
+	seen := make(map[rune]struct{}, len(c.Hints.HintCharacters))
+	for _, char := range c.Hints.HintCharacters {
+		upper := unicode.ToUpper(char)
+
+		if _, ok := seen[upper]; ok {
+			return derrors.Newf(
+				derrors.CodeInvalidConfig,
+				"hint_characters contains duplicate character %q",
+				char,
+			)
+		}
+
+		seen[upper] = struct{}{}
+	}
+
 	err := validateColors([]colorField{
 		{c.Hints.UI.BackgroundColor, "hints.ui.background_color"},
 		{c.Hints.UI.TextColor, "hints.ui.text_color"},
@@ -153,13 +168,13 @@ func (c *Config) ValidateHints() error {
 	}
 
 	switch c.Hints.UI.Placement {
-	case "top", "center", "bottom":
+	case "top", "center", placementBottom:
 	case "":
-		c.Hints.UI.Placement = "bottom"
+		c.Hints.UI.Placement = placementBottom
 	default:
 		return derrors.New(
 			derrors.CodeInvalidConfig,
-			"hints.ui.placement must be one of top, center, bottom",
+			"hints.ui.placement must be one of top, center, "+placementBottom,
 		)
 	}
 
@@ -754,16 +769,29 @@ func (c *Config) ValidateSmoothScroll() error {
 	return nil
 }
 
+// ValidateHeldRepeat validates held-key repeat settings.
+func (c *Config) ValidateHeldRepeat() error {
+	if c.HeldRepeat.InitialDelay < 0 {
+		return derrors.New(derrors.CodeInvalidConfig, "held_repeat.initial_delay_ms must be >= 0")
+	}
+
+	if c.HeldRepeat.Interval < 1 {
+		return derrors.New(derrors.CodeInvalidConfig, "held_repeat.interval_ms must be >= 1")
+	}
+
+	return nil
+}
+
 // ValidateHotkeys validates per-mode hotkey syntax and actions.
 func (c *Config) ValidateHotkeys() error {
 	modeHotkeys := []struct {
 		modeName string
 		table    map[string]StringOrStringArray
 	}{
-		{modeNameHints, c.Hints.Hotkeys},
-		{modeNameGrid, c.Grid.Hotkeys},
-		{modeNameRecursiveGrid, c.RecursiveGrid.Hotkeys},
-		{modeNameScroll, c.Scroll.Hotkeys},
+		{ModeNameHints, c.Hints.Hotkeys},
+		{ModeNameGrid, c.Grid.Hotkeys},
+		{ModeNameRecursiveGrid, c.RecursiveGrid.Hotkeys},
+		{ModeNameScroll, c.Scroll.Hotkeys},
 	}
 
 	for _, mode := range modeHotkeys {
@@ -825,10 +853,10 @@ func (c *Config) checkHotkeysConflicts() error {
 		modeName string
 		table    map[string]StringOrStringArray
 	}{
-		{modeNameHints, c.Hints.Hotkeys},
-		{modeNameGrid, c.Grid.Hotkeys},
-		{modeNameRecursiveGrid, c.RecursiveGrid.Hotkeys},
-		{modeNameScroll, c.Scroll.Hotkeys},
+		{ModeNameHints, c.Hints.Hotkeys},
+		{ModeNameGrid, c.Grid.Hotkeys},
+		{ModeNameRecursiveGrid, c.RecursiveGrid.Hotkeys},
+		{ModeNameScroll, c.Scroll.Hotkeys},
 	}
 
 	for _, mode := range modes {
@@ -845,7 +873,7 @@ func (c *Config) checkHotkeysConflicts() error {
 				idx,
 				appConfig.BundleID,
 			),
-			c.HotkeysForModeAndApp(modeNameHints, appConfig.BundleID),
+			c.HotkeysForModeAndApp(ModeNameHints, appConfig.BundleID),
 		)
 		if err != nil {
 			return err
@@ -859,7 +887,7 @@ func (c *Config) checkHotkeysConflicts() error {
 				idx,
 				appConfig.BundleID,
 			),
-			c.HotkeysForModeAndApp(modeNameScroll, appConfig.BundleID),
+			c.HotkeysForModeAndApp(ModeNameScroll, appConfig.BundleID),
 		)
 		if err != nil {
 			return err
@@ -1268,8 +1296,8 @@ func validateHotkeyActionString(actionStr string) error {
 	cmd := strings.Fields(trimmed)[0]
 
 	switch cmd {
-	case "idle", "hints", "grid", "scroll", "recursive_grid",
-		"toggle-screen-share", "toggle-cursor-follow-selection",
+	case "idle", ModeNameHints, ModeNameGrid, ModeNameScroll, ModeNameRecursiveGrid,
+		"toggle-screen-share", CmdToggleCursorFollowSelection,
 		"toggle-scroll-invert":
 		return nil
 	default:

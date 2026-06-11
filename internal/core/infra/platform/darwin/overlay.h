@@ -35,6 +35,7 @@ typedef struct {
 	int paddingY;                   ///< Vertical padding (-1 = auto)
 	int showArrow;                  ///< Show arrow (0 = no arrow, 1 = show arrow)
 	int placement;                  ///< Label placement relative to target
+	int forceFlush;                 ///< Force synchronous display flush after draw (0 = coalesce, 1 = flush)
 	int boundaryHighlightEnabled;   ///< Draw target boundary highlight (0 = off, 1 = on)
 	int boundaryBorderWidth;        ///< Target boundary border width
 	int boundaryBorderRadius;       ///< Target boundary corner radius
@@ -271,5 +272,14 @@ void NeruHideCursorIndicator(OverlayWindow window);
 /// @param position Global cursor position in Quartz coordinates
 /// @param style Indicator style
 void NeruShowMouseActionIndicator(CGPoint position, MouseActionIndicatorStyle style);
+
+/// Position and resize overlay window dynamically to fit a hint badge.
+/// Calculates the hint size using the provided label text and style configuration,
+/// sizes the window accordingly (with a small margin), and centers it on the target absolute position.
+/// Clamps the window frame to the containing display bounds.
+/// Returns the calculated window width and height via outWidth and outHeight pointers.
+void NeruPositionAndSizeOverlayToFitHint(
+    OverlayWindow window, double absoluteX, double absoluteY, const char *label, HintStyle style, double *outWidth,
+    double *outHeight);
 
 #endif  // OVERLAY_H

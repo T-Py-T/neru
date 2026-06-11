@@ -123,6 +123,10 @@ const (
 
 	// DefaultSmoothScrollDurationPerPixel is the default ms per pixel for adaptive duration.
 	DefaultSmoothScrollDurationPerPixel = 1.0
+	// DefaultHeldRepeatInitialDelay is the default held-key initial delay in ms.
+	DefaultHeldRepeatInitialDelay = 50
+	// DefaultHeldRepeatInterval is the default held-key repeat interval in ms.
+	DefaultHeldRepeatInterval = 50
 
 	// DefaultIPCTimeout is the default IPC timeout.
 	DefaultIPCTimeout = 5
@@ -230,9 +234,9 @@ const (
 	IPCTimeoutSeconds = 5
 
 	// DefaultRecursiveGridMinSizeWidth is the default minimum cell width in pixels.
-	DefaultRecursiveGridMinSizeWidth = 25
+	DefaultRecursiveGridMinSizeWidth = 1
 	// DefaultRecursiveGridMinSizeHeight is the default minimum cell height in pixels.
-	DefaultRecursiveGridMinSizeHeight = 25
+	DefaultRecursiveGridMinSizeHeight = 1
 	// DefaultRecursiveGridMaxDepth is the default maximum recursion depth.
 	DefaultRecursiveGridMaxDepth = 10
 	// DefaultRecursiveGridMinGridCols is the minimum allowed grid columns.
@@ -316,10 +320,10 @@ func newDefaultConfig() *Config {
 		Theme: defaultThemeConfig(),
 		Hotkeys: HotkeysConfig{
 			Bindings: map[string][]string{
-				"Primary+Shift+Space": {"hints"},
-				"Primary+Shift+G":     {"grid"},
-				"Primary+Shift+C":     {"recursive_grid"},
-				"Primary+Shift+S":     {"scroll"},
+				"Primary+Shift+Space": {ModeNameHints},
+				"Primary+Shift+G":     {ModeNameGrid},
+				"Primary+Shift+C":     {ModeNameRecursiveGrid},
+				"Primary+Shift+S":     {ModeNameScroll},
 			},
 		},
 		Hints: HintsConfig{
@@ -328,20 +332,20 @@ func newDefaultConfig() *Config {
 			HintCharacters: "asdfghjkl",
 			MaxDepth:       DefaultMaxDepth,
 			Hotkeys: map[string]StringOrStringArray{
-				"Escape":    {"idle"},
-				"/":         {"action search_hints"},
-				"Backspace": {"action backspace"},
-				"Tab":       {"action cycle_hint"},
-				"Shift+Tab": {"action cycle_hint --backward"},
-				"Shift+L":   {"action left_click"},
-				"Shift+R":   {"action right_click"},
-				"Shift+M":   {"action middle_click"},
-				"Shift+I":   {"action mouse_down"},
-				"Shift+U":   {"action mouse_up"},
-				"Up":        {"action move_mouse_relative --dx=0 --dy=-10"},
-				"Down":      {"action move_mouse_relative --dx=0 --dy=10"},
-				"Left":      {"action move_mouse_relative --dx=-10 --dy=0"},
-				"Right":     {"action move_mouse_relative --dx=10 --dy=0"},
+				KeyDisplayEscape:    {CmdIdle},
+				"/":                 {"action search_hints"},
+				KeyDisplayBackspace: {CmdBackspace},
+				"Tab":               {"action cycle_hint"},
+				"Shift+Tab":         {"action cycle_hint --backward"},
+				KeyComboShiftL:      {CmdLeftClick},
+				KeyComboShiftR:      {CmdRightClick},
+				KeyComboShiftM:      {CmdMiddleClick},
+				KeyComboShiftI:      {CmdMouseDown},
+				KeyComboShiftU:      {CmdMouseUp},
+				"Up":                {CmdMoveMouseUp},
+				KeyDisplayDown:      {CmdMoveMouseDown},
+				KeyDisplayLeft:      {CmdMoveMouseLeft},
+				KeyDisplayRight:     {CmdMoveMouseRight},
 			},
 
 			UI: HintsUI{
@@ -433,19 +437,19 @@ func newDefaultConfig() *Config {
 			Characters:   "abcdefghijklmnpqrstuvwxyz",
 			SublayerKeys: "abcdefghijklmnpqrstuvwxyz",
 			Hotkeys: map[string]StringOrStringArray{
-				"Escape":    {"idle"},
-				"`":         {"toggle-cursor-follow-selection"},
-				"Space":     {"action reset"},
-				"Backspace": {"action backspace"},
-				"Shift+L":   {"action left_click"},
-				"Shift+R":   {"action right_click"},
-				"Shift+M":   {"action middle_click"},
-				"Shift+I":   {"action mouse_down"},
-				"Shift+U":   {"action mouse_up"},
-				"Up":        {"action move_mouse_relative --dx=0 --dy=-10"},
-				"Down":      {"action move_mouse_relative --dx=0 --dy=10"},
-				"Left":      {"action move_mouse_relative --dx=-10 --dy=0"},
-				"Right":     {"action move_mouse_relative --dx=10 --dy=0"},
+				KeyDisplayEscape:    {CmdIdle},
+				"`":                 {CmdToggleCursorFollowSelection},
+				KeyDisplaySpace:     {"action reset"},
+				KeyDisplayBackspace: {CmdBackspace},
+				KeyComboShiftL:      {CmdLeftClick},
+				KeyComboShiftR:      {CmdRightClick},
+				KeyComboShiftM:      {CmdMiddleClick},
+				KeyComboShiftI:      {CmdMouseDown},
+				KeyComboShiftU:      {CmdMouseUp},
+				"Up":                {CmdMoveMouseUp},
+				KeyDisplayDown:      {CmdMoveMouseDown},
+				KeyDisplayLeft:      {CmdMoveMouseLeft},
+				KeyDisplayRight:     {CmdMoveMouseRight},
 			},
 
 			UI: GridUI{
@@ -476,19 +480,19 @@ func newDefaultConfig() *Config {
 
 			Keys: "rtyfghvbn", // 3x3 grid: left-to-right, top-to-bottom
 			Hotkeys: map[string]StringOrStringArray{
-				"Escape":    {"idle"},
-				"`":         {"toggle-cursor-follow-selection"},
-				"Space":     {"action reset"},
-				"Backspace": {"action backspace"},
-				"Shift+L":   {"action left_click"},
-				"Shift+R":   {"action right_click"},
-				"Shift+M":   {"action middle_click"},
-				"Shift+I":   {"action mouse_down"},
-				"Shift+U":   {"action mouse_up"},
-				"Up":        {"action move_mouse_relative --dx=0 --dy=-10"},
-				"Down":      {"action move_mouse_relative --dx=0 --dy=10"},
-				"Left":      {"action move_mouse_relative --dx=-10 --dy=0"},
-				"Right":     {"action move_mouse_relative --dx=10 --dy=0"},
+				KeyDisplayEscape:    {CmdIdle},
+				"`":                 {CmdToggleCursorFollowSelection},
+				KeyDisplaySpace:     {"action reset"},
+				KeyDisplayBackspace: {CmdBackspace},
+				KeyComboShiftL:      {CmdLeftClick},
+				KeyComboShiftR:      {CmdRightClick},
+				KeyComboShiftM:      {CmdMiddleClick},
+				KeyComboShiftI:      {CmdMouseDown},
+				KeyComboShiftU:      {CmdMouseUp},
+				"Up":                {CmdMoveMouseUp},
+				KeyDisplayDown:      {CmdMoveMouseDown},
+				KeyDisplayLeft:      {CmdMoveMouseLeft},
+				KeyDisplayRight:     {CmdMoveMouseRight},
 			},
 
 			UI: RecursiveGridUI{
@@ -601,26 +605,26 @@ func newDefaultConfig() *Config {
 			InvertScroll:   DefaultScrollInvert,
 			AppConfigs:     []AppConfig{},
 			Hotkeys: map[string]StringOrStringArray{
-				"Escape":   {"idle"},
-				"k":        {"action scroll_up"},
-				"j":        {"action scroll_down"},
-				"h":        {"action scroll_left"},
-				"l":        {"action scroll_right"},
-				"gg":       {"action go_top"},
-				"Shift+G":  {"action go_bottom"},
-				"u":        {"action page_up"},
-				"PageUp":   {"action page_up"},
-				"d":        {"action page_down"},
-				"PageDown": {"action page_down"},
-				"Shift+L":  {"action left_click"},
-				"Shift+R":  {"action right_click"},
-				"Shift+M":  {"action middle_click"},
-				"Shift+I":  {"action mouse_down"},
-				"Shift+U":  {"action mouse_up"},
-				"Up":       {"action move_mouse_relative --dx=0 --dy=-10"},
-				"Down":     {"action move_mouse_relative --dx=0 --dy=10"},
-				"Left":     {"action move_mouse_relative --dx=-10 --dy=0"},
-				"Right":    {"action move_mouse_relative --dx=10 --dy=0"},
+				KeyDisplayEscape: {CmdIdle},
+				"k":              {"action scroll_up"},
+				"j":              {"action scroll_down"},
+				"h":              {"action scroll_left"},
+				"l":              {"action scroll_right"},
+				"gg":             {CmdGoTop},
+				"Shift+G":        {"action go_bottom"},
+				"u":              {"action page_up"},
+				"PageUp":         {"action page_up"},
+				"d":              {"action page_down"},
+				"PageDown":       {"action page_down"},
+				KeyComboShiftL:   {CmdLeftClick},
+				KeyComboShiftR:   {CmdRightClick},
+				KeyComboShiftM:   {CmdMiddleClick},
+				KeyComboShiftI:   {CmdMouseDown},
+				KeyComboShiftU:   {CmdMouseUp},
+				"Up":             {CmdMoveMouseUp},
+				KeyDisplayDown:   {CmdMoveMouseDown},
+				KeyDisplayLeft:   {CmdMoveMouseLeft},
+				KeyDisplayRight:  {CmdMoveMouseRight},
 			},
 		},
 		Logging: LoggingConfig{
@@ -642,6 +646,11 @@ func newDefaultConfig() *Config {
 			Steps:            DefaultSmoothScrollSteps,
 			MaxDuration:      DefaultSmoothScrollMaxDuration,
 			DurationPerPixel: DefaultSmoothScrollDurationPerPixel,
+		},
+		HeldRepeat: HeldRepeatConfig{
+			Enabled:      false,
+			InitialDelay: DefaultHeldRepeatInitialDelay,
+			Interval:     DefaultHeldRepeatInterval,
 		},
 		Systray: SystrayConfig{
 			Enabled: true, // Enabled by default

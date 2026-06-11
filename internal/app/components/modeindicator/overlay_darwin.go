@@ -7,9 +7,6 @@ package modeindicator
 #cgo CFLAGS: -x objective-c
 #include "../../../core/infra/platform/darwin/overlay.h"
 #include <stdlib.h>
-
-// Callback function that Go can reference.
-extern void resizeModeIndicatorCompletionCallback(void* context);
 */
 import "C"
 
@@ -25,28 +22,11 @@ import (
 )
 
 const (
-	// defaultIndicatorWidth is the default width for the mode indicator.
-	defaultIndicatorWidth = 60
-	// defaultIndicatorHeight is the default height for the mode indicator.
-	defaultIndicatorHeight = 20
-
 	// NSWindowSharingNone represents NSWindowSharingNone (0) - hidden from screen sharing.
 	NSWindowSharingNone = 0
 	// NSWindowSharingReadOnly represents NSWindowSharingReadOnly (1) - visible in screen sharing.
 	NSWindowSharingReadOnly = 1
 )
-
-//export resizeModeIndicatorCompletionCallback
-func resizeModeIndicatorCompletionCallback(context unsafe.Pointer) {
-	// Read callback context from the C-heap-allocated CallbackContext
-	ctx := *(*overlayutil.CallbackContext)(context)
-
-	// Free the C-allocated context now that we've copied the values
-	overlayutil.FreeCallbackContext(context)
-
-	// Delegate to global callback manager
-	overlayutil.CompleteGlobalCallback(ctx.CallbackID, ctx.Generation)
-}
 
 // Overlay manages the rendering of mode indicator overlays using native platform APIs.
 type Overlay struct {
@@ -54,7 +34,6 @@ type Overlay struct {
 	indicatorConfig config.ModeIndicatorConfig
 	theme           config.ThemeProvider
 	logger          *zap.Logger
-	callbackManager *overlayutil.CallbackManager
 
 	// styleCache holds cached C style strings for the currently drawn mode.
 	// It is shared across all modes and invalidated on mode change via
@@ -90,14 +69,12 @@ func NewOverlay(
 	if err != nil {
 		return nil, err
 	}
-	base.CallbackManager.SetComponent("modeindicator")
 
 	return &Overlay{
 		window:          (C.OverlayWindow)(base.Window),
 		indicatorConfig: indicatorCfg,
 		theme:           theme,
 		logger:          logger,
-		callbackManager: base.CallbackManager,
 		styleCache:      base.StyleCache,
 		cachedLabels:    make(map[string]*C.char),
 	}, nil
@@ -111,14 +88,12 @@ func NewOverlayWithWindow(
 	windowPtr unsafe.Pointer,
 ) (*Overlay, error) {
 	base := overlayutil.NewBaseOverlayWithWindow(logger, windowPtr)
-	base.CallbackManager.SetComponent("modeindicator")
 
 	return &Overlay{
 		window:          (C.OverlayWindow)(base.Window),
 		indicatorConfig: indicatorCfg,
 		theme:           theme,
 		logger:          logger,
-		callbackManager: base.CallbackManager,
 		styleCache:      base.StyleCache,
 		cachedLabels:    make(map[string]*C.char),
 	}, nil
@@ -149,25 +124,12 @@ func (o *Overlay) Clear() {
 	C.NeruClearOverlay(o.window)
 }
 
-// ResizeToActiveScreen adjusts the overlay window size with callback notification.
-// Falls back to a non-callback resize if the callback ID pool is exhausted.
+// ResizeToActiveScreen is a no-op for mode indicator overlays.
+// The mode indicator uses a small window positioned dynamically by
+// DrawModeIndicator via NeruPositionAndSizeOverlayToFitHint, so full-screen resizing
+// is unnecessary and would defeat the small-window memory optimization.
 func (o *Overlay) ResizeToActiveScreen() {
-	started := o.callbackManager.StartResizeOperation(func(callbackID uint64, generation uint64) {
-		// Pass callback ID and generation as opaque pointer context for C callback.
-		// Uses CallbackIDToPointer to convert in a way that go vet accepts.
-		contextPtr := overlayutil.CallbackIDToPointer(callbackID, generation)
-
-		C.NeruResizeOverlayToActiveScreenWithCallback(
-			o.window,
-			(C.ResizeCompletionCallback)(C.resizeModeIndicatorCompletionCallback),
-			contextPtr,
-		)
-	})
-	if !started {
-		// Pool exhausted — fall back to non-callback resize so the overlay
-		// is still moved to the correct screen.
-		C.NeruResizeOverlayToActiveScreen(o.window)
-	}
+	// No-op: positioning is handled dynamically in DrawModeIndicator.
 }
 
 // DrawModeIndicator draws a mode label at the specified position.
@@ -177,6 +139,12 @@ func (o *Overlay) ResizeToActiveScreen() {
 // allowing users to customize (or hide) each mode's indicator text.
 // The caller is responsible for calling Show() once before the first draw
 // (e.g. in startModeIndicatorPolling) rather than showing every tick.
+//
+// xCoordinate and yCoordinate are absolute Quartz screen coordinates.
+// The overlay positions a small window around the indicator badge
+// instead of using a full-screen window, saves some memory of backing store
+// per Retina display. The native side clamps the window to a single
+// display to prevent the multi-monitor flicker regression.
 //
 // IMPORTANT: This method must only be called from a single goroutine at a
 // time. The shared styleCache is invalidated and repopulated based on the
@@ -216,21 +184,6 @@ func (o *Overlay) DrawModeIndicator(mode string, xCoordinate, yCoordinate int) {
 	}
 
 	label := o.getOrCacheLabel(labelText)
-
-	// Create a single hint for the indicator
-	hint := C.HintData{
-		label: label,
-		position: C.CGPoint{
-			x: C.double(xCoordinate + xOffset),
-			y: C.double(yCoordinate + yOffset),
-		},
-		size: C.CGSize{
-			// Size is not strictly needed for just drawing the label, but providing reasonable defaults
-			width:  defaultIndicatorWidth,
-			height: defaultIndicatorHeight,
-		},
-		matchedPrefixLength: 0,
-	}
 
 	// Resolve per-mode color overrides (falls back to UI defaults).
 	modeConfig := o.resolveModeConfig(mode)
@@ -296,6 +249,37 @@ func (o *Overlay) DrawModeIndicator(mode string, xCoordinate, yCoordinate int) {
 		paddingX:         C.int(o.indicatorConfig.UI.PaddingX),
 		paddingY:         C.int(o.indicatorConfig.UI.PaddingY),
 		showArrow:        0, // No arrow for mode indicator
+		forceFlush:       1, // Indicator must flush synchronously to avoid first-show empty-badge flash
+	}
+
+	// Position the small window centered on the indicator's absolute position.
+	// We calculate the hint size dynamically and size/position the window accordingly,
+	// returning the calculated width and height.
+	indicatorAbsX := xCoordinate + xOffset
+	indicatorAbsY := yCoordinate + yOffset
+	var windowWidth, windowHeight C.double
+	C.NeruPositionAndSizeOverlayToFitHint(
+		o.window,
+		C.double(indicatorAbsX),
+		C.double(indicatorAbsY),
+		label,
+		style,
+		&windowWidth,
+		&windowHeight,
+	)
+
+	// Create a single hint centered in the small window.
+	hint := C.HintData{
+		label: label,
+		position: C.CGPoint{
+			x: C.double(windowWidth / 2),  //nolint:mnd
+			y: C.double(windowHeight / 2), //nolint:mnd
+		},
+		size: C.CGSize{
+			width:  windowWidth,
+			height: windowHeight,
+		},
+		matchedPrefixLength: 0,
 	}
 
 	// Reuse NeruDrawHints which can draw arbitrary labels
@@ -321,18 +305,9 @@ func (o *Overlay) SetSharingType(hide bool) {
 	C.NeruSetOverlaySharingType(o.window, sharingType)
 }
 
-// Cleanup frees Go-side resources (callbackManager, styleCache, labelCache)
-// without destroying the native window.
-func (o *Overlay) Cleanup() {
-	if o.callbackManager != nil {
-		o.callbackManager.Cleanup()
-	}
-	o.freeAllCaches()
-}
-
 // Destroy releases the overlay window resources.
 func (o *Overlay) Destroy() {
-	o.Cleanup()
+	o.freeAllCaches()
 
 	if o.window != nil {
 		C.NeruDestroyOverlayWindow(o.window)

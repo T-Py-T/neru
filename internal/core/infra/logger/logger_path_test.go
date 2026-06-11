@@ -1,4 +1,4 @@
-//nolint:testpackage // Exercises the unexported defaultLogFilePath helper directly.
+//nolint:testpackage
 package logger
 
 import (
@@ -7,7 +7,10 @@ import (
 	"testing"
 )
 
-const goosWindows = "windows"
+const (
+	goosWindows = "windows"
+	goosDarwin  = "darwin"
+)
 
 func TestDefaultLogFilePath(t *testing.T) {
 	home := t.TempDir()
@@ -26,9 +29,8 @@ func TestDefaultLogFilePath(t *testing.T) {
 	}
 
 	var want string
-
 	switch runtime.GOOS {
-	case "darwin":
+	case goosDarwin:
 		want = filepath.Join(home, "Library", "Logs", "neru", "app.log")
 	case goosWindows:
 		want = filepath.Join(home, "AppData", "Local", "neru", "log", "app.log")
@@ -38,5 +40,28 @@ func TestDefaultLogFilePath(t *testing.T) {
 
 	if got != want {
 		t.Fatalf("DefaultLogFilePath() = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultLogFilePathWindowsFallback(t *testing.T) {
+	if runtime.GOOS != goosWindows {
+		t.Skip("Windows-only test")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOMEDRIVE", "")
+	t.Setenv("HOMEPATH", "")
+	t.Setenv("LOCALAPPDATA", "")
+
+	got, err := defaultLogFilePath()
+	if err != nil {
+		t.Fatalf("DefaultLogFilePath() fallback error = %v", err)
+	}
+
+	want := filepath.Join(home, "AppData", "Local", "neru", "log", "app.log")
+	if got != want {
+		t.Fatalf("DefaultLogFilePath() fallback = %q, want %q", got, want)
 	}
 }

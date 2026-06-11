@@ -247,7 +247,7 @@ scroll_step_full = 1000
 		}
 
 		actions, exists := loadResult.Config.Hotkeys.Bindings["Cmd+Shift+Option+Ctrl+G"]
-		if !exists || len(actions) != 1 || actions[0] != "grid" {
+		if !exists || len(actions) != 1 || actions[0] != config.ModeNameGrid {
 			t.Fatalf("expected rebound grid hotkey, got %v", loadResult.Config.Hotkeys.Bindings)
 		}
 
@@ -395,7 +395,7 @@ enabled = false
 		}
 
 		actions, exists := loadResult.Config.Hotkeys.Bindings["Primary+Shift+Space"]
-		if !exists || len(actions) != 1 || actions[0] != "grid" {
+		if !exists || len(actions) != 1 || actions[0] != config.ModeNameGrid {
 			t.Fatalf(
 				"expected rebound launcher to replace disabled mode launcher, got %v",
 				loadResult.Config.Hotkeys.Bindings,

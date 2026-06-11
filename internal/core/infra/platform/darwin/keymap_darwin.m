@@ -46,6 +46,8 @@ static dispatch_block_t gLayoutChangeDebounceBlock = nil;
 
 /// optional callback invoked after layout maps are rebuilt
 static _Atomic(KeymapLayoutChangeCallback) gLayoutChangeCallback = NULL;
+/// second callback slot for Go-level layout change notifications
+static _Atomic(KeymapLayoutChangeCallback) gLayoutChangeCallback2 = NULL;
 
 #pragma mark - UCKeyTranslate Helper
 
@@ -92,24 +94,68 @@ static TISInputSourceRef copyKeyboardLayoutInputSourceByID(NSString *inputSource
 		return nil;
 	}
 
+	// First try matching by input source ID directly
 	NSDictionary *filter = @{(__bridge NSString *)kTISPropertyInputSourceID : inputSourceID};
 	CFArrayRef inputSourceList = TISCreateInputSourceList((__bridge CFDictionaryRef)filter, false);
-	if (!inputSourceList) {
-		return nil;
-	}
-
 	TISInputSourceRef matched = nil;
-	CFIndex sourceCount = CFArrayGetCount(inputSourceList);
-	for (CFIndex i = 0; i < sourceCount; i++) {
-		TISInputSourceRef candidate = (TISInputSourceRef)CFArrayGetValueAtIndex(inputSourceList, i);
-		if (inputSourceHasUnicodeLayoutData(candidate)) {
-			CFRetain(candidate);
-			matched = candidate;
-			break;
+
+	if (inputSourceList) {
+		CFIndex sourceCount = CFArrayGetCount(inputSourceList);
+		for (CFIndex i = 0; i < sourceCount; i++) {
+			TISInputSourceRef candidate = (TISInputSourceRef)CFArrayGetValueAtIndex(inputSourceList, i);
+			if (inputSourceHasUnicodeLayoutData(candidate)) {
+				CFRetain(candidate);
+				matched = candidate;
+				break;
+			}
 		}
+		CFRelease(inputSourceList);
 	}
 
-	CFRelease(inputSourceList);
+	if (matched) {
+		return matched;
+	}
+
+	// If not matched directly, query all keyboard layouts to match by localized name or ID suffix.
+	// This handles cases like inputSourceID being "Colemak" or "Dvorak".
+	NSDictionary *allFilter =
+	    @{(__bridge NSString *)kTISPropertyInputSourceType : (__bridge NSString *)kTISTypeKeyboardLayout};
+	CFArrayRef allSources = TISCreateInputSourceList((__bridge CFDictionaryRef)allFilter, false);
+	if (allSources) {
+		CFIndex sourceCount = CFArrayGetCount(allSources);
+		for (CFIndex i = 0; i < sourceCount; i++) {
+			TISInputSourceRef candidate = (TISInputSourceRef)CFArrayGetValueAtIndex(allSources, i);
+			if (!inputSourceHasUnicodeLayoutData(candidate)) {
+				continue;
+			}
+
+			// Check localized name (e.g. "Colemak")
+			CFStringRef locNameRef = (CFStringRef)TISGetInputSourceProperty(candidate, kTISPropertyLocalizedName);
+			if (locNameRef) {
+				NSString *locName = (__bridge NSString *)locNameRef;
+				if ([locName caseInsensitiveCompare:inputSourceID] == NSOrderedSame) {
+					CFRetain(candidate);
+					matched = candidate;
+					break;
+				}
+			}
+
+			// Check input source ID suffix (e.g. matches "Colemak" in "com.apple.keylayout.Colemak")
+			CFStringRef srcIDRef = (CFStringRef)TISGetInputSourceProperty(candidate, kTISPropertyInputSourceID);
+			if (srcIDRef) {
+				NSString *srcID = (__bridge NSString *)srcIDRef;
+				NSString *suffix = [NSString stringWithFormat:@".%@", inputSourceID];
+				if ([srcID caseInsensitiveCompare:inputSourceID] == NSOrderedSame ||
+				    [srcID.lowercaseString hasSuffix:suffix.lowercaseString]) {
+					CFRetain(candidate);
+					matched = candidate;
+					break;
+				}
+			}
+		}
+		CFRelease(allSources);
+	}
+
 	return matched;
 }
 
@@ -212,9 +258,10 @@ static TISInputSourceRef copyResolvedReferenceInputSource(
 
 	// Resolution order:
 	// 1. User-configured input source ID
-	// 2. Preferred stable Latin layouts (ABC, US)
-	// 3. First English keyboard layout
-	// 4. Current layout (fallback — unstable across layout switches)
+	// 2. Current ASCII-capable keyboard layout (if it has Unicode layout data)
+	// 3. Preferred stable Latin layouts (ABC, US)
+	// 4. First English keyboard layout
+	// 5. Current layout (fallback — unstable across layout switches)
 	NSArray<NSString *> *preferredIDs = @[
 		@"com.apple.keylayout.ABC",
 		@"com.apple.keylayout.US",
@@ -228,6 +275,17 @@ static TISInputSourceRef copyResolvedReferenceInputSource(
 		resolvedInputSource = copyKeyboardLayoutInputSourceByID(configuredID);
 		if (!resolvedInputSource) {
 			configuredResolved = NO;
+		}
+	}
+
+	if (!resolvedInputSource) {
+		TISInputSourceRef currentASCII = TISCopyCurrentASCIICapableKeyboardLayoutInputSource();
+		if (currentASCII) {
+			if (inputSourceHasUnicodeLayoutData(currentASCII)) {
+				resolvedInputSource = currentASCII;
+			} else {
+				CFRelease(currentASCII);
+			}
 		}
 	}
 
@@ -754,11 +812,18 @@ static void handleKeyboardLayoutChanged(
     CFNotificationCenterRef center, void *observer, CFNotificationName name, const void *object,
     CFDictionaryRef userInfo) {
 	[gKeymapLock lock];
-	BOOL shouldRebuild = gUsesCurrentLayoutFallback;
+	BOOL hasConfiguredLayout = (gConfiguredInputSourceID != nil && gConfiguredInputSourceID.length > 0);
+	BOOL configuredResolved = gConfiguredInputSourceResolved;
+	BOOL usesCurrentFallback = gUsesCurrentLayoutFallback;
 	[gKeymapLock unlock];
 
-	// With a resolved reference layout (configured or auto-detected), active
-	// layout switches should not affect key interpretation.
+	// When the user has explicitly configured a layout via kb_layout_to_use
+	// AND it resolved successfully, layout switches should not affect key
+	// interpretation. If the configured ID failed to resolve, Neru falls
+	// through to auto-detection and must follow system changes.
+	// Otherwise, always rebuild so Neru follows the active system layout.
+	BOOL shouldRebuild = !hasConfiguredLayout || !configuredResolved || usesCurrentFallback;
+
 	if (!shouldRebuild) {
 		return;
 	}
@@ -770,8 +835,6 @@ static void handleKeyboardLayoutChanged(
 
 	gLayoutChangeDebounceBlock = dispatch_block_create(0, ^{
 		[gKeymapLock lock];
-		// Re-resolve when current-layout fallback is active so layout switches
-		// pick up the new selected source.
 		clearResolvedReferenceInputSourceLocked();
 		[gKeymapLock unlock];
 
@@ -780,6 +843,10 @@ static void handleKeyboardLayoutChanged(
 		KeymapLayoutChangeCallback cb = atomic_load(&gLayoutChangeCallback);
 		if (cb)
 			cb();
+
+		KeymapLayoutChangeCallback cb2 = atomic_load(&gLayoutChangeCallback2);
+		if (cb2)
+			cb2();
 
 		gLayoutChangeDebounceBlock = nil;
 	});
@@ -1164,4 +1231,8 @@ int NeruSetReferenceKeyboardLayout(const char *inputSourceID) {
 
 void NeruSetKeymapLayoutChangeCallback(KeymapLayoutChangeCallback callback) {
 	atomic_store(&gLayoutChangeCallback, callback);
+}
+
+void NeruSetKeymapLayoutChangeCallback2(KeymapLayoutChangeCallback callback) {
+	atomic_store(&gLayoutChangeCallback2, callback);
 }

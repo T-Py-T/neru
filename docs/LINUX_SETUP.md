@@ -446,7 +446,7 @@ systemctl --user enable --now neru
 
 1. **Wayland global hotkeys**: Must be configured in the compositor, not in Neru's config. See [Hotkey Configuration](#1-hotkey-configuration).
 2. **Accessibility (AT-SPI)**: Hints mode discovers clickable elements through an AT-SPI D-Bus client (validated on KDE Plasma). It needs the AT-SPI stack enabled (`org.a11y.Bus`) — Neru turns it on at daemon start — and translates AT-SPI roles to the AX role names used in config. On KDE, element coordinates are corrected with a KWin geometry bridge, since AT-SPI reports window-relative positions under Wayland. Coverage depends on each app exposing an AT-SPI tree; apps that don't (or toolkits without AT-SPI) yield no hints. Grid and scroll modes work without AT-SPI.
-3. **Dark mode detection**: Detected via the `org.freedesktop.appearance` xdg-desktop-portal interface, with a `~/.config/kdeglobals` fallback, so `neru doctor` reports the current color scheme on any desktop that ships a portal. Restyling overlays to match the detected theme is not yet wired up.
+3. **Dark mode detection**: Detected via the `org.freedesktop.appearance` xdg-desktop-portal interface, with a `~/.config/kdeglobals` fallback, so `neru doctor` reports the current color scheme on any desktop that ships a portal. Overlays restyle live when the portal emits `SettingChanged` signals; a 5s polling fallback covers sessions where D-Bus subscription is unavailable.
 4. **Notifications**: Desktop notifications (`org.freedesktop.Notifications`) will log to stdout/file instead of pushing to DBus.
 5. **Wayland modified clicks need evdev access**: On wlroots compositors, reliable
    modified pointer actions depend on the `evdev` keyboard-capture path described

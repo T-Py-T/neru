@@ -70,9 +70,10 @@ neru idle                                  # Cancel active navigation mode
 | ------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `--action, -a`            | string | Action on selection: `left_click`, `right_click`, `middle_click`, `mouse_down`, `mouse_up`, `move_mouse`, `move_mouse_relative`, `scroll` |
 | `--repeat, -r`            | bool   | Re-activate mode after action (requires `--action`)                                                                                       |
+| `--toggle, -t`            | bool   | Toggle mode on/off — exit to idle if already active                                                                                       |
 | `--cursor-selection-mode` | string | `follow` (cursor follows selection) or `hold` (cursor stays)                                                                              |
 
-Not allowed as `--action`: `reset`, `backspace`, `search_hints`, `cycle_hint`, `focus_window`, `sleep`, `wait_for_mode_exit`, `save_cursor_pos`, `restore_cursor_pos`, and scroll sub-actions (`scroll_up`, `page_down`, `go_top`, etc.).
+Not allowed as `--action`: `reset`, `backspace`, `search_hints`, `cycle_hint`, `sleep`, `wait_for_mode_exit`, `save_cursor_pos`, `restore_cursor_pos`, and scroll sub-actions (`scroll_up`, `page_down`, `go_top`, etc.).
 
 > The `--action` flag is most useful in hints mode (Vimium-style). In grid/recursive-grid, prefer composing behavior in per-mode hotkeys: `["action left_click", "idle"]`.
 
@@ -81,6 +82,7 @@ Not allowed as `--action`: `reset`, `backspace`, `search_hints`, `cycle_hint`, `
 neru hints --action left_click                     # Click via hints
 neru hints --action left_click --repeat            # Click and re-enter hints
 neru hints --search                                # Start with search input visible
+neru grid --toggle                                 # Toggle grid on/off
 neru grid --cursor-selection-mode hold             # Grid with stationary cursor
 neru recursive_grid --action middle_click          # Middle-click via recursive grid
 ```
@@ -103,14 +105,15 @@ neru hints --role AXButton,AXLink --text save,cancel  # Multiple roles/texts (co
 neru hints --text next --action left_click --repeat   # Filter persists across repeats
 ```
 
-| Flag                      | Type   | Description                                                                                                                  |
-| ------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `--action, -a`            | string | Action on selection (same values as [Common Flags](#common-flags))                                                           |
-| `--repeat, -r`            | bool   | Re-activate hints after action (requires `--action`)                                                                         |
-| `--cursor-selection-mode` | string | `follow` (default) or `hold` — whether cursor jumps to selection                                                             |
-| `--search, -s`            | bool   | Start with search input active.                                                                                              |
-| `--role`                  | string | Filter by AX role. Comma-separated for multiple (e.g. `--role AXButton,AXLink`).                                             |
-| `--text`                  | string | Filter elements by text content (title, description, value). Case-insensitive substring match. Comma-separated for OR match. |
+| Flag                      | Type   | Description                                                                                                                        |
+| ------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `--action, -a`            | string | Action on selection (same values as [Common Flags](#common-flags))                                                                 |
+| `--repeat, -r`            | bool   | Re-activate hints after action (requires `--action`)                                                                               |
+| `--toggle, -t`            | bool   | Toggle hints on/off                                                                                                                |
+| `--cursor-selection-mode` | string | `follow` (default) or `hold` — whether cursor jumps to selection                                                                   |
+| `--search, -s`            | bool   | Start with search input active.                                                                                                    |
+| `--role`                  | string | Filter by AX role. Comma-separated for multiple (e.g. `--role AXButton,AXLink`).                                                   |
+| `--text`                  | string | Filter elements by text content (title, description, value). Case-insensitive substring match. Comma-separated for OR match.       |
 | `--strategy`              | string | Element detection strategy: `axtree` (macOS AX API, default) or `vision` (Vision Framework). Overrides config for this invocation. |
 
 The filter is preserved across repeat activations.
@@ -129,6 +132,7 @@ neru grid --cursor-selection-mode hold          # Grid with stationary cursor
 | ------------------------- | ------ | ------------------------------------------------------------------ |
 | `--action, -a`            | string | Action on selection (same values as [Common Flags](#common-flags)) |
 | `--repeat, -r`            | bool   | Re-activate grid after action (requires `--action`)                |
+| `--toggle, -t`            | bool   | Toggle grid on/off                                                 |
 | `--cursor-selection-mode` | string | `follow` (default) or `hold`                                       |
 
 ### Recursive Grid Mode
@@ -152,11 +156,16 @@ neru recursive_grid --action middle_click       # Middle-click via recursive gri
 | ------------------------- | ------ | ------------------------------------------------------------------ |
 | `--action, -a`            | string | Action on selection (same values as [Common Flags](#common-flags)) |
 | `--repeat, -r`            | bool   | Re-activate recursive grid after action (requires `--action`)      |
+| `--toggle, -t`            | bool   | Toggle recursive grid on/off                                       |
 | `--cursor-selection-mode` | string | `follow` (default) or `hold`                                       |
 
 ### Scroll Mode
 
 Vim-style scrolling at the current cursor position. Scroll speed and step sizes are configured in [CONFIGURATION.md](CONFIGURATION.md#scroll).
+
+| Flag           | Type | Description               |
+| -------------- | ---- | ------------------------- |
+| `--toggle, -t` | bool | Toggle scroll mode on/off |
 
 | Key       | Action              |
 | --------- | ------------------- |
@@ -169,6 +178,7 @@ Vim-style scrolling at the current cursor position. Scroll speed and step sizes 
 
 ```bash
 neru scroll
+neru scroll --toggle                              # Toggle scroll on/off
 # Use j/k to scroll, gg/G to jump, Esc to exit
 ```
 
@@ -283,11 +293,11 @@ neru action go_top                            # Jump to top
 neru action go_bottom                         # Jump to bottom
 ```
 
-| Flag          | Description                                                           |
-| ------------- | --------------------------------------------------------------------- |
+| Flag          | Description                                                                                                             |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `--steps`     | Override scroll step (pixels); `scroll_up`/`down`/`left`/`right` only (see [CONFIGURATION.md](CONFIGURATION.md#scroll)) |
-| `--selection` | Target mode selection                                                 |
-| `--bare`      | Target cursor position instead of mode selection                      |
+| `--selection` | Target mode selection                                                                                                   |
+| `--bare`      | Target cursor position instead of mode selection                                                                        |
 
 ### Mode Commands
 
@@ -363,29 +373,6 @@ neru action move_monitor --name "DELL U2720Q" # Move to named monitor
 | `--previous` | Cycle to previous monitor      |
 
 Find monitor names in **System Settings → Displays**.
-
-### Window Focus
-
-Cycles keyboard focus through all focusable windows on the current Space. Filters out minimized, hidden, and off-space windows.
-
-```bash
-neru action focus_window                        # Focus next window
-neru action focus_window --backward             # Focus previous window
-```
-
-| Flag         | Description                              |
-| ------------ | ---------------------------------------- |
-| `--backward` | Cycle to the previous window instead of next |
-
-Windows are enumerated across all running applications. Only windows with role `AXWindow` that are visible, not minimized, and on the active space are included.
-
-Bind to hotkeys for quick window switching:
-
-```toml
-[global.hotkeys]
-"Primary+Tab"       = "action focus_window"
-"Primary+Shift+Tab" = "action focus_window --backward"
-```
 
 ### Delay
 

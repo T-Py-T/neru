@@ -27,6 +27,8 @@ const (
 	BackendWaylandOther
 )
 
+const unknownBackendString = "unknown"
+
 // String returns a stable backend label for logs and capability details.
 func (b LinuxBackend) String() string {
 	switch b {
@@ -41,9 +43,9 @@ func (b LinuxBackend) String() string {
 	case BackendWaylandOther:
 		return "wayland-other"
 	case BackendUnknown:
-		return "unknown"
+		return unknownBackendString
 	default:
-		return "unknown"
+		return unknownBackendString
 	}
 }
 

@@ -136,11 +136,13 @@ func (h *IPCControllerModes) RegisterHandlers(
 	handlers[domain.CommandToggleCursorFollowSelection] = h.handleToggleCursorFollowSelection
 }
 
+const msgCursorSelectionModeRequires = "--cursor-selection-mode requires follow or hold"
+
 // modesUnavailableResponse returns a standardized response when modes handler is not available.
 func (h *IPCControllerModes) modesUnavailableResponse() ipc.Response {
 	return ipc.Response{
 		Success: false,
-		Message: "modes handler not available",
+		Message: msgModesHandlerNotAvailable,
 		Code:    ipc.CodeActionFailed,
 	}
 }
@@ -154,6 +156,7 @@ type ModeActivationOptions struct {
 	FilterTextContains    []string
 	Search                *bool
 	Strategy              *string
+	Toggle                *bool
 }
 
 // extractModeOptions extracts and validates the optional action and repeat
@@ -189,6 +192,9 @@ func (h *IPCControllerModes) extractModeOptions(
 		case arg == "--repeat" || arg == "-r":
 			repeatTrue := true
 			opts.Repeat = &repeatTrue
+		case arg == "--toggle" || arg == "-t":
+			toggleTrue := true
+			opts.Toggle = &toggleTrue
 		case arg == "--search" || arg == "-s":
 			searchTrue := true
 			opts.Search = &searchTrue
@@ -218,7 +224,7 @@ func (h *IPCControllerModes) extractModeOptions(
 		case strings.HasPrefix(arg, "--cursor-selection-mode="):
 			resp := ipc.Response{
 				Success: false,
-				Message: "--cursor-selection-mode requires follow or hold",
+				Message: msgCursorSelectionModeRequires,
 				Code:    ipc.CodeInvalidInput,
 			}
 
@@ -227,7 +233,7 @@ func (h *IPCControllerModes) extractModeOptions(
 			if startIdx+1 >= len(cmd.Args) {
 				resp := ipc.Response{
 					Success: false,
-					Message: "--cursor-selection-mode requires follow or hold",
+					Message: msgCursorSelectionModeRequires,
 					Code:    ipc.CodeInvalidInput,
 				}
 
@@ -246,7 +252,7 @@ func (h *IPCControllerModes) extractModeOptions(
 			default:
 				resp := ipc.Response{
 					Success: false,
-					Message: "--cursor-selection-mode requires follow or hold",
+					Message: msgCursorSelectionModeRequires,
 					Code:    ipc.CodeInvalidInput,
 				}
 
@@ -423,6 +429,7 @@ func (h *IPCControllerModes) handleHints(_ context.Context, cmd ipc.Command) ipc
 		FilterTextContains:    opts.FilterTextContains,
 		Search:                opts.Search,
 		Strategy:              opts.Strategy,
+		Toggle:                opts.Toggle,
 	})
 
 	return ipc.Response{Success: true, Message: "hints mode activated", Code: ipc.CodeOK}
@@ -442,6 +449,7 @@ func (h *IPCControllerModes) handleGrid(_ context.Context, cmd ipc.Command) ipc.
 		Action:                opts.Action,
 		Repeat:                opts.Repeat,
 		CursorFollowSelection: opts.CursorFollowSelection,
+		Toggle:                opts.Toggle,
 	})
 
 	return ipc.Response{Success: true, Message: "grid mode activated", Code: ipc.CodeOK}
@@ -461,17 +469,25 @@ func (h *IPCControllerModes) handleRecursiveGrid(_ context.Context, cmd ipc.Comm
 		Action:                opts.Action,
 		Repeat:                opts.Repeat,
 		CursorFollowSelection: opts.CursorFollowSelection,
+		Toggle:                opts.Toggle,
 	})
 
 	return ipc.Response{Success: true, Message: "recursive-grid mode activated", Code: ipc.CodeOK}
 }
 
-func (h *IPCControllerModes) handleScroll(_ context.Context, _ ipc.Command) ipc.Response {
+func (h *IPCControllerModes) handleScroll(_ context.Context, cmd ipc.Command) ipc.Response {
 	if h.modes == nil {
 		return h.modesUnavailableResponse()
 	}
 
-	h.modes.ActivateMode(domain.ModeScroll)
+	opts, errResp := h.extractModeOptions(cmd)
+	if errResp != nil {
+		return *errResp
+	}
+
+	h.modes.ActivateModeWithOptions(domain.ModeScroll, modes.ModeActivationOptions{
+		Toggle: opts.Toggle,
+	})
 
 	return ipc.Response{Success: true, Message: "scroll mode activated", Code: ipc.CodeOK}
 }

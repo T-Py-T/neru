@@ -35,7 +35,10 @@ const (
 	BuildModeBackendDependent BuildMode = "backend_dependent"
 )
 
-const defaultPrimaryModifier = "ctrl"
+const (
+	defaultPrimaryModifier                 = "ctrl"
+	backendPlanNameX11OrCompositorSpecific = "x11 or compositor-specific backend"
+)
 
 // BackendPlan describes the intended backend family for one subsystem and
 // whether contributors should expect CGO to be required.
@@ -97,7 +100,7 @@ func ProfileFor(target OS) Profile {
 	case Windows:
 		return Profile{
 			OS:              Windows,
-			PrimaryModifier: "ctrl",
+			PrimaryModifier: defaultPrimaryModifier,
 			DisplayServer:   DisplayServerWin32,
 			Accessibility: BackendPlan{
 				Name:      "uia",
@@ -148,7 +151,7 @@ func CurrentProfile() Profile {
 func linuxProfile(ds DisplayServer) Profile {
 	return Profile{
 		OS:              Linux,
-		PrimaryModifier: "ctrl",
+		PrimaryModifier: defaultPrimaryModifier,
 		DisplayServer:   ds,
 		Accessibility: BackendPlan{
 			Name:      "at-spi",
@@ -156,12 +159,12 @@ func linuxProfile(ds DisplayServer) Profile {
 			Notes:     "Prefer D-Bus/pure-Go bindings before reaching for CGO",
 		},
 		Hotkeys: BackendPlan{
-			Name:      "x11 or compositor-specific backend",
+			Name:      backendPlanNameX11OrCompositorSpecific,
 			BuildMode: BuildModeBackendDependent,
 			Notes:     "X11 may stay pure Go; Wayland/compositor paths may need CGO or native helpers",
 		},
 		KeyboardCapture: BackendPlan{
-			Name:      "x11 or compositor-specific backend",
+			Name:      backendPlanNameX11OrCompositorSpecific,
 			BuildMode: BuildModeBackendDependent,
 			Notes:     "Backend choice determines whether pure Go is enough",
 		},

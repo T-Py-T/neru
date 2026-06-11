@@ -25,6 +25,7 @@ Neru uses TOML for configuration. No config file is required — Neru works out 
 - [Sticky Modifiers](#sticky_modifiers)
 - [Smooth Cursor](#smooth_cursor)
 - [Smooth Scroll](#smooth_scroll)
+- [Held Repeat](#held_repeat)
 - [Systray](#systray)
 - [Logging](#logging)
 
@@ -180,6 +181,8 @@ Use `__disabled__` to remove individual defaults:
 
 When a mode is disabled (`enabled = false`), its default launcher hotkey is removed automatically.
 
+**Mode toggling:** Append `--toggle` to turn a hotkey into a toggle — activates the mode on first press, exits to idle on the second. Works with any mode: `"Ctrl+F" = "grid --toggle"`.
+
 ### Per-Mode Hotkeys
 
 Each mode can define hotkeys active only while that mode is running. Follows the same [merging rules](#merging-behavior) as global hotkeys.
@@ -220,22 +223,21 @@ hotkeys = {
 
 All actions available in hotkeys. These also work as `neru action <name>` — see [CLI.md](CLI.md#action-commands) for full flag documentation.
 
-| Category    | Actions                                                       |
-| ----------- | ------------------------------------------------------------- |
-| Click       | `left_click`, `right_click`, `middle_click`                   |
-| Mouse       | `mouse_down`, `mouse_up`, `move_mouse`, `move_mouse_relative` |
-| Scroll      | `scroll_up`, `scroll_down`, `scroll_left`, `scroll_right`     |
-| Page        | `page_up`, `page_down`, `go_top`, `go_bottom`                 |
-| Keyboard    | `feed`                                                        |
-| Hints       | `search_hints`, `cycle_hint`, `cycle_hint --backward`         |
+| Category    | Actions                                                                               |
+| ----------- | ------------------------------------------------------------------------------------- |
+| Click       | `left_click`, `right_click`, `middle_click`                                           |
+| Mouse       | `mouse_down`, `mouse_up`, `move_mouse`, `move_mouse_relative`                         |
+| Scroll      | `scroll_up`, `scroll_down`, `scroll_left`, `scroll_right`                             |
+| Page        | `page_up`, `page_down`, `go_top`, `go_bottom`                                         |
+| Keyboard    | `feed`                                                                                |
+| Hints       | `search_hints`, `cycle_hint`, `cycle_hint --backward`                                 |
 | Delay       | `sleep <duration>` — plain numbers are seconds (`0.5`), explicit units: `500ms`, `1s` |
-| Mode        | `reset`, `backspace`                                          |
-| Composition | `wait_for_mode_exit`, `save_cursor_pos`, `restore_cursor_pos` |
-| Focus       | `focus_window`, `focus_window --backward`                     |
+| Mode        | `reset`, `backspace`                                                                  |
+| Composition | `wait_for_mode_exit`, `save_cursor_pos`, `restore_cursor_pos`                         |
 
 - Use `--bare` (e.g. `"action left_click --bare"`) to target the cursor position instead of the current mode selection (see [CLI.md](CLI.md#clicks))
 - `scroll_up` / `scroll_down` support `--steps` (e.g. `"action scroll_down --steps 200"`) to override `scroll_step` (see [CLI.md](CLI.md#scrolling))
-- `reset`, `backspace`, `search_hints`, `cycle_hint`, `focus_window`, `sleep`, `wait_for_mode_exit`, `save_cursor_pos`, and `restore_cursor_pos` are not valid mode `--action` values — use `neru action ...` or in hotkeys as `"action ..."`
+- `reset`, `backspace`, `search_hints`, `cycle_hint`, `sleep`, `wait_for_mode_exit`, `save_cursor_pos`, and `restore_cursor_pos` are not valid mode `--action` values — use `neru action ...` or in hotkeys as `"action ..."`
 
 #### Feed Keys
 
@@ -262,21 +264,25 @@ See [CLI.md](CLI.md#feed-keys) for syntax, supported key names, and platform beh
 
 ## [general]
 
-| Option                                 | Type   | Default | Description                                         |
-| -------------------------------------- | ------ | ------- | --------------------------------------------------- |
-| `excluded_apps`                        | array  | `[]`    | Bundle IDs where Neru won't activate                |
-| `kb_layout_to_use`                     | string | `""`    | Force keyboard layout InputSourceID (auto if empty) |
-| `hide_overlay_in_screen_share`         | bool   | `false` | Hide overlay in screen sharing apps                 |
-| `passthrough_unbounded_keys`           | bool   | `false` | Let unbound Cmd/Ctrl/Alt shortcuts pass through     |
-| `should_exit_after_passthrough`        | bool   | `false` | Exit mode after a passthrough shortcut              |
-| `passthrough_unbounded_keys_blacklist` | array  | `[]`    | Shortcuts to keep consumed when passthrough is on   |
-| `exec_shell`                           | string | `"/bin/bash"` | Shell binary used for `exec` hotkey commands |
-| `exec_shell_args`                      | array  | `["-lc"]` | Shell arguments; command string is appended last |
+| Option                                 | Type   | Default       | Description                                                                                       |
+| -------------------------------------- | ------ | ------------- | ------------------------------------------------------------------------------------------------- |
+| `excluded_apps`                        | array  | `[]`          | Bundle IDs where Neru won't activate                                                              |
+| `kb_layout_to_use`                     | string | `""`          | Force keyboard layout InputSourceID bundle ID (auto if empty). E.g. `com.apple.keylayout.Colemak` |
+| `hide_overlay_in_screen_share`         | bool   | `false`       | Hide overlay in screen sharing apps                                                               |
+| `passthrough_unbounded_keys`           | bool   | `false`       | Let unbound Cmd/Ctrl/Alt shortcuts pass through                                                   |
+| `should_exit_after_passthrough`        | bool   | `false`       | Exit mode after a passthrough shortcut                                                            |
+| `passthrough_unbounded_keys_blacklist` | array  | `[]`          | Shortcuts to keep consumed when passthrough is on                                                 |
+| `exec_shell`                           | string | `"/bin/bash"` | Shell binary used for `exec` hotkey commands                                                      |
+| `exec_shell_args`                      | array  | `["-lc"]`     | Shell arguments; command string is appended last                                                  |
 
 Find available `kb_layout_to_use` IDs on macOS:
 
 ```bash
+# get all enabled input sources
 defaults read com.apple.HIToolbox AppleEnabledInputSources
+
+# get the current keyboard layout that is active (e.g. if you use dvorak, it should be `com.apple.keylayout.Dvorak`)
+defaults read com.apple.HIToolbox AppleCurrentKeyboardLayoutInputSourceID
 ```
 
 ---
@@ -323,25 +329,25 @@ Start with search visible: `neru hints --search` (see [CLI.md](CLI.md#hints-mode
 
 ### Options
 
-| Option                             | Type         | Default                 | Description                                               |
-| ---------------------------------- | ------------ | ----------------------- | --------------------------------------------------------- |
-| `enabled`                          | bool         | `true`                  | Enable/disable hints mode                                 |
+| Option                             | Type         | Default                 | Description                                                                                                                                                                                                                                                                                                      |
+| ---------------------------------- | ------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                          | bool         | `true`                  | Enable/disable hints mode                                                                                                                                                                                                                                                                                        |
 | `strategy`                         | string       | `"axtree"`              | Element detection strategy: `"axtree"` (macOS Accessibility API) or `"vision"` (Vision Framework). Vision mode detects the frontmost window content via screen capture + text/rectangle recognition while still using AX for system elements (menubar, dock, NC). Overridable per-app via `[hints.app_configs]`. |
-| `hint_characters`                  | string       | `"asdfghjkl"`           | Characters used for labels                                |
-| `max_depth`                        | int          | `50`                    | Max accessibility tree depth (0 = unlimited)              |
-| `include_menubar_hints`            | bool         | `false`                 | Show hints on menubar items                               |
-| `include_dock_hints`               | bool         | `false`                 | Show hints on Dock items                                  |
-| `include_nc_hints`                 | bool         | `false`                 | Show hints in Notification Center                         |
-| `include_stage_manager_hints`      | bool         | `false`                 | Show hints in Stage Manager                               |
-| `include_pip_hints`                | bool         | `false`                 | Show hints on Picture in Picture controls                 |
-| `include_screen_capture_hints`     | bool         | `false`                 | Show hints on Screen Capture controls                     |
-| `detect_mission_control`           | bool         | `false`                 | Enable Mission Control state detection                    |
-| `on_mission_control_activated`     | string/array | `nil`                   | Action(s) to execute when Mission Control opens           |
-| `on_mission_control_deactivated`   | string/array | `nil`                   | Action(s) to execute when Mission Control closes          |
-| `additional_menubar_hints_targets` | array        | macOS-specific defaults | Extra menubar bundle IDs                                  |
-| `clickable_roles`                  | array        | macOS-specific defaults | AX roles that generate hints                              |
-| `ignore_clickable_check`           | bool         | `false`                 | Skip clickability heuristic                               |
-| `visible_check_enabled`            | bool         | `false`                 | Enable visibility hit-test (slower but fewer noisy hints) |
+| `hint_characters`                  | string       | `"asdfghjkl"`           | Characters used for labels                                                                                                                                                                                                                                                                                       |
+| `max_depth`                        | int          | `50`                    | Max accessibility tree depth (0 = unlimited)                                                                                                                                                                                                                                                                     |
+| `include_menubar_hints`            | bool         | `false`                 | Show hints on menubar items                                                                                                                                                                                                                                                                                      |
+| `include_dock_hints`               | bool         | `false`                 | Show hints on Dock items                                                                                                                                                                                                                                                                                         |
+| `include_nc_hints`                 | bool         | `false`                 | Show hints in Notification Center                                                                                                                                                                                                                                                                                |
+| `include_stage_manager_hints`      | bool         | `false`                 | Show hints in Stage Manager                                                                                                                                                                                                                                                                                      |
+| `include_pip_hints`                | bool         | `false`                 | Show hints on Picture in Picture controls                                                                                                                                                                                                                                                                        |
+| `include_screen_capture_hints`     | bool         | `false`                 | Show hints on Screen Capture controls                                                                                                                                                                                                                                                                            |
+| `detect_mission_control`           | bool         | `false`                 | Enable Mission Control state detection                                                                                                                                                                                                                                                                           |
+| `on_mission_control_activated`     | string/array | `nil`                   | Action(s) to execute when Mission Control opens                                                                                                                                                                                                                                                                  |
+| `on_mission_control_deactivated`   | string/array | `nil`                   | Action(s) to execute when Mission Control closes                                                                                                                                                                                                                                                                 |
+| `additional_menubar_hints_targets` | array        | macOS-specific defaults | Extra menubar bundle IDs                                                                                                                                                                                                                                                                                         |
+| `clickable_roles`                  | array        | macOS-specific defaults | AX roles that generate hints                                                                                                                                                                                                                                                                                     |
+| `ignore_clickable_check`           | bool         | `false`                 | Skip clickability heuristic                                                                                                                                                                                                                                                                                      |
+| `visible_check_enabled`            | bool         | `false`                 | Enable visibility hit-test (slower but fewer noisy hints)                                                                                                                                                                                                                                                        |
 
 ### UI
 
@@ -411,42 +417,61 @@ width = 320
 
 Framework-specific accessibility improvements for Electron, Chromium, Firefox, and WebKit apps:
 
+| Option                        | Type  | Default | Description                  |
+| ----------------------------- | ----- | ------- | ---------------------------- |
+| `enable`                      | bool  | `false` | Enable additional AX support |
+| `additional_electron_bundles` | array | `[]`    | Bundle IDs of Electron apps  |
+| `additional_chromium_bundles` | array | `[]`    | Bundle IDs of Chromium apps  |
+| `additional_firefox_bundles`  | array | `[]`    | Bundle IDs of Firefox apps   |
+| `additional_webkit_bundles`   | array | `[]`    | Bundle IDs of WebKit apps    |
+
 ```toml
 [hints.additional_ax_support]
 enable = false
-additional_electron_bundles  = []
-additional_chromium_bundles  = []
-additional_firefox_bundles   = []
-additional_webkit_bundles    = []
+additional_electron_bundles = []
+additional_chromium_bundles = []
+additional_firefox_bundles = []
+additional_webkit_bundles = []
 ```
 
 Find bundle IDs: `osascript -e 'id of app "Safari"'`
+
+> [!TIP]
+> To support installed PWA apps, add a wildcard bundle ID to the appropriate browser array. For example, to support Brave-installed PWAs, add `"com.brave.Browser.app.*"` to `additional_chromium_bundles`:
+>
+> ```toml
+> [hints.additional_ax_support]
+> enable = true
+> additional_chromium_bundles = ["com.brave.Browser.app.*"]
+> ```
+>
+> Adapt the bundle ID prefix for other browsers (e.g. `"com.google.Chrome.app.*"` for Chrome).
 
 ### Vision
 
 Tunable settings for Vision-based hint detection (only used when `hints.strategy` or the app-specific `strategy` override is set to `"vision"`).
 
-| Option | Type | Default | Description |
-| ------------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------ |
-| `detect_text` | bool | `true` | Enable text detection via the Vision framework. |
-| `detect_rectangles` | bool | `true` | Enable rectangle detection via the Vision framework. |
-| `request_timeout_ms` | int | `5000` | Timeout in milliseconds for Vision framework analysis requests. |
-| `minimum_confidence` | float | `0.0` | Minimum confidence score (0.0 to 1.0) for keeping Vision framework observations. |
-| `merge_iou_threshold` | float | `0.5` | Intersection-over-Union (IoU) overlap threshold for merging redundant overlapping bounding boxes. |
-| `rectangle_max_candidates` | int | `100` | Maximum number of rectangle candidate observations to evaluate. |
-| `rectangle_min_size` | float | `0.01` | Minimum normalized size of detected rectangles (e.g. `0.01` is 1% of screen/window dimensions). |
-| `rectangle_min_aspect` | float | `0.3` | Minimum aspect ratio (width/height) for rectangle elements. |
-| `rectangle_max_aspect` | float | `10.0` | Maximum aspect ratio (width/height) for rectangle elements. |
-| `button_min_confidence` | float | `0.3` | Minimum confidence score threshold for classifying a rectangle as a button. |
-| `button_min_aspect` | float | `0.8` | Minimum aspect ratio for button elements. |
-| `button_max_aspect` | float | `8.0` | Maximum aspect ratio for button elements. |
-| `button_icon_max_size` | int | `48` | Maximum width/height in pixels for square button or icon elements. |
-| `link_min_aspect` | float | `5.0` | Minimum aspect ratio for text link elements. |
-| `link_max_height` | int | `40` | Maximum height in pixels for text link elements. |
-| `link_min_width` | int | `50` | Minimum width in pixels for text link elements. |
-| `image_min_size` | int | `48` | Minimum width/height in pixels for image elements. |
-| `checkbox_max_size` | int | `32` | Maximum width/height in pixels for checkbox elements. |
-| `generic_clickable_min_confidence` | float | `0.5` | Minimum confidence threshold for generic clickable elements. |
+| Option                             | Type  | Default | Description                                                                                       |
+| ---------------------------------- | ----- | ------- | ------------------------------------------------------------------------------------------------- |
+| `detect_text`                      | bool  | `true`  | Enable text detection via the Vision framework.                                                   |
+| `detect_rectangles`                | bool  | `true`  | Enable rectangle detection via the Vision framework.                                              |
+| `request_timeout_ms`               | int   | `5000`  | Timeout in milliseconds for Vision framework analysis requests.                                   |
+| `minimum_confidence`               | float | `0.0`   | Minimum confidence score (0.0 to 1.0) for keeping Vision framework observations.                  |
+| `merge_iou_threshold`              | float | `0.5`   | Intersection-over-Union (IoU) overlap threshold for merging redundant overlapping bounding boxes. |
+| `rectangle_max_candidates`         | int   | `100`   | Maximum number of rectangle candidate observations to evaluate.                                   |
+| `rectangle_min_size`               | float | `0.01`  | Minimum normalized size of detected rectangles (e.g. `0.01` is 1% of screen/window dimensions).   |
+| `rectangle_min_aspect`             | float | `0.3`   | Minimum aspect ratio (width/height) for rectangle elements.                                       |
+| `rectangle_max_aspect`             | float | `10.0`  | Maximum aspect ratio (width/height) for rectangle elements.                                       |
+| `button_min_confidence`            | float | `0.3`   | Minimum confidence score threshold for classifying a rectangle as a button.                       |
+| `button_min_aspect`                | float | `0.8`   | Minimum aspect ratio for button elements.                                                         |
+| `button_max_aspect`                | float | `8.0`   | Maximum aspect ratio for button elements.                                                         |
+| `button_icon_max_size`             | int   | `48`    | Maximum width/height in pixels for square button or icon elements.                                |
+| `link_min_aspect`                  | float | `5.0`   | Minimum aspect ratio for text link elements.                                                      |
+| `link_max_height`                  | int   | `40`    | Maximum height in pixels for text link elements.                                                  |
+| `link_min_width`                   | int   | `50`    | Minimum width in pixels for text link elements.                                                   |
+| `image_min_size`                   | int   | `48`    | Minimum width/height in pixels for image elements.                                                |
+| `checkbox_max_size`                | int   | `32`    | Maximum width/height in pixels for checkbox elements.                                             |
+| `generic_clickable_min_confidence` | float | `0.5`   | Minimum confidence threshold for generic clickable elements.                                      |
 
 ```toml
 [hints.vision]
@@ -473,14 +498,14 @@ generic_clickable_min_confidence = 0.5
 
 ### Per-App Config
 
-| Field                        | Type   | Description                                           |
-| ---------------------------- | ------ | ----------------------------------------------------- |
-| `bundle_id`                  | string | App bundle ID                                         |
+| Field                        | Type   | Description                                                                                                              |
+| ---------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `bundle_id`                  | string | App bundle ID                                                                                                            |
 | `strategy`                   | string | Override element detection strategy for this app (`"axtree"` or `"vision"`). Empty string = use global `hints.strategy`. |
-| `additional_clickable_roles` | array  | Extra AX roles to treat as clickable                  |
-| `ignore_clickable_check`     | bool   | Skip clickability heuristic for this app              |
-| `visible_check_enabled`      | bool   | Enable visibility hit-test for this app               |
-| `hotkeys`                    | map    | [per-app hotkey overrides](#per-app-hotkey-overrides) |
+| `additional_clickable_roles` | array  | Extra AX roles to treat as clickable                                                                                     |
+| `ignore_clickable_check`     | bool   | Skip clickability heuristic for this app                                                                                 |
+| `visible_check_enabled`      | bool   | Enable visibility hit-test for this app                                                                                  |
+| `hotkeys`                    | map    | [per-app hotkey overrides](#per-app-hotkey-overrides)                                                                    |
 
 ```toml
 [[hints.app_configs]]
@@ -553,16 +578,16 @@ Cursor behavior: `neru recursive_grid --cursor-selection-mode follow|hold` (see 
 
 ### Options
 
-| Option            | Type   | Default  | Description                                                      |
-| ----------------- | ------ | -------- | ---------------------------------------------------------------- |
-| `enabled`         | bool   | `true`   | Enable/disable mode                                              |
-| `grid_cols`       | int    | `3`      | Columns (≥ 1; total cells ≥ 2)                                   |
-| `grid_rows`       | int    | `3`      | Rows (≥ 1; total cells ≥ 2)                                      |
+| Option            | Type   | Default       | Description                                                      |
+| ----------------- | ------ | ------------- | ---------------------------------------------------------------- |
+| `enabled`         | bool   | `true`        | Enable/disable mode                                              |
+| `grid_cols`       | int    | `3`           | Columns (≥ 1; total cells ≥ 2)                                   |
+| `grid_rows`       | int    | `3`           | Rows (≥ 1; total cells ≥ 2)                                      |
 | `keys`            | string | `"rtyfghvbn"` | Cell selection keys (must be `grid_cols × grid_rows` characters) |
-| `min_size_width`  | int    | `25`     | Minimum cell width in pixels                                     |
-| `min_size_height` | int    | `25`     | Minimum cell height in pixels                                    |
-| `max_depth`       | int    | `10`     | Maximum recursion levels (1–20)                                  |
-| `layers`          | array  | `[]`     | Per-depth layout overrides (see below)                           |
+| `min_size_width`  | int    | `1`           | Minimum cell width in pixels                                     |
+| `min_size_height` | int    | `1`           | Minimum cell height in pixels                                    |
+| `max_depth`       | int    | `10`          | Maximum recursion levels (1–20)                                  |
+| `layers`          | array  | `[]`          | Per-depth layout overrides (see below)                           |
 
 #### Layers
 
@@ -587,8 +612,8 @@ layers = [
 
 | Option        | Type | Default | Description                                     |
 | ------------- | ---- | ------- | ----------------------------------------------- |
-| `enabled`     | bool | `true` | Native depth transitions on supported platforms |
-| `duration_ms` | int  | `50`   | Transition duration in milliseconds             |
+| `enabled`     | bool | `true`  | Native depth transitions on supported platforms |
+| `duration_ms` | int  | `50`    | Transition duration in milliseconds             |
 
 ### UI
 
@@ -637,11 +662,11 @@ Keyboard-driven scrolling.
 
 ### Options
 
-| Option             | Type | Default   | Description                        |
-| ------------------ | ---- | --------- | ---------------------------------- |
-| `scroll_step`      | int  | `50`      | Pixels per line scroll action      |
-| `scroll_step_half` | int  | `500`     | Pixels per half-page action        |
-| `scroll_step_full` | int  | `1000000` | Pixels for top/bottom jump actions |
+| Option             | Type | Default   | Description                                                                                     |
+| ------------------ | ---- | --------- | ----------------------------------------------------------------------------------------------- |
+| `scroll_step`      | int  | `50`      | Pixels per line scroll action                                                                   |
+| `scroll_step_half` | int  | `500`     | Pixels per half-page action                                                                     |
+| `scroll_step_full` | int  | `1000000` | Pixels for top/bottom jump actions                                                              |
 | `invert_scroll`    | bool | `false`   | Invert scroll direction (useful when using tools like Mos that reverse synthetic scroll events) |
 
 ### Default Hotkeys
@@ -679,7 +704,6 @@ scroll_step_half = 200
 scroll_step_full = 1000
 hotkeys = { "k" = "action scroll_up", "j" = "action scroll_down" }
 ```
-
 
 ---
 
@@ -892,6 +916,25 @@ duration_per_pixel = 1.0
 
 ---
 
+## [held_repeat]
+
+Repeatedly dispatches scroll, page, and relative-mouse-move actions while the key is held, with a configurable initial delay and repeat interval. Disable held-key repeat entirely by setting `enabled = false`.
+
+| Option             | Type | Default | Description                              |
+| ------------------ | ---- | ------- | ---------------------------------------- |
+| `enabled`          | bool | `false` | Master toggle for held-key repeat        |
+| `initial_delay_ms` | int  | `50`    | Delay before first repeat fires (ms)     |
+| `interval_ms`      | int  | `50`    | Interval between subsequent repeats (ms) |
+
+```toml
+[held_repeat]
+enabled = false
+initial_delay_ms = 50
+interval_ms = 50
+```
+
+---
+
 ## [systray]
 
 | Option    | Type | Default | Description                |
@@ -904,14 +947,22 @@ duration_per_pixel = 1.0
 
 ## [logging]
 
-| Option                 | Type   | Default  | Description                                     |
-| ---------------------- | ------ | -------- | ----------------------------------------------- |
-| `log_level`            | string | `"info"` | Level: `debug`, `info`, `warn`, `error`         |
-| `log_file`             | string | `""`     | Custom log file path (empty = default location) |
+| Option                 | Type   | Default  | Description                                       |
+| ---------------------- | ------ | -------- | ------------------------------------------------- |
+| `log_level`            | string | `"info"` | Level: `debug`, `info`, `warn`, `error`           |
+| `log_file`             | string | `""`     | Custom log file path (empty = default location)   |
 | `disable_file_logging` | bool   | `true`   | Console only (no file); file logs always use JSON |
-| `max_file_size`        | int    | `10`     | MB before rotation                              |
-| `max_backups`          | int    | `5`      | Old log files to keep                           |
-| `max_age`              | int    | `30`     | Days to retain old logs                         |
+| `max_file_size`        | int    | `10`     | MB before rotation                                |
+| `max_backups`          | int    | `5`      | Old log files to keep                             |
+| `max_age`              | int    | `30`     | Days to retain old logs                           |
+
+When `log_file` is empty, Neru writes to a platform default location:
+
+| Platform | Default log file                  |
+| -------- | --------------------------------- |
+| macOS    | `~/Library/Logs/neru/app.log`     |
+| Linux    | `~/.local/state/neru/log/app.log` |
+| Windows  | `%LOCALAPPDATA%\neru\log\app.log` |
 
 When `log_file` is empty, Neru writes to a platform default location:
 

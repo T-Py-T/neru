@@ -107,16 +107,16 @@ func Init(
 	if !disableFileLogging {
 		// Determine log file path
 		if logFilePath == "" {
-			var pathErr error
-
-			logFilePath, pathErr = defaultLogFilePath()
-			if pathErr != nil {
+			defaultLogFilePath, err := defaultLogFilePath()
+			if err != nil {
 				return derrors.Wrap(
-					pathErr,
+					err,
 					derrors.CodeLoggingFailed,
-					"failed to resolve default log file path",
+					"failed to determine default log file path",
 				)
 			}
+
+			logFilePath = defaultLogFilePath
 		}
 
 		// Create log directory

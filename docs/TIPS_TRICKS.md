@@ -16,9 +16,9 @@
 - [Give Browser Content Time To Load Before Refreshing Hints](#give-browser-content-time-to-load-before-refreshing-hints)
 - [Checking the Accessibility Tree on macOS](#checking-the-accessibility-tree-on-macos)
 - [Running a Custom Configuration via App Bundle](#running-a-custom-configuration-via-app-bundle)
+- [Edit Config File Directly](#edit-config-file-directly)
 - [Triggering Neru Actions from External Tools](#triggering-neru-actions-from-external-tools)
 - [Combining Hints with Other Actions](#combining-hints-with-other-actions)
-- [Moving windows to other macOS native spaces](#moving-windows-to-other-macos-native-spaces)
 - [Further Reading](#further-reading)
 
 ---
@@ -151,6 +151,19 @@ Grid and recursive-grid now include this toggle in the default config, bound to 
 
 This keeps the real pointer still while you navigate. Point-targeted actions now prefer the current selection by default, so `"Return" = "action left_click"` and scroll actions will commit against the selection unless you opt out with `--bare`.
 
+## Mode Toggle (On/Off)
+
+Use `--toggle` to turn a single hotkey into a mode toggle — pressing it once activates the mode, pressing it again returns to idle:
+
+```toml
+[hotkeys]
+"Ctrl+F" = "grid --toggle"
+"Ctrl+G" = "recursive_grid --toggle"
+"Ctrl+H" = "hints --toggle"
+```
+
+This is especially useful when you want a single key to both enter and exit a mode, avoiding the need for a separate `Escape` press or a dedicated exit keybinding.
+
 ## Disabling All Built-In Hotkeys
 
 To disable all built-in hotkeys (e.g. when using an external hotkey daemon like skhd), provide an empty `[hotkeys]` section:
@@ -224,6 +237,16 @@ open -a neru --args launch -c /absolute/path/to/your/config
 
 This is useful for testing a config before committing it to your dotfiles, or for keeping separate profiles (e.g. a lighter config when presenting or screen-sharing).
 
+## Edit Config File Directly
+
+Quickly open your config in an editor without hunting for the file path:
+
+```bash
+neru status 2>&1 | grep Config | awk '{print $2}' | xargs nvim
+```
+
+You can wrap this in a shell alias or bind it to a key in your window manager / hotkey daemon.
+
 ## Triggering Neru Actions from External Tools
 
 Because Neru exposes an IPC-based CLI, you can drive it from anything — Hammerspoon, Raycast scripts, shell aliases, or other hotkey daemons — without going through Neru's own hotkey system.
@@ -252,19 +275,6 @@ The `--action` flag on hints mode is not limited to `left_click`. You can pass o
 ```
 
 Useful for apps where you frequently need a right-click menu (e.g. Finder, VS Code file tree) without moving your hands to the mouse.
-
-## Moving windows to other macOS native spaces
-
-The snippet is ugly but it works fine, feel free to improvise it. Things to note:
-
-- `feed <key>` should be your native macOS hotkey for switching spaces
-- `yabai` is just something that I uses and not required
-- restore cursor is also optional
-
-```toml
-"Alt+Shift+1" = ["action save_cursor_pos", "action move_mouse --window --y -1000 --x -1000", "action sleep 0.05", "action move_mouse_relative --dx 100 --dy 2", "action sleep 0.05", "action mouse_down", "action sleep 0.1", "action move_mouse_relative --dx 5 --dy 5", "action sleep 0.1", "action feed cmd+shift+ctrl+alt+1", "action sleep 0.2", "action mouse_up", "exec yabai -m space --balance", "action restore_cursor_pos"]
-"Alt+Shift+2" = ["action save_cursor_pos", "action move_mouse --window --y -1000 --x -1000", "action sleep 0.05", "action move_mouse_relative --dx 100 --dy 2", "action sleep 0.05", "action mouse_down", "action sleep 0.1", "action move_mouse_relative --dx 5 --dy 5", "action sleep 0.1", "action feed cmd+shift+ctrl+alt+2", "action sleep 0.2", "action mouse_up", "exec yabai -m space --balance", "action restore_cursor_pos"]
-```
 
 ---
 
