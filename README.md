@@ -212,6 +212,18 @@ Neru is built and maintained by one person, entirely in spare time. If it's earn
 
 ---
 
+## Just need window management?
+
+mimi grew out of this project — it's the window and space management pieces extracted into a standalone tool, for when neru is more than you need.
+
+```bash
+brew install --cask y3owk1n/tap/mimi
+```
+
+→ [github.com/y3owk1n/mimi](https://github.com/y3owk1n/mimi)
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
