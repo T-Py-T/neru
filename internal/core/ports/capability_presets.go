@@ -97,17 +97,17 @@ func WindowsCapabilities() PlatformCapabilities {
 			"cursor movement and tracking available via SetCursorPos/GetCursorPos",
 		),
 		Accessibility: stubCapability("UI Automation integration not implemented yet"),
-		Overlay: stubCapability(
-			"native overlays not implemented yet; target layered Win32 windows",
+		Overlay: supportedCapability(
+			"native overlays available via layered Win32 window + GDI",
 		),
 		Notifications: stubCapability(
 			"native notifications not implemented yet; target Windows toast notifications",
 		),
-		GlobalHotkeys: stubCapability(
-			"global hotkeys not implemented yet; target RegisterHotKey",
+		GlobalHotkeys: supportedCapability(
+			"global hotkeys available via RegisterHotKey",
 		),
-		KeyboardEventTap: stubCapability(
-			"keyboard event tap not implemented yet; target low-level keyboard hooks",
+		KeyboardEventTap: supportedCapability(
+			"keyboard event tap available via WH_KEYBOARD_LL hook",
 		),
 		AppWatcher: stubCapability(
 			"app watcher not implemented yet; target Win32 foreground-window notifications",

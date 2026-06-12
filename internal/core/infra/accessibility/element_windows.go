@@ -4,11 +4,19 @@ package accessibility
 
 import (
 	"image"
+	"sync"
 
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/config"
 	"github.com/y3owk1n/neru/internal/core/domain/action"
+	winplatform "github.com/y3owk1n/neru/internal/core/infra/platform/windows"
+)
+
+var (
+	windowsMouseDownMu  sync.RWMutex
+	windowsMouseDown    bool
+	windowsMouseDownPos image.Point
 )
 
 // Element represents a UI element for Windows (stub).
@@ -137,65 +145,125 @@ func FrontmostAndPopoverWindows() ([]*Element, error) { return []*Element{}, nil
 // FrontmostWindow returns the frontmost window (stub).
 func FrontmostWindow() *Element { return nil }
 
-// SetLeftMouseDown sets the left mouse down state (stub).
-func SetLeftMouseDown(down bool, position image.Point) {}
+// SetLeftMouseDown sets the left mouse down state.
+func SetLeftMouseDown(down bool, position image.Point) {
+	windowsMouseDownMu.Lock()
+	defer windowsMouseDownMu.Unlock()
 
-// IsLeftMouseDown returns whether the left mouse button is down (stub).
-func IsLeftMouseDown() bool { return false }
+	windowsMouseDown = down
+	windowsMouseDownPos = position
+}
 
-// GetLastMouseDownPosition returns the last mouse down position (stub).
-func GetLastMouseDownPosition() image.Point { return image.Point{} }
+// IsLeftMouseDown returns whether the left mouse button is down.
+func IsLeftMouseDown() bool {
+	windowsMouseDownMu.RLock()
+	defer windowsMouseDownMu.RUnlock()
 
-// ClearLeftMouseDownState clears the mouse down state (stub).
-func ClearLeftMouseDownState() {}
+	return windowsMouseDown
+}
 
-// EnsureMouseUp ensures the mouse is up (stub).
-func EnsureMouseUp() {}
+// GetLastMouseDownPosition returns the last mouse down position.
+func GetLastMouseDownPosition() image.Point {
+	windowsMouseDownMu.RLock()
+	defer windowsMouseDownMu.RUnlock()
 
-// MoveMouseToPoint moves the mouse (stub).
-func MoveMouseToPoint(point image.Point, bypassSmooth bool) {}
+	return windowsMouseDownPos
+}
 
-// LeftClickAtPoint clicks the mouse (stub).
+// ClearLeftMouseDownState clears the mouse down state.
+func ClearLeftMouseDownState() {
+	windowsMouseDownMu.Lock()
+	defer windowsMouseDownMu.Unlock()
+
+	windowsMouseDown = false
+	windowsMouseDownPos = image.Point{}
+}
+
+// EnsureMouseUp ensures the mouse is up.
+func EnsureMouseUp() {
+	if IsLeftMouseDown() {
+		_ = LeftMouseUp()
+	}
+}
+
+// MoveMouseToPoint moves the mouse.
+func MoveMouseToPoint(point image.Point, _ bool) {
+	_ = winplatform.MoveMouseTo(point)
+}
+
+// LeftClickAtPoint clicks the mouse.
 func LeftClickAtPoint(
 	point image.Point,
-	restoreCursor bool,
+	_ bool,
 	_ action.Modifiers,
 ) error {
-	return nil
+	return winplatform.LeftClickAt(point)
 }
 
-// RightClickAtPoint clicks the mouse (stub).
+// RightClickAtPoint clicks the mouse.
 func RightClickAtPoint(
 	point image.Point,
-	restoreCursor bool,
+	_ bool,
 	_ action.Modifiers,
 ) error {
-	return nil
+	return winplatform.RightClickAt(point)
 }
 
-// MiddleClickAtPoint clicks the mouse (stub).
+// MiddleClickAtPoint clicks the mouse.
 func MiddleClickAtPoint(
 	point image.Point,
-	restoreCursor bool,
+	_ bool,
 	_ action.Modifiers,
 ) error {
+	return winplatform.MiddleClickAt(point)
+}
+
+// LeftMouseDownAtPoint presses the mouse.
+func LeftMouseDownAtPoint(point image.Point, _ action.Modifiers) error {
+	if err := winplatform.LeftMouseDown(point); err != nil {
+		return err
+	}
+
+	SetLeftMouseDown(true, point)
+
 	return nil
 }
 
-// LeftMouseDownAtPoint presses the mouse (stub).
-func LeftMouseDownAtPoint(point image.Point, _ action.Modifiers) error { return nil }
+// LeftMouseUpAtPoint releases the mouse.
+func LeftMouseUpAtPoint(point image.Point, _ action.Modifiers) error {
+	if err := winplatform.LeftMouseUp(point); err != nil {
+		return err
+	}
 
-// LeftMouseUpAtPoint releases the mouse (stub).
-func LeftMouseUpAtPoint(point image.Point, _ action.Modifiers) error { return nil }
+	ClearLeftMouseDownState()
 
-// LeftMouseUp releases the mouse (stub).
-func LeftMouseUp() error { return nil }
+	return nil
+}
 
-// ScrollAtCursor scrolls the mouse (stub).
-func ScrollAtCursor(deltaX, deltaY int) error { return nil }
+// LeftMouseUp releases the mouse.
+func LeftMouseUp() error {
+	pos, err := winplatform.CurrentCursorPosition()
+	if err != nil {
+		return err
+	}
 
-// CurrentCursorPosition returns the cursor position (stub).
-func CurrentCursorPosition() image.Point { return image.Point{} }
+	return LeftMouseUpAtPoint(pos, 0)
+}
+
+// ScrollAtCursor scrolls the mouse.
+func ScrollAtCursor(_ int, deltaY int) error {
+	return winplatform.ScrollWheel(deltaY)
+}
+
+// CurrentCursorPosition returns the cursor position.
+func CurrentCursorPosition() image.Point {
+	pos, err := winplatform.CurrentCursorPosition()
+	if err != nil {
+		return image.Point{}
+	}
+
+	return pos
+}
 
 // IsMissionControlActive returns whether Mission Control is active (stub).
 func IsMissionControlActive() bool { return false }

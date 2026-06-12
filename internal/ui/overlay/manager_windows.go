@@ -1,9 +1,15 @@
 //go:build windows
 
+// internal/ui/overlay/manager_windows.go
+// Windows overlay manager backed by a layered Win32 HWND and GDI grid rendering.
+// Does not implement hints, recursive grid, or keyboard capture.
+
 package overlay
 
 import (
 	"image"
+	"strings"
+	"sync"
 	"unsafe"
 
 	"go.uber.org/zap"
@@ -18,105 +24,212 @@ import (
 	"github.com/y3owk1n/neru/internal/core/ports"
 )
 
-// Manager manages multiple overlay windows (Windows stub).
+const winInitialSubscriberCapacity = 4
+
+// Manager manages overlay rendering on Windows.
 type Manager struct {
 	logger *zap.Logger
+
+	mu     sync.RWMutex
+	mode   Mode
+	subs   map[uint64]func(StateChange)
+	nextID uint64
+
+	renderMu sync.Mutex
+	win      *winOverlay
+
+	hintOverlay            *hints.Overlay
+	gridOverlay            *grid.Overlay
+	modeIndicatorOverlay   *modeindicator.Overlay
+	recursiveGridOverlay   *recursivegrid.Overlay
+	stickyModifiersOverlay *stickyindicator.Overlay
 }
 
-// NewOverlayManager creates a new overlay manager (Windows stub).
+var (
+	windowsManager     *Manager
+	windowsManagerOnce sync.Once
+)
+
+// NewOverlayManager creates a new overlay Manager.
 func NewOverlayManager(logger *zap.Logger) *Manager {
 	return &Manager{
 		logger: logger,
+		mode:   ModeIdle,
+		subs:   make(map[uint64]func(StateChange), winInitialSubscriberCapacity),
+		win:    newWinOverlay(logger),
 	}
 }
 
-// Get returns the global overlay manager (Windows stub).
+// Get returns the global overlay Manager.
 func Get() *Manager {
-	return &Manager{}
+	return windowsManager
 }
 
-// Init initializes the global overlay manager (Windows stub).
+// Init initializes the global overlay Manager.
 func Init(logger *zap.Logger) *Manager {
-	return &Manager{logger: logger}
+	windowsManagerOnce.Do(func() {
+		windowsManager = NewOverlayManager(logger)
+	})
+
+	return windowsManager
 }
 
-// Show shows all managed overlays (Windows stub).
-func (m *Manager) Show() {}
+func (m *Manager) publish(change StateChange) {
+	for _, sub := range m.subs {
+		sub(change)
+	}
+}
 
-// Hide hides all managed overlays (Windows stub).
-func (m *Manager) Hide() {}
+// Show displays the overlay.
+func (m *Manager) Show() {
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
 
-// Clear clears all managed overlays (Windows stub).
-func (m *Manager) Clear() {}
+	if m.win != nil {
+		m.win.Show()
+	}
+}
 
-// ResizeToActiveScreen resizes all overlays to the active screen (Windows stub).
-func (m *Manager) ResizeToActiveScreen() {}
+// Hide hides the overlay.
+func (m *Manager) Hide() {
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
 
-// SwitchTo switches to the specified mode (Windows stub).
-func (m *Manager) SwitchTo(_ Mode) {}
+	if m.win != nil {
+		m.win.Hide()
+	}
+}
 
-// Subscribe subscribes to state changes (Windows stub).
-func (m *Manager) Subscribe(_ func(StateChange)) uint64 { return 0 }
+// Clear clears the overlay surface.
+func (m *Manager) Clear() {
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
 
-// Unsubscribe unsubscribes from state changes (Windows stub).
-func (m *Manager) Unsubscribe(_ uint64) {}
+	if m.win != nil {
+		m.win.Clear()
+	}
+}
 
-// Destroy destroys all managed overlays (Windows stub).
-func (m *Manager) Destroy() {}
+// ResizeToActiveScreen resizes the overlay to the active monitor.
+func (m *Manager) ResizeToActiveScreen() {
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
 
-// Mode returns the current mode (Windows stub).
-func (m *Manager) Mode() Mode { return ModeIdle }
+	if m.win != nil {
+		m.win.Resize()
+	}
+}
 
-// WindowPtr returns the window pointer (Windows stub).
-func (m *Manager) WindowPtr() unsafe.Pointer { return nil }
+// SwitchTo switches overlay mode and notifies subscribers.
+func (m *Manager) SwitchTo(next Mode) {
+	m.mu.Lock()
+	prev := m.mode
+	m.mode = next
+	m.mu.Unlock()
 
-// WaylandKeyboardChannel returns nil for Windows (not applicable).
-func (m *Manager) WaylandKeyboardChannel() <-chan string { return nil }
+	if prev != next {
+		m.publish(StateChange{prev: prev, next: next})
+	}
+}
 
-// UseHintOverlay sets the hint overlay (Windows stub).
-func (m *Manager) UseHintOverlay(_ *hints.Overlay) {}
+// Subscribe registers a callback for overlay mode changes.
+func (m *Manager) Subscribe(subFn func(StateChange)) uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextID++
+	id := m.nextID
+	m.subs[id] = subFn
 
-// UseGridOverlay sets the grid overlay (Windows stub).
-func (m *Manager) UseGridOverlay(_ *grid.Overlay) {}
+	return id
+}
 
-// UseModeIndicatorOverlay sets the mode indicator overlay (Windows stub).
-func (m *Manager) UseModeIndicatorOverlay(_ *modeindicator.Overlay) {}
+// Unsubscribe removes a callback.
+func (m *Manager) Unsubscribe(id uint64) {
+	m.mu.Lock()
+	delete(m.subs, id)
+	m.mu.Unlock()
+}
 
-// UseStickyModifiersOverlay sets the sticky modifiers overlay (Windows stub).
-func (m *Manager) UseStickyModifiersOverlay(_ *stickyindicator.Overlay) {}
+// Destroy destroys overlay resources.
+func (m *Manager) Destroy() {
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
 
-// UseRecursiveGridOverlay sets the recursive grid overlay (Windows stub).
-func (m *Manager) UseRecursiveGridOverlay(_ *recursivegrid.Overlay) {}
+	if m.win != nil {
+		m.win.Destroy()
+		m.win = nil
+	}
+}
 
-// HintOverlay returns the hint overlay (Windows stub).
-func (m *Manager) HintOverlay() *hints.Overlay { return nil }
+// Mode returns the current overlay mode.
+func (m *Manager) Mode() Mode {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-// GridOverlay returns the grid overlay (Windows stub).
-func (m *Manager) GridOverlay() *grid.Overlay { return nil }
+	return m.mode
+}
 
-// ModeIndicatorOverlay returns the mode indicator overlay (Windows stub).
-func (m *Manager) ModeIndicatorOverlay() *modeindicator.Overlay { return nil }
+// WindowPtr returns the native overlay window handle.
+func (m *Manager) WindowPtr() unsafe.Pointer {
+	if m.win == nil {
+		return nil
+	}
 
-// StickyModifiersOverlay returns the sticky modifiers overlay (Windows stub).
-func (m *Manager) StickyModifiersOverlay() *stickyindicator.Overlay { return nil }
+	return m.win.WindowPtr()
+}
 
-// RecursiveGridOverlay returns the recursive grid overlay (Windows stub).
-func (m *Manager) RecursiveGridOverlay() *recursivegrid.Overlay { return nil }
+// WaylandKeyboardChannel returns nil on Windows.
+func (m *Manager) WaylandKeyboardChannel() <-chan string {
+	return nil
+}
 
-// OverlayCapabilities reports current Windows overlay support.
+// SetKeyboardCaptureEnabled is a no-op on Windows until the event tap lands.
+func (m *Manager) SetKeyboardCaptureEnabled(_ bool) {}
+
+func (m *Manager) UseHintOverlay(o *hints.Overlay)            { m.hintOverlay = o }
+func (m *Manager) UseGridOverlay(o *grid.Overlay)             { m.gridOverlay = o }
+func (m *Manager) UseModeIndicatorOverlay(o *modeindicator.Overlay) {
+	m.modeIndicatorOverlay = o
+}
+func (m *Manager) UseStickyModifiersOverlay(o *stickyindicator.Overlay) {
+	m.stickyModifiersOverlay = o
+}
+func (m *Manager) UseRecursiveGridOverlay(o *recursivegrid.Overlay) {
+	m.recursiveGridOverlay = o
+}
+
+func (m *Manager) HintOverlay() *hints.Overlay { return m.hintOverlay }
+func (m *Manager) GridOverlay() *grid.Overlay  { return m.gridOverlay }
+func (m *Manager) ModeIndicatorOverlay() *modeindicator.Overlay {
+	return m.modeIndicatorOverlay
+}
+func (m *Manager) StickyModifiersOverlay() *stickyindicator.Overlay {
+	return m.stickyModifiersOverlay
+}
+func (m *Manager) RecursiveGridOverlay() *recursivegrid.Overlay {
+	return m.recursiveGridOverlay
+}
+
+// OverlayCapabilities reports Windows overlay support.
 func (m *Manager) OverlayCapabilities() ports.FeatureCapability {
+	if m.win != nil && m.win.Healthy() {
+		return ports.FeatureCapability{
+			Status: ports.FeatureStatusSupported,
+			Detail: "native Windows overlays available via layered Win32 window + GDI",
+		}
+	}
+
 	return ports.FeatureCapability{
 		Status: ports.FeatureStatusStub,
-		Detail: "native Windows overlays are not implemented yet",
+		Detail: "Windows overlay backend failed to initialize (interactive desktop required)",
 	}
 }
 
-// DrawHintsWithStyle draws hints with the specified style (Windows stub).
+// DrawHintsWithStyle is not implemented on Windows yet.
 func (m *Manager) DrawHintsWithStyle(_ []*hints.Hint, _ hints.StyleMode) error {
 	return derrors.New(derrors.CodeNotSupported, "overlay hints not implemented on windows")
 }
 
-// DrawHintSearchInput draws the hints search input (Windows stub).
 func (m *Manager) DrawHintSearchInput(
 	_ string,
 	_ int,
@@ -126,24 +239,38 @@ func (m *Manager) DrawHintSearchInput(
 	return nil
 }
 
-// HideHintSearchInput hides the hints search input (Windows stub).
 func (m *Manager) HideHintSearchInput() {}
 
-// DrawModeIndicator draws the mode indicator (Windows stub).
 func (m *Manager) DrawModeIndicator(_, _ int) {}
 
-// DrawStickyModifiersIndicator draws the sticky modifiers indicator (Windows stub).
 func (m *Manager) DrawStickyModifiersIndicator(_, _ int, _ string) {}
 
-// DrawMouseActionIndicator draws a mouse action indicator (Windows stub).
 func (m *Manager) DrawMouseActionIndicator(_ image.Point, _ ports.MouseActionIndicatorStyle) {}
 
-// DrawGrid draws the grid (Windows stub).
-func (m *Manager) DrawGrid(_ *domainGrid.Grid, _ string, _ grid.Style) error {
-	return derrors.New(derrors.CodeNotSupported, "overlay grid not implemented on windows")
+// DrawGrid draws the grid overlay.
+func (m *Manager) DrawGrid(gridValue *domainGrid.Grid, input string, style grid.Style) error {
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
+
+	if m.win == nil {
+		return derrors.New(derrors.CodeNotSupported, "overlay grid not implemented on windows backend")
+	}
+
+	if m.gridOverlay != nil {
+		cfg := m.gridOverlay.Config()
+		keys := strings.TrimSpace(cfg.SublayerKeys)
+		if keys == "" {
+			keys = cfg.Characters
+		}
+		m.win.sublayerKeys = strings.ToUpper(keys)
+	}
+
+	m.win.DrawGrid(gridValue, input, style)
+
+	return nil
 }
 
-// DrawRecursiveGrid draws the recursive grid (Windows stub).
+// DrawRecursiveGrid is not implemented on Windows yet.
 func (m *Manager) DrawRecursiveGrid(
 	_ image.Rectangle,
 	_ int,
@@ -162,17 +289,32 @@ func (m *Manager) DrawRecursiveGrid(
 	)
 }
 
-// UpdateGridMatches updates the grid matches (Windows stub).
-func (m *Manager) UpdateGridMatches(_ string) {}
+// UpdateGridMatches updates prefix highlighting for the grid overlay.
+func (m *Manager) UpdateGridMatches(prefix string) {
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
 
-// ShowSubgrid shows the subgrid (Windows stub).
-func (m *Manager) ShowSubgrid(_ *domainGrid.Cell, _ grid.Style) {}
+	if m.win != nil {
+		m.win.UpdateGridMatches(prefix)
+	}
+}
 
-// SetHideUnmatched sets whether to hide unmatched cells (Windows stub).
-func (m *Manager) SetHideUnmatched(_ bool) {}
+// ShowSubgrid shows a subgrid inside the selected cell.
+func (m *Manager) ShowSubgrid(cell *domainGrid.Cell, style grid.Style) {
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
 
-// SetSharingType sets the sharing type (Windows stub).
+	if m.win != nil {
+		m.win.ShowSubgrid(cell, style)
+	}
+}
+
+// SetHideUnmatched toggles hiding unmatched grid cells.
+func (m *Manager) SetHideUnmatched(hide bool) {
+	if m.win != nil {
+		m.win.SetHideUnmatched(hide)
+	}
+}
+
+// SetSharingType is a no-op on Windows.
 func (m *Manager) SetSharingType(_ bool) {}
-
-// SetKeyboardCaptureEnabled is a no-op on Windows.
-func (m *Manager) SetKeyboardCaptureEnabled(_ bool) {}
