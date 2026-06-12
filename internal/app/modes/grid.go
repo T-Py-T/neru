@@ -20,6 +20,11 @@ func (h *Handler) activateGridModeWithAction(
 	repeat *bool,
 	cursorFollowSelection *bool,
 ) {
+	h.logger.Info("win-grid: step 1 enter activateGridModeWithAction",
+		zap.String("current_mode", h.CurrModeString()),
+		zap.Bool("grid_enabled", h.config.Grid.Enabled),
+		zap.Bool("neru_enabled", h.appState.IsEnabled()))
+
 	// Detect refresh before validation so we can do partial cleanup on re-activation.
 	isRefresh := h.appState.CurrentMode() == domain.ModeGrid
 
@@ -30,12 +35,16 @@ func (h *Handler) activateGridModeWithAction(
 		"",
 	)
 	if !activated {
+		h.logger.Warn("win-grid: step 2 stopped activateModeBase rejected activation")
+
 		if isRefresh {
 			h.exitModeLocked()
 		}
 
 		return
 	}
+
+	h.logger.Info("win-grid: step 2 activateModeBase ok")
 
 	actionString := domain.ActionString(actionEnum)
 
@@ -52,31 +61,36 @@ func (h *Handler) activateGridModeWithAction(
 
 	// Clear any previous overlay content (e.g., scroll highlights) before drawing grid.
 	// This prevents scroll highlights from persisting when switching from scroll mode to grid mode.
+	h.logger.Info("win-grid: step 3 clear overlay")
 	h.overlayManager.Clear()
 
 	h.appState.SetGridOverlayNeedsRefresh(false)
 
 	gridInstance := h.createGridInstance()
+	h.logger.Info("win-grid: step 4 grid instance ready",
+		zap.Int("cells", len(gridInstance.AllCells())),
+		zap.Int("screen_width", h.screenBounds.Dx()),
+		zap.Int("screen_height", h.screenBounds.Dy()))
 	h.updateGridOverlayConfig()
 
-	// Reset the grid manager state when setting up the grid.
-	// Note: Manager is reused across activations (holds grid state) but reset to clear input.
-	// Router is recreated each activation (stateless, needs fresh exit keys from config).
+	h.initializeGridManager(gridInstance)
+
 	if h.grid.Manager != nil {
 		h.grid.Manager.Reset()
 	}
-
-	h.initializeGridManager(gridInstance)
 
 	h.grid.Router = domainGrid.NewRouter(h.grid.Manager, h.logger)
 
 	// Resize before draw so the backing bitmap matches the active monitor.
 	// Do not resize after draw: createBitmap() discards painted pixels.
+	h.logger.Info("win-grid: step 5 resize overlay to active screen")
 	h.overlayManager.ResizeToActiveScreen()
 
+	// Draw first so layered content exists, then show the HWND.
+	h.logger.Info("win-grid: step 6 draw grid")
 	drawGridErr := h.renderer.DrawGrid(gridInstance, "")
 	if drawGridErr != nil {
-		h.logger.Error("Failed to draw grid", zap.Error(drawGridErr))
+		h.logger.Error("win-grid: step 6 failed draw grid", zap.Error(drawGridErr))
 
 		if isRefresh {
 			h.exitModeLocked()
@@ -85,6 +99,7 @@ func (h *Handler) activateGridModeWithAction(
 		return
 	}
 
+	h.logger.Info("win-grid: step 7 show overlay hwnd")
 	h.overlayManager.Show()
 
 	// Store pending action and repeat flag if provided
@@ -124,7 +139,7 @@ func (h *Handler) activateGridModeWithAction(
 		h.setModeLocked(domain.ModeGrid, overlay.ModeGrid)
 	}
 
-	h.logger.Info("Grid mode activated", zap.String("action", actionString))
+	h.logger.Info("win-grid: step 9 grid mode activated", zap.String("action", actionString))
 
 	h.startIndicatorPolling(domain.ModeGrid)
 }
@@ -143,8 +158,11 @@ func (h *Handler) createGridInstance() *domainGrid.Grid {
 	}
 
 	if screenBounds.Dx() == 0 || screenBounds.Dy() == 0 {
-		if h.overlayManager != nil {
-			if b, ok := h.overlayManager.ActiveScreenBounds(); ok {
+		type overlayBoundsProvider interface {
+			ActiveScreenBounds() (image.Rectangle, bool)
+		}
+		if provider, ok := h.overlayManager.(overlayBoundsProvider); ok {
+			if b, ok := provider.ActiveScreenBounds(); ok {
 				screenBounds = b
 				h.logger.Warn(
 					"Using overlay window bounds as grid screen bounds fallback",

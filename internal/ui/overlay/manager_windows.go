@@ -85,9 +85,20 @@ func (m *Manager) Show() {
 	m.renderMu.Lock()
 	defer m.renderMu.Unlock()
 
-	if m.win != nil {
-		m.win.Show()
+	m.ensureWinOverlayLocked()
+	if m.win == nil {
+		if m.logger != nil {
+			m.logger.Error("win-grid: manager Show aborted, overlay backend is nil")
+		}
+
+		return
 	}
+
+	if m.logger != nil {
+		m.logger.Info("win-grid: manager Show")
+	}
+
+	m.win.Show()
 }
 
 // Hide hides the overlay.
@@ -115,8 +126,32 @@ func (m *Manager) ResizeToActiveScreen() {
 	m.renderMu.Lock()
 	defer m.renderMu.Unlock()
 
+	m.ensureWinOverlayLocked()
 	if m.win != nil {
 		m.win.Resize()
+	}
+}
+
+// ActiveScreenBounds returns the overlay window bounds in screen coordinates.
+func (m *Manager) ActiveScreenBounds() (image.Rectangle, bool) {
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
+
+	if m.win == nil {
+		return image.Rectangle{}, false
+	}
+
+	return m.win.screenBounds()
+}
+
+func (m *Manager) ensureWinOverlayLocked() {
+	if m.win != nil && m.win.Healthy() {
+		return
+	}
+
+	m.win = newWinOverlay(m.logger)
+	if m.win == nil && m.logger != nil {
+		m.logger.Error("Windows overlay window is unavailable; grid overlay cannot render")
 	}
 }
 
@@ -252,8 +287,22 @@ func (m *Manager) DrawGrid(gridValue *domainGrid.Grid, input string, style grid.
 	m.renderMu.Lock()
 	defer m.renderMu.Unlock()
 
+	m.ensureWinOverlayLocked()
 	if m.win == nil {
+		if m.logger != nil {
+			m.logger.Error("win-grid: manager DrawGrid aborted, overlay backend is nil")
+		}
+
 		return derrors.New(derrors.CodeNotSupported, "overlay grid not implemented on windows backend")
+	}
+
+	if m.logger != nil {
+		cellCount := 0
+		if gridValue != nil {
+			cellCount = len(gridValue.AllCells())
+		}
+
+		m.logger.Info("win-grid: manager DrawGrid", zap.Int("cells", cellCount))
 	}
 
 	if m.gridOverlay != nil {

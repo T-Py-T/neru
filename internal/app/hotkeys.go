@@ -329,6 +329,10 @@ func (a *App) executeHotkeyAction(key, actionStr string) error {
 		}
 	}
 
+	if actionStr == domain.ModeString(domain.ModeGrid) {
+		a.logger.Info("win-grid: hotkey dispatching grid IPC", zap.String("key", key))
+	}
+
 	ipcResponse := a.ipcController.HandleCommand(
 		a.ctx,
 		ipc.Command{Action: actionStr, Args: params},

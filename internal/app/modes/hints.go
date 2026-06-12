@@ -83,7 +83,17 @@ func (h *Handler) ActivateModeWithOptions(mode domain.Mode, opts ModeActivationO
 		return
 	}
 
+	if mode == domain.ModeGrid {
+		h.logger.Info("win-grid: ActivateModeWithOptions calling grid Activate")
+	}
+
 	modeImpl.Activate(opts)
+
+	if mode == domain.ModeGrid {
+		h.logger.Info("win-grid: ActivateModeWithOptions grid Activate returned",
+			zap.String("current_mode", domain.ModeString(h.appState.CurrentMode())))
+	}
+
 	enableEventTapAfterUnlock = h.appState.CurrentMode() != domain.ModeIdle
 }
 

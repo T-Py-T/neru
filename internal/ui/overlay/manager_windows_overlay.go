@@ -23,6 +23,10 @@ const (
 	winSubgridRows      = 3
 	winSubgridHalfPixel = 0.5
 	winSubgridFontScale = 0.7
+
+	// winDebugBackdropColor is a loud semi-transparent tint so we can confirm the
+	// HWND path works even when grid cell styling is wrong. Remove once stable.
+	winDebugBackdropColor = 0xAA3366FF
 )
 
 type winOverlay struct {
@@ -64,6 +68,19 @@ func (o *winOverlay) Healthy() bool {
 	return o != nil && o.window != nil && o.window.Healthy()
 }
 
+func (o *winOverlay) screenBounds() (image.Rectangle, bool) {
+	if o == nil || o.window == nil {
+		return image.Rectangle{}, false
+	}
+
+	bounds := o.window.Bounds()
+	if bounds.Dx() <= 0 || bounds.Dy() <= 0 {
+		return image.Rectangle{}, false
+	}
+
+	return bounds, true
+}
+
 func (o *winOverlay) WindowPtr() unsafe.Pointer {
 	if o == nil || o.window == nil {
 		return nil
@@ -73,8 +90,33 @@ func (o *winOverlay) WindowPtr() unsafe.Pointer {
 }
 
 func (o *winOverlay) Show() {
-	if o != nil && o.window != nil {
-		o.window.Show()
+	if o == nil {
+		return
+	}
+
+	if o.window == nil {
+		if o.logger != nil {
+			o.logger.Error("win-grid: Show aborted, overlay window is nil")
+		}
+
+		return
+	}
+
+	if o.logger != nil {
+		bounds := o.window.Bounds()
+		o.logger.Info("win-grid: Show overlay window",
+			zap.Uintptr("hwnd", uintptr(o.window.HWND())),
+			zap.Int("x", bounds.Min.X),
+			zap.Int("y", bounds.Min.Y),
+			zap.Int("width", bounds.Dx()),
+			zap.Int("height", bounds.Dy()),
+		)
+	}
+
+	o.window.Show()
+
+	if o.logger != nil {
+		o.logger.Info("win-grid: Show overlay window done")
 	}
 }
 
@@ -108,6 +150,10 @@ func (o *winOverlay) Destroy() {
 }
 
 func (o *winOverlay) UpdateGridMatches(prefix string) {
+	if o == nil || o.cachedGrid == nil {
+		return
+	}
+
 	o.currentPrefix = strings.ToUpper(prefix)
 	o.redrawGrid()
 }
@@ -128,7 +174,23 @@ func (o *winOverlay) SetHideUnmatched(hide bool) {
 }
 
 func (o *winOverlay) DrawGrid(g *domainGrid.Grid, input string, style gridcomponent.Style) {
-	if o == nil || o.window == nil || g == nil {
+	if o == nil {
+		return
+	}
+
+	if o.window == nil {
+		if o.logger != nil {
+			o.logger.Error("win-grid: DrawGrid aborted, overlay window is nil")
+		}
+
+		return
+	}
+
+	if g == nil {
+		if o.logger != nil {
+			o.logger.Error("win-grid: DrawGrid aborted, grid is nil")
+		}
+
 		return
 	}
 
@@ -140,11 +202,29 @@ func (o *winOverlay) DrawGrid(g *domainGrid.Grid, input string, style gridcompon
 }
 
 func (o *winOverlay) redrawGrid() {
-	if o == nil || o.window == nil || o.cachedGrid == nil {
+	if o == nil {
+		return
+	}
+
+	if o.window == nil {
+		if o.logger != nil {
+			o.logger.Error("win-grid: redrawGrid aborted, overlay window is nil")
+		}
+
+		return
+	}
+
+	if o.cachedGrid == nil {
+		if o.logger != nil {
+			o.logger.Error("win-grid: redrawGrid aborted, cached grid is nil")
+		}
+
 		return
 	}
 
 	o.Clear()
+	o.drawDebugBackdrop()
+	o.flushOverlay("grid-backdrop")
 
 	style := o.cachedStyle
 	prefix := o.currentPrefix
@@ -175,7 +255,30 @@ func (o *winOverlay) redrawGrid() {
 		o.drawSubgrid(o.currentSubgrid.Bounds(), style)
 	}
 
+	if o.logger != nil {
+		o.logger.Info(
+			"win-grid: redraw complete",
+			zap.Int("cells", len(o.cachedGrid.AllCells())),
+			zap.Bool("healthy", o.window.Healthy()),
+		)
+	}
+
 	o.flushOverlay("grid")
+}
+
+func (o *winOverlay) drawDebugBackdrop() {
+	if o == nil || o.window == nil {
+		return
+	}
+
+	bounds, ok := o.screenBounds()
+	if !ok {
+		return
+	}
+
+	local := image.Rect(0, 0, bounds.Dx(), bounds.Dy())
+	o.window.FillRect(local, winDebugBackdropColor)
+	o.window.StrokeRect(local, 0xFFFFFFFF, 4)
 }
 
 func (o *winOverlay) flushOverlay(context string) {
@@ -183,12 +286,20 @@ func (o *winOverlay) flushOverlay(context string) {
 		return
 	}
 
-	if err := o.window.Flush(); err != nil && o.logger != nil {
-		o.logger.Error(
-			"failed to present Windows overlay",
-			zap.String("context", context),
-			zap.Error(err),
-		)
+	if err := o.window.Flush(); err != nil {
+		if o.logger != nil {
+			o.logger.Error(
+				"win-grid: overlay paint failed",
+				zap.String("context", context),
+				zap.Error(err),
+			)
+		}
+
+		return
+	}
+
+	if o.logger != nil {
+		o.logger.Info("win-grid: overlay paint ok", zap.String("context", context))
 	}
 }
 
