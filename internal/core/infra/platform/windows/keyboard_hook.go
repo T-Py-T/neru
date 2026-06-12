@@ -104,7 +104,7 @@ func (h *KeyboardHook) run() {
 
 		kbd := (*kbdLLHookStruct)(unsafe.Pointer(lParam))
 		isUp := wParam == wmKeyUp || wParam == wmSysKeyUp || kbd.flags&llkhfUp != 0
-		key := KeyNameFromVirtualKey(kbd.vkCode)
+		key := hookKeyName(kbd.vkCode, isUp)
 		if key != "" {
 			current.callback(key, isUp)
 		}
@@ -173,6 +173,14 @@ func (h *KeyboardHook) run() {
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&message)))
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&message)))
 	}
+}
+
+func hookKeyName(vk uint32, isUp bool) string {
+	if isUp {
+		return KeyNameFromVirtualKey(vk)
+	}
+
+	return KeyComboFromVirtualKey(vk)
 }
 
 // Stop removes the keyboard hook and waits for the hook thread to exit.

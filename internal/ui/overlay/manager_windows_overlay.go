@@ -23,10 +23,6 @@ const (
 	winSubgridRows      = 3
 	winSubgridHalfPixel = 0.5
 	winSubgridFontScale = 0.7
-
-	// winDebugBackdropColor is a loud semi-transparent tint so we can confirm the
-	// HWND path works even when grid cell styling is wrong. Remove once stable.
-	winDebugBackdropColor = 0xAA3366FF
 )
 
 type winOverlay struct {
@@ -165,6 +161,7 @@ func (o *winOverlay) ShowSubgrid(cell *domainGrid.Cell, _ gridcomponent.Style) {
 
 	o.currentSubgrid = cell
 	o.Clear()
+	o.window.SetColorBlendRGB(winplatform.ThemeSurfaceRGB())
 	o.drawSubgrid(cell.Bounds(), o.cachedStyle)
 	o.flushOverlay("subgrid")
 }
@@ -223,8 +220,7 @@ func (o *winOverlay) redrawGrid() {
 	}
 
 	o.Clear()
-	o.drawDebugBackdrop()
-	o.flushOverlay("grid-backdrop")
+	o.window.SetColorBlendRGB(winplatform.ThemeSurfaceRGB())
 
 	style := o.cachedStyle
 	prefix := o.currentPrefix
@@ -236,16 +232,14 @@ func (o *winOverlay) redrawGrid() {
 			continue
 		}
 
-		fill := style.BackgroundColor
 		text := style.LabelFontColor
 		border := style.LineColor
 		if matched && prefix != "" {
-			fill = style.MatchedBackgroundColor
 			text = style.MatchedTextColor
 			border = style.MatchedBorderColor
 		}
 
-		o.drawRect(cell.Bounds(), fill, border, style.LineWidth)
+		o.drawCellBorder(cell.Bounds(), border, style.LineWidth)
 		if style.ShowLabels {
 			o.drawTextCentered(label, cell.Bounds(), style.LabelFontName, style.LabelFontSize, text)
 		}
@@ -264,21 +258,6 @@ func (o *winOverlay) redrawGrid() {
 	}
 
 	o.flushOverlay("grid")
-}
-
-func (o *winOverlay) drawDebugBackdrop() {
-	if o == nil || o.window == nil {
-		return
-	}
-
-	bounds, ok := o.screenBounds()
-	if !ok {
-		return
-	}
-
-	local := image.Rect(0, 0, bounds.Dx(), bounds.Dy())
-	o.window.FillRect(local, winDebugBackdropColor)
-	o.window.StrokeRect(local, 0xFFFFFFFF, 4)
 }
 
 func (o *winOverlay) flushOverlay(context string) {
@@ -339,7 +318,7 @@ func (o *winOverlay) drawSubgrid(bounds image.Rectangle, style gridcomponent.Sty
 				xBreaks[col+1],
 				yBreaks[row+1],
 			)
-			o.drawRect(cell, style.BackgroundColor, style.LineColor, style.LineWidth)
+			o.drawCellBorder(cell, style.LineColor, style.LineWidth)
 			o.drawTextCentered(
 				string(keyRunes[index]),
 				cell,
@@ -352,20 +331,17 @@ func (o *winOverlay) drawSubgrid(bounds image.Rectangle, style gridcomponent.Sty
 	}
 }
 
-func (o *winOverlay) drawRect(
+// drawCellBorder draws only the grid outline; cell interiors stay color-key transparent.
+func (o *winOverlay) drawCellBorder(
 	bounds image.Rectangle,
-	fill uint32,
 	border uint32,
 	lineWidth float64,
 ) {
-	if o == nil || o.window == nil {
+	if o == nil || o.window == nil || lineWidth <= 0 {
 		return
 	}
 
-	o.window.FillRect(bounds, fill)
-	if lineWidth > 0 {
-		o.window.StrokeRect(bounds, border, lineWidth)
-	}
+	o.window.StrokeRect(bounds, border, lineWidth)
 }
 
 func (o *winOverlay) drawTextCentered(

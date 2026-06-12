@@ -29,20 +29,26 @@ const (
 	wheelDelta = 120
 )
 
+// mouseInput and input mirror Win32 MOUSEINPUT/INPUT on 64-bit Windows (40 bytes).
+// SendInput rejects the wrong size with ERROR_INVALID_PARAMETER.
 type mouseInput struct {
 	dx          int32
 	dy          int32
 	mouseData   uint32
 	dwFlags     uint32
 	time        uint32
+	_           uint32
 	dwExtraInfo uintptr
 }
 
 type input struct {
 	inputType uint32
+	_         uint32
 	mi        mouseInput
-	padding   [16]byte
 }
+
+// Compile-time guard: INPUT must be 40 bytes on 64-bit Windows targets.
+var _ [40 - unsafe.Sizeof(input{})]byte
 
 var procSendInput = user32.NewProc("SendInput")
 

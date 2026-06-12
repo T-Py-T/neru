@@ -36,7 +36,12 @@ const (
 	vkRMenu    = 0xA5
 	vkLWin     = 0x5B
 	vkRWin     = 0x5C
+	vkControl  = 0x11
+	vkMenu     = 0x12
+	vkShift    = 0x10
 )
+
+var procGetAsyncKeyState = user32.NewProc("GetAsyncKeyState")
 
 // ParseHotkeyString parses a Neru hotkey string into RegisterHotKey modifiers and VK.
 func ParseHotkeyString(keyString string) (modifiers uint32, virtualKey uint32, err error) {
@@ -115,6 +120,64 @@ func KeyNameFromVirtualKey(vk uint32) string {
 	}
 
 	return ""
+}
+
+// KeyComboFromVirtualKey maps a virtual-key code to a Neru combo string (e.g. shift+l).
+// Modifier-only keys return the modifier name alone.
+func KeyComboFromVirtualKey(vk uint32) string {
+	base := KeyNameFromVirtualKey(vk)
+	if base == "" {
+		return ""
+	}
+
+	if ModifierNameFromVirtualKey(vk) != "" {
+		return base
+	}
+
+	return KeyComboFromBaseAndModifiers(base, pressedModifierNames())
+}
+
+// KeyComboFromBaseAndModifiers builds a Neru key combo from a base key and modifiers.
+func KeyComboFromBaseAndModifiers(base string, modifiers []string) string {
+	if base == "" {
+		return ""
+	}
+
+	if len(modifiers) == 0 {
+		return base
+	}
+
+	parts := append(append([]string(nil), modifiers...), base)
+
+	return strings.Join(parts, "+")
+}
+
+func pressedModifierNames() []string {
+	var mods []string
+
+	if isVirtualKeyDown(vkControl) {
+		mods = append(mods, "ctrl")
+	}
+
+	if isVirtualKeyDown(vkMenu) {
+		mods = append(mods, "alt")
+	}
+
+	if isVirtualKeyDown(vkShift) {
+		mods = append(mods, "shift")
+	}
+
+	if isVirtualKeyDown(vkLWin) || isVirtualKeyDown(vkRWin) {
+		mods = append(mods, "cmd")
+	}
+
+	return mods
+}
+
+func isVirtualKeyDown(vk uint32) bool {
+	ret, _, _ := procGetAsyncKeyState.Call(uintptr(vk))
+
+	return ret&0x8000 != 0
 }
 
 // ModifierNameFromVirtualKey returns modifier names for dedicated modifier VK codes.

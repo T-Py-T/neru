@@ -193,11 +193,9 @@ func (s *SystemAdapter) CursorPosition(ctx context.Context) (image.Point, error)
 	return cursorPosition()
 }
 
-// IsDarkMode returns true if Windows dark mode is currently active.
-// TODO(windows): implement using registry key
-// HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\AppsUseLightTheme.
+// IsDarkMode returns true if Windows app dark mode is currently active.
 func (s *SystemAdapter) IsDarkMode() bool {
-	return false
+	return AppsUseDarkTheme()
 }
 
 // CheckPermissions verifies accessibility permissions on Windows.

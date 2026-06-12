@@ -40,9 +40,8 @@ const (
 	lwaColorKey      = 0x00000001
 	wmPaint          = 0x000F
 
-	// overlayColorKey is magenta; pixels with this color are transparent.
-	overlayColorKey = 0x00FF00FF
 	defaultOverlayFont = "Segoe UI"
+	fwBold             = 700
 )
 
 var (
@@ -133,6 +132,8 @@ type OverlayWindow struct {
 	fills   []rectFill
 	strokes []rectStroke
 	texts   []textDraw
+
+	colorBlendRGB uint32
 }
 
 func overlayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
@@ -206,7 +207,10 @@ func NewOverlayWindow() (*OverlayWindow, error) {
 		return nil, err
 	}
 
-	overlay := &OverlayWindow{bounds: bounds}
+	overlay := &OverlayWindow{
+		bounds:        bounds,
+		colorBlendRGB: ThemeSurfaceRGB(),
+	}
 	var createErr error
 
 	runOnOverlayUI(func() {
@@ -298,6 +302,18 @@ func (o *OverlayWindow) Healthy() bool {
 // Bounds returns the overlay rectangle in screen coordinates.
 func (o *OverlayWindow) Bounds() image.Rectangle {
 	return o.bounds
+}
+
+// SetColorBlendRGB sets the opaque RGB backdrop used to approximate semi-transparent
+// theme colors on the GDI overlay (see argbToGDIColorRef).
+func (o *OverlayWindow) SetColorBlendRGB(rgb uint32) {
+	if o == nil {
+		return
+	}
+
+	o.mu.Lock()
+	o.colorBlendRGB = rgb & 0xFFFFFF
+	o.mu.Unlock()
 }
 
 // Show displays the overlay without taking focus.
@@ -536,7 +552,7 @@ func (o *OverlayWindow) fillRectGDI(hdc windows.Handle, rect image.Rectangle, co
 		return
 	}
 
-	brush, _, _ := procCreateSolidBrush.Call(uintptr(argbToColorRef(color)))
+	brush, _, _ := procCreateSolidBrush.Call(uintptr(o.argbToGDI(color)))
 	if brush == 0 {
 		return
 	}
@@ -581,7 +597,7 @@ func (o *OverlayWindow) drawTextGDI(hdc windows.Handle, text textDraw) {
 		0,
 		0,
 		0,
-		400,
+		fwBold,
 		0,
 		0,
 		0,
@@ -598,7 +614,7 @@ func (o *OverlayWindow) drawTextGDI(hdc windows.Handle, text textDraw) {
 	defer procDeleteObject.Call(hFont)
 
 	procSetBkMode.Call(uintptr(hdc), transparentBk)
-	procSetTextColor.Call(uintptr(hdc), uintptr(argbToColorRef(text.color)))
+	procSetTextColor.Call(uintptr(hdc), uintptr(o.argbToGDI(text.color)))
 
 	utf16Text, err := windows.UTF16FromString(text.text)
 	if err != nil {
@@ -621,16 +637,20 @@ func (o *OverlayWindow) drawTextGDI(hdc windows.Handle, text textDraw) {
 	)
 }
 
+func (o *OverlayWindow) argbToGDI(argb uint32) uint32 {
+	blend := themeSurfaceLight
+	if o != nil {
+		o.mu.Lock()
+		blend = o.colorBlendRGB
+		o.mu.Unlock()
+	}
+
+	return argbToGDIColorRef(argb, blend)
+}
+
 func moduleHandle() uintptr {
 	handle, _, _ := procGetModuleHandleW.Call(0)
 
 	return handle
 }
 
-func argbToColorRef(color uint32) uint32 {
-	red := color & 0xFF0000
-	green := color & 0x00FF00
-	blue := color & 0x0000FF
-
-	return blue | (green << 8) | (red << 16)
-}
