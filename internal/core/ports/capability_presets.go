@@ -87,14 +87,14 @@ func LinuxCapabilities() PlatformCapabilities {
 func WindowsCapabilities() PlatformCapabilities {
 	return PlatformCapabilities{
 		Platform: "windows",
-		Process: stubCapability(
-			"focused app inspection not implemented yet; target Win32 foreground-window APIs",
+		Process: supportedCapability(
+			"focused app inspection available via Win32 foreground-window APIs",
 		),
-		Screen: stubCapability(
-			"screen enumeration not implemented yet; target Win32 monitor APIs",
+		Screen: supportedCapability(
+			"screen bounds and display enumeration available via Win32 monitor APIs",
 		),
-		Cursor: stubCapability(
-			"cursor movement/tracking not implemented yet; target SendInput/GetCursorPos",
+		Cursor: supportedCapability(
+			"cursor movement and tracking available via SetCursorPos/GetCursorPos",
 		),
 		Accessibility: stubCapability("UI Automation integration not implemented yet"),
 		Overlay: stubCapability(
