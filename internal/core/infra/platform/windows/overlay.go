@@ -301,8 +301,20 @@ func (o *OverlayWindow) Show() {
 	}
 
 	procShowWindow.Call(uintptr(o.hwnd), swShowNoActivate)
+	const swpNomove = 0x0002
+	const swpNosize = 0x0001
+	procSetWindowPos.Call(
+		uintptr(o.hwnd),
+		hwndTopMost,
+		0,
+		0,
+		0,
+		0,
+		swpNoActivate|swpShowWindow|swpNomove|swpNosize,
+	)
 	o.visible = true
-	o.Flush()
+
+	_ = o.Flush()
 }
 
 // Hide hides the overlay window.
@@ -380,13 +392,18 @@ func (o *OverlayWindow) Destroy() {
 	o.destroyHWND()
 }
 
+func (o *OverlayWindow) localBounds() image.Rectangle {
+	return image.Rect(0, 0, o.width, o.height)
+}
+
 // FillRect fills a rectangle with an ARGB color.
+// Bounds are window-local coordinates (0,0 at the overlay top-left).
 func (o *OverlayWindow) FillRect(bounds image.Rectangle, color uint32) {
 	if o == nil || len(o.pixels) == 0 || bounds.Empty() {
 		return
 	}
 
-	rect := bounds.Intersect(o.bounds)
+	rect := bounds.Intersect(o.localBounds())
 	if rect.Empty() {
 		return
 	}
@@ -397,9 +414,9 @@ func (o *OverlayWindow) FillRect(bounds image.Rectangle, color uint32) {
 	blue := uint8(color & 0xFF)
 
 	for y := rect.Min.Y; y < rect.Max.Y; y++ {
-		row := (y - o.bounds.Min.Y) * o.width * 4
+		row := y * o.width * 4
 		for x := rect.Min.X; x < rect.Max.X; x++ {
-			off := row + (x-o.bounds.Min.X)*4
+			off := row + x*4
 			o.pixels[off] = blue
 			o.pixels[off+1] = green
 			o.pixels[off+2] = red
@@ -486,10 +503,10 @@ func (o *OverlayWindow) DrawTextCentered(
 	}
 
 	rect := windows.Rect{
-		Left:   int32(bounds.Min.X - o.bounds.Min.X),
-		Top:    int32(bounds.Min.Y - o.bounds.Min.Y),
-		Right:  int32(bounds.Max.X - o.bounds.Min.X),
-		Bottom: int32(bounds.Max.Y - o.bounds.Min.Y),
+		Left:   int32(bounds.Min.X),
+		Top:    int32(bounds.Min.Y),
+		Right:  int32(bounds.Max.X),
+		Bottom: int32(bounds.Max.Y),
 	}
 
 	procDrawTextW.Call(
@@ -504,14 +521,18 @@ func (o *OverlayWindow) DrawTextCentered(
 }
 
 // Flush presents the backing bitmap through UpdateLayeredWindow.
-func (o *OverlayWindow) Flush() {
+func (o *OverlayWindow) Flush() error {
 	if o == nil || o.hwnd == 0 || o.hdcMem == 0 {
-		return
+		return fmt.Errorf("overlay window is not initialized")
 	}
 
 	o.fixAlphaFromRGB()
 
 	var srcPoint struct {
+		x int32
+		y int32
+	}
+	var dstPoint struct {
 		x int32
 		y int32
 	}
@@ -523,19 +544,21 @@ func (o *OverlayWindow) Flush() {
 	blend.blendOp = acSrcOver
 	blend.alphaFormat = acSrcAlpha
 
+	dstPoint.x = int32(o.bounds.Min.X)
+	dstPoint.y = int32(o.bounds.Min.Y)
 	windowSize.cx = int32(o.width)
 	windowSize.cy = int32(o.height)
 
 	hdcScreen := getDesktopDC()
 	if hdcScreen == 0 {
-		return
+		return fmt.Errorf("GetDC failed")
 	}
 	defer releaseDesktopDC(hdcScreen)
 
-	procUpdateLayeredWindow.Call(
+	ret, _, err := procUpdateLayeredWindow.Call(
 		uintptr(o.hwnd),
 		uintptr(hdcScreen),
-		uintptr(unsafe.Pointer(&srcPoint)),
+		uintptr(unsafe.Pointer(&dstPoint)),
 		uintptr(unsafe.Pointer(&windowSize)),
 		uintptr(o.hdcMem),
 		uintptr(unsafe.Pointer(&srcPoint)),
@@ -543,6 +566,11 @@ func (o *OverlayWindow) Flush() {
 		uintptr(unsafe.Pointer(&blend)),
 		ulwAlpha,
 	)
+	if ret == 0 {
+		return fmt.Errorf("UpdateLayeredWindow: %w", err)
+	}
+
+	return nil
 }
 
 func (o *OverlayWindow) fixAlphaFromRGB() {

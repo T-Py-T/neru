@@ -1,48 +1,65 @@
 //go:build windows
 
 // internal/core/infra/platform/windows/hotkeys_native.go
-// Global hotkey registration via RegisterHotKey and a message-only window.
+// Global hotkey registration via RegisterHotKey on a dedicated message thread.
 // Does not parse Neru config bindings.
 
 package windows
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
-	"syscall"
+	"time"
 	"unsafe"
 
-	"golang.org/x/sys/windows"
+	"go.uber.org/zap"
 )
 
-const (
-	wmHotkey        = 0x0312
-	hotkeyClassName = "NeruHotkeyWindow"
-	hwndMessage     = ^uintptr(2)
-)
+const wmHotkey = 0x0312
 
 type hotkeyRegistration struct {
-	id       int
-	modifiers uint32
+	id         int
+	keyString  string
+	modifiers  uint32
 	virtualKey uint32
 }
 
-// HotkeyRegistry manages RegisterHotKey bindings on a hidden message window.
+type hotkeyRegisterRequest struct {
+	keyString  string
+	modifiers  uint32
+	virtualKey uint32
+	callback   func()
+	resp       chan hotkeyRegisterResponse
+}
+
+type hotkeyRegisterResponse struct {
+	id  int
+	err error
+}
+
+type hotkeyUnregisterRequest struct {
+	id int
+}
+
+// HotkeyRegistry manages RegisterHotKey bindings on a dedicated message thread.
 type HotkeyRegistry struct {
-	mu          sync.Mutex
-	hwnd        uintptr
-	callbacks   map[int]func()
-	threadDone  chan struct{}
-	threadStop  chan struct{}
-	registered  map[int]hotkeyRegistration
-	nextID      int
-	classOnce   sync.Once
-	classErr    error
+	mu           sync.Mutex
+	callbacks    map[int]func()
+	threadDone   chan struct{}
+	threadStop   chan struct{}
+	registered   map[int]hotkeyRegistration
+	nextID       int
+	registerCh   chan hotkeyRegisterRequest
+	unregisterCh chan hotkeyUnregisterRequest
+	threadReady  chan struct{}
+	logger       *zap.Logger
 }
 
 var (
-	procRegisterHotKeyW   = user32.NewProc("RegisterHotKeyW")
-	procUnregisterHotKeyW = user32.NewProc("UnregisterHotKeyW")
+	procRegisterHotKey   = user32.NewProc("RegisterHotKey")
+	procUnregisterHotKey = user32.NewProc("UnregisterHotKey")
+	procPeekMessageW     = user32.NewProc("PeekMessageW")
 
 	globalHotkeyRegistry *HotkeyRegistry
 	globalHotkeyOnce     sync.Once
@@ -54,11 +71,15 @@ func GlobalHotkeyRegistry() (*HotkeyRegistry, error) {
 
 	globalHotkeyOnce.Do(func() {
 		registry := &HotkeyRegistry{
-			callbacks:  make(map[int]func()),
-			registered: make(map[int]hotkeyRegistration),
-			threadStop: make(chan struct{}),
-			threadDone: make(chan struct{}),
-			nextID:     1,
+			callbacks:    make(map[int]func()),
+			registered:   make(map[int]hotkeyRegistration),
+			threadStop:   make(chan struct{}),
+			threadDone:   make(chan struct{}),
+			registerCh:   make(chan hotkeyRegisterRequest),
+			unregisterCh: make(chan hotkeyUnregisterRequest),
+			threadReady:  make(chan struct{}),
+			nextID:       1,
+			logger:       zap.NewNop(),
 		}
 
 		if err := registry.start(); err != nil {
@@ -77,120 +98,156 @@ func GlobalHotkeyRegistry() (*HotkeyRegistry, error) {
 	return globalHotkeyRegistry, nil
 }
 
-func (r *HotkeyRegistry) start() error {
-	if err := r.registerHotkeyClass(); err != nil {
-		return err
+// SetHotkeyRegistryLogger attaches a logger for hotkey diagnostics.
+func (r *HotkeyRegistry) SetHotkeyRegistryLogger(logger *zap.Logger) {
+	if r == nil {
+		return
 	}
 
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
+	r.logger = logger.Named("win32.hotkeys")
+}
+
+func (r *HotkeyRegistry) start() error {
 	go r.messageLoop()
 
 	return nil
 }
 
-func (r *HotkeyRegistry) registerHotkeyClass() error {
-	r.classOnce.Do(func() {
-		className, err := windows.UTF16PtrFromString(hotkeyClassName)
-		if err != nil {
-			r.classErr = err
-
-			return
-		}
-
-		wndProc := syscall.NewCallback(func(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
-			if msg == wmHotkey {
-				if registry := globalHotkeyRegistry; registry != nil {
-					registry.dispatch(int(wParam))
-				}
-
-				return 0
-			}
-
-			ret, _, _ := procDefWindowProcW.Call(hwnd, uintptr(msg), wParam, lParam)
-
-			return ret
-		})
-
-		class := wndClassEx{
-			cbSize:        uint32(unsafe.Sizeof(wndClassEx{})),
-			lpfnWndProc:   wndProc,
-			hInstance:     windows.Handle(moduleHandle()),
-			lpszClassName: className,
-		}
-
-		atom, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&class)))
-		if atom == 0 {
-			r.classErr = fmt.Errorf("RegisterClassExW hotkey: %w", err)
-		}
-	})
-
-	return r.classErr
-}
-
 func (r *HotkeyRegistry) messageLoop() {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	defer close(r.threadDone)
 
-	className, err := windows.UTF16PtrFromString(hotkeyClassName)
-	if err != nil {
-		return
-	}
-
-	hwnd, _, _ := procCreateWindowExW.Call(
-		0,
-		uintptr(unsafe.Pointer(className)),
-		0,
-		0,
-		0,
-		0,
-		0,
-		0,
-		hwndMessage,
-		0,
-		moduleHandle(),
-		0,
-	)
-	if hwnd == 0 {
-		return
-	}
-
-	r.mu.Lock()
-	r.hwnd = hwnd
-	r.mu.Unlock()
-
-	defer procDestroyWindow.Call(hwnd)
+	close(r.threadReady)
+	r.logger.Info("hotkey message thread started")
 
 	var message msg
 	for {
-		select {
-		case <-r.threadStop:
-			threadID, _, _ := procGetCurrentThreadId.Call()
-			procPostThreadMessageW.Call(
-				threadID,
-				wmQuit,
-				0,
-				0,
-			)
-		default:
-		}
+		r.drainPendingOps()
 
-		ret, _, _ := procGetMessageW.Call(
+		ret, _, _ := procPeekMessageW.Call(
 			uintptr(unsafe.Pointer(&message)),
 			0,
 			0,
 			0,
+			pmRemove,
 		)
-		if ret == 0 || int32(ret) == -1 {
-			return
+		if ret != 0 {
+			if message.message == wmQuit {
+				return
+			}
+
+			if message.message == wmHotkey {
+				r.handleHotkeyMessage(int(message.wParam))
+
+				continue
+			}
+
+			procTranslateMessage.Call(uintptr(unsafe.Pointer(&message)))
+			procDispatchMessageW.Call(uintptr(unsafe.Pointer(&message)))
+
+			continue
 		}
 
-		procTranslateMessage.Call(uintptr(unsafe.Pointer(&message)))
-		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&message)))
+		select {
+		case req := <-r.registerCh:
+			r.handleRegister(req)
+		case req := <-r.unregisterCh:
+			r.handleUnregister(req)
+		case <-r.threadStop:
+			return
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 
-func (r *HotkeyRegistry) dispatch(id int) {
+func (r *HotkeyRegistry) drainPendingOps() {
+	for {
+		select {
+		case req := <-r.registerCh:
+			r.handleRegister(req)
+		case req := <-r.unregisterCh:
+			r.handleUnregister(req)
+		case <-r.threadStop:
+			return
+		default:
+			return
+		}
+	}
+}
+
+func (r *HotkeyRegistry) handleRegister(req hotkeyRegisterRequest) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	id := r.nextID
+	r.nextID++
+
+	// NULL hwnd posts WM_HOTKEY to this thread's queue; must match UnregisterHotKey.
+	ret, _, regErr := procRegisterHotKey.Call(
+		0,
+		uintptr(id),
+		uintptr(req.modifiers),
+		uintptr(req.virtualKey),
+	)
+	if ret == 0 {
+		r.logger.Error(
+			"RegisterHotKey failed",
+			zap.String("key", req.keyString),
+			zap.Uint32("modifiers", req.modifiers),
+			zap.Uint32("virtual_key", req.virtualKey),
+			zap.Error(regErr),
+		)
+		req.resp <- hotkeyRegisterResponse{
+			err: fmt.Errorf("RegisterHotKey: %w", regErr),
+		}
+
+		return
+	}
+
+	r.callbacks[id] = req.callback
+	r.registered[id] = hotkeyRegistration{
+		id:         id,
+		keyString:  req.keyString,
+		modifiers:  req.modifiers,
+		virtualKey: req.virtualKey,
+	}
+
+	r.logger.Info(
+		"RegisterHotKey ok",
+		zap.String("key", req.keyString),
+		zap.Int("id", id),
+		zap.Uint32("modifiers", req.modifiers),
+		zap.Uint32("virtual_key", req.virtualKey),
+	)
+
+	req.resp <- hotkeyRegisterResponse{id: id}
+}
+
+func (r *HotkeyRegistry) handleUnregister(req hotkeyUnregisterRequest) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	procUnregisterHotKey.Call(0, uintptr(req.id))
+	delete(r.callbacks, req.id)
+	delete(r.registered, req.id)
+}
+
+func (r *HotkeyRegistry) handleHotkeyMessage(id int) {
+	r.mu.Lock()
+	reg, hasReg := r.registered[id]
 	callback := r.callbacks[id]
 	r.mu.Unlock()
+
+	if hasReg {
+		r.logger.Info("WM_HOTKEY received", zap.String("key", reg.keyString), zap.Int("id", id))
+	} else {
+		r.logger.Warn("WM_HOTKEY received for unknown id", zap.Int("id", id))
+	}
 
 	if callback != nil {
 		callback()
@@ -208,43 +265,29 @@ func (r *HotkeyRegistry) Register(keyString string, callback func()) (int, error
 		return 0, err
 	}
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r.hwnd == 0 {
-		return 0, fmt.Errorf("hotkey message window not ready")
+	select {
+	case <-r.threadReady:
+	case <-time.After(2 * time.Second):
+		return 0, fmt.Errorf("hotkey message thread not ready")
 	}
 
-	id := r.nextID
-	r.nextID++
-
-	ret, _, regErr := procRegisterHotKeyW.Call(
-		r.hwnd,
-		uintptr(id),
-		uintptr(mods),
-		uintptr(vk),
-	)
-	if ret == 0 {
-		return 0, fmt.Errorf("RegisterHotKeyW: %w", regErr)
+	resp := make(chan hotkeyRegisterResponse, 1)
+	r.registerCh <- hotkeyRegisterRequest{
+		keyString:  keyString,
+		modifiers:  mods,
+		virtualKey: vk,
+		callback:   callback,
+		resp:       resp,
 	}
 
-	r.callbacks[id] = callback
-	r.registered[id] = hotkeyRegistration{id: id, modifiers: mods, virtualKey: vk}
+	result := <-resp
 
-	return id, nil
+	return result.id, result.err
 }
 
 // Unregister removes a previously registered hotkey id.
 func (r *HotkeyRegistry) Unregister(id int) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r.hwnd != 0 {
-		procUnregisterHotKeyW.Call(r.hwnd, uintptr(id))
-	}
-
-	delete(r.callbacks, id)
-	delete(r.registered, id)
+	r.unregisterCh <- hotkeyUnregisterRequest{id: id}
 }
 
 // UnregisterAll removes all hotkeys.

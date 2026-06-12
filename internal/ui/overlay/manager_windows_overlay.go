@@ -40,10 +40,21 @@ func newWinOverlay(logger *zap.Logger) *winOverlay {
 	window, err := winplatform.NewOverlayWindow()
 	if err != nil {
 		if logger != nil {
-			logger.Warn("failed to create Windows overlay window", zap.Error(err))
+			logger.Error("failed to create Windows overlay window", zap.Error(err))
 		}
 
 		return nil
+	}
+
+	if logger != nil {
+		bounds := window.Bounds()
+		logger.Info(
+			"Windows overlay window ready",
+			zap.Int("x", bounds.Min.X),
+			zap.Int("y", bounds.Min.Y),
+			zap.Int("width", bounds.Dx()),
+			zap.Int("height", bounds.Dy()),
+		)
 	}
 
 	return &winOverlay{window: window, logger: logger}
@@ -109,7 +120,7 @@ func (o *winOverlay) ShowSubgrid(cell *domainGrid.Cell, _ gridcomponent.Style) {
 	o.currentSubgrid = cell
 	o.Clear()
 	o.drawSubgrid(cell.Bounds(), o.cachedStyle)
-	o.window.Flush()
+	o.flushOverlay("subgrid")
 }
 
 func (o *winOverlay) SetHideUnmatched(hide bool) {
@@ -164,7 +175,21 @@ func (o *winOverlay) redrawGrid() {
 		o.drawSubgrid(o.currentSubgrid.Bounds(), style)
 	}
 
-	o.window.Flush()
+	o.flushOverlay("grid")
+}
+
+func (o *winOverlay) flushOverlay(context string) {
+	if o == nil || o.window == nil {
+		return
+	}
+
+	if err := o.window.Flush(); err != nil && o.logger != nil {
+		o.logger.Error(
+			"failed to present Windows overlay",
+			zap.String("context", context),
+			zap.Error(err),
+		)
+	}
 }
 
 func (o *winOverlay) drawSubgrid(bounds image.Rectangle, style gridcomponent.Style) {

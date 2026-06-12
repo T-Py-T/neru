@@ -19,8 +19,11 @@ var (
 	windowsMouseDownPos image.Point
 )
 
-// Element represents a UI element for Windows (stub).
-type Element struct{}
+// Element represents a UI element for Windows.
+type Element struct {
+	bundleIdentifier string
+	pid              int
+}
 
 // Children returns the element's children.
 func (e *Element) Children(role string) ([]*Element, error) { return nil, nil }
@@ -40,8 +43,14 @@ func (e *Element) Release() {}
 // Info retrieves metadata and positioning information for the element.
 func (e *Element) Info() (*ElementInfo, error) { return &ElementInfo{}, nil }
 
-// BundleIdentifier returns the bundle identifier (stub).
-func (e *Element) BundleIdentifier() string { return "" }
+// BundleIdentifier returns the bundle identifier (exe path on Windows).
+func (e *Element) BundleIdentifier() string {
+	if e == nil {
+		return ""
+	}
+
+	return e.bundleIdentifier
+}
 
 // MenuBar returns the menu bar element (stub).
 func (e *Element) MenuBar() *Element { return nil }
@@ -124,8 +133,18 @@ func CheckAccessibilityPermissions() bool {
 // SystemWideElement returns the system-wide element (stub).
 func SystemWideElement() *Element { return nil }
 
-// FocusedApplication returns the focused application (stub).
-func FocusedApplication() *Element { return nil }
+// FocusedApplication returns the focused application via Win32 foreground window APIs.
+func FocusedApplication() *Element {
+	bundleID, pid, err := winplatform.FocusedApplicationIdentity()
+	if err != nil || (bundleID == "" && pid == 0) {
+		return nil
+	}
+
+	return &Element{
+		bundleIdentifier: bundleID,
+		pid:              pid,
+	}
+}
 
 // ApplicationByPID returns an application by PID (stub).
 func ApplicationByPID(pid int) *Element { return nil }

@@ -219,10 +219,10 @@ func enumerateMonitors() ([]displayMonitor, error) {
 func activeScreenBounds() (image.Rectangle, error) {
 	cursor, err := cursorPosition()
 	if err == nil {
+		pt := winPoint{x: int32(cursor.X), y: int32(cursor.Y)}
 		ret, _, pointErr := procMonitorFromPoint.Call(
-			uintptr(cursor.X),
-			uintptr(cursor.Y),
-			monitorDefaultToNearest,
+			uintptr(unsafe.Pointer(&pt)),
+			uintptr(monitorDefaultToNearest),
 		)
 		if ret != 0 {
 			info, infoErr := getMonitorInfo(windows.Handle(ret))

@@ -39,6 +39,8 @@ func NewManager(logger *zap.Logger) *Manager {
 	registry, err := winplatform.GlobalHotkeyRegistry()
 	if err != nil {
 		logger.Warn("failed to initialize Windows hotkey registry", zap.Error(err))
+	} else if registry != nil {
+		registry.SetHotkeyRegistryLogger(logger)
 	}
 
 	return &Manager{
@@ -74,6 +76,12 @@ func (m *Manager) Register(keyString string, callback Callback) (HotkeyID, error
 	m.callbacks[hotkeyID] = callback
 	m.keys[hotkeyID] = keyString
 	m.nativeIDs[hotkeyID] = nativeID
+
+	m.logger.Info(
+		"global hotkey armed",
+		zap.String("key", keyString),
+		zap.Int("native_id", nativeID),
+	)
 
 	return hotkeyID, nil
 }

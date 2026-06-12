@@ -83,6 +83,21 @@ func (s *SystemAdapter) LogDir() (string, error) {
 	return filepath.Join(localAppData, "neru", "log"), nil
 }
 
+// FocusedApplicationIdentity returns the foreground app executable path and PID.
+func FocusedApplicationIdentity() (bundleID string, pid int, err error) {
+	pid, err = focusedApplicationPID()
+	if err != nil {
+		return "", 0, err
+	}
+
+	bundleID, err = applicationBundleIDByPID(pid)
+	if err != nil {
+		return "", pid, err
+	}
+
+	return bundleID, pid, nil
+}
+
 // FocusedApplicationPID returns the PID of the currently focused application on Windows.
 func (s *SystemAdapter) FocusedApplicationPID(ctx context.Context) (int, error) {
 	if err := ctx.Err(); err != nil {

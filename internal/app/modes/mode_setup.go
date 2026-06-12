@@ -72,15 +72,11 @@ func (h *Handler) SetModeIdle() {
 	h.overlaySwitch(overlay.ModeIdle)
 }
 
-// setModeLocked sets the application mode, enables event tap, and switches overlay.
-// Caller must hold h.mu.
+// setModeLocked sets the application mode and switches overlay.
+// Caller must hold h.mu. Event tap is enabled after h.mu is released
+// (see ActivateModeWithOptions and SetMode* helpers).
 func (h *Handler) setModeLocked(appMode domain.Mode, overlayMode overlay.Mode) {
 	h.setAppModeLocked(appMode)
-
-	if h.enableEventTap != nil {
-		h.enableEventTap()
-	}
-
 	h.overlaySwitch(overlayMode)
 }
 
@@ -118,9 +114,12 @@ func (h *Handler) activateModeBase(
 // for capturing keyboard input, and switches the overlay display to hints mode.
 func (h *Handler) SetModeHints() {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	h.setModeLocked(domain.ModeHints, overlay.ModeHints)
+	h.mu.Unlock()
+
+	if h.enableEventTap != nil {
+		h.enableEventTap()
+	}
 }
 
 // SetModeGrid switches the application to grid mode for coordinate-based navigation.
@@ -128,9 +127,12 @@ func (h *Handler) SetModeHints() {
 // for capturing keyboard input, and switches the overlay display to grid mode.
 func (h *Handler) SetModeGrid() {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	h.setModeLocked(domain.ModeGrid, overlay.ModeGrid)
+	h.mu.Unlock()
+
+	if h.enableEventTap != nil {
+		h.enableEventTap()
+	}
 }
 
 // SetModeRecursiveGrid switches the application to recursive-grid mode for recursive cell navigation.
@@ -138,9 +140,12 @@ func (h *Handler) SetModeGrid() {
 // for capturing keyboard input, and switches the overlay display to recursive-grid mode.
 func (h *Handler) SetModeRecursiveGrid() {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	h.setModeLocked(domain.ModeRecursiveGrid, overlay.ModeRecursiveGrid)
+	h.mu.Unlock()
+
+	if h.enableEventTap != nil {
+		h.enableEventTap()
+	}
 }
 
 // SetModeScroll switches the application to scroll mode for scroll-based navigation.
@@ -148,7 +153,10 @@ func (h *Handler) SetModeRecursiveGrid() {
 // for capturing keyboard input, and switches the overlay display to scroll mode.
 func (h *Handler) SetModeScroll() {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	h.setModeLocked(domain.ModeScroll, overlay.ModeScroll)
+	h.mu.Unlock()
+
+	if h.enableEventTap != nil {
+		h.enableEventTap()
+	}
 }

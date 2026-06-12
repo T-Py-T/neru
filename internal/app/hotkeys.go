@@ -98,6 +98,12 @@ func (a *App) registerHotkeys() {
 
 			continue
 		}
+
+		a.logger.Info(
+			"Registered hotkey binding",
+			zap.String("key", bindKey),
+			zap.Strings("actions", bindActions),
+		)
 	}
 }
 
@@ -118,6 +124,8 @@ func (a *App) dispatchHotkeyActionsAsync(key string, actions []string) {
 }
 
 func (a *App) dispatchHotkeyActions(key string, actions []string) {
+	a.logger.Info("Hotkey triggered", zap.String("key", key), zap.Strings("actions", actions))
+
 	for _, actionStr := range actions {
 		trimmedAction := strings.TrimSpace(actionStr)
 		if trimmedAction == "" {
@@ -329,10 +337,11 @@ func (a *App) executeHotkeyAction(key, actionStr string) error {
 		return derrors.New(derrors.CodeIPCFailed, ipcResponse.Message)
 	}
 
-	a.logger.Debug(
-		"hotkey action executed",
+	a.logger.Info(
+		"hotkey action completed",
 		zap.String("key", key),
 		zap.String("action", actionStr),
+		zap.String("ipc_message", ipcResponse.Message),
 	)
 
 	return nil
@@ -414,9 +423,11 @@ func (a *App) refreshHotkeysForAppOrCurrent(bundleID string) {
 
 		bundleID, bundleIDErr = a.actionService.FocusedAppBundleID(ctx)
 		if bundleIDErr != nil {
-			a.logger.Warn("Failed to get focused app bundle ID", zap.Error(bundleIDErr))
-
-			return
+			a.logger.Warn(
+				"Failed to get focused app bundle ID; registering global hotkeys anyway",
+				zap.Error(bundleIDErr),
+			)
+			bundleID = ""
 		}
 	}
 

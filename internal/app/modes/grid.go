@@ -70,7 +70,10 @@ func (h *Handler) activateGridModeWithAction(
 
 	h.grid.Router = domainGrid.NewRouter(h.grid.Manager, h.logger)
 
-	// Draw the grid to populate the overlay
+	// Resize before draw so the backing bitmap matches the active monitor.
+	// Do not resize after draw: createBitmap() discards painted pixels.
+	h.overlayManager.ResizeToActiveScreen()
+
 	drawGridErr := h.renderer.DrawGrid(gridInstance, "")
 	if drawGridErr != nil {
 		h.logger.Error("Failed to draw grid", zap.Error(drawGridErr))
@@ -82,9 +85,6 @@ func (h *Handler) activateGridModeWithAction(
 		return
 	}
 
-	h.overlayManager.ResizeToActiveScreen()
-
-	// Show the overlay (the grid is already drawn with proper style)
 	h.overlayManager.Show()
 
 	// Store pending action and repeat flag if provided
@@ -135,10 +135,23 @@ func (h *Handler) createGridInstance() *domainGrid.Grid {
 
 	if h.system != nil {
 		b, err := h.system.ScreenBounds(h.ctx)
-		if err == nil {
+		if err == nil && b.Dx() > 0 && b.Dy() > 0 {
 			screenBounds = b
-		} else if !derrors.IsNotSupported(err) {
+		} else if err != nil && !derrors.IsNotSupported(err) {
 			h.logger.Warn("Failed to get screen bounds for grid", zap.Error(err))
+		}
+	}
+
+	if screenBounds.Dx() == 0 || screenBounds.Dy() == 0 {
+		if h.overlayManager != nil {
+			if b, ok := h.overlayManager.ActiveScreenBounds(); ok {
+				screenBounds = b
+				h.logger.Warn(
+					"Using overlay window bounds as grid screen bounds fallback",
+					zap.Int("width", b.Dx()),
+					zap.Int("height", b.Dy()),
+				)
+			}
 		}
 	}
 
