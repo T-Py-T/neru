@@ -39,7 +39,6 @@ const (
 	swpNoActivate    = 0x0010
 	swpShowWindow    = 0x0040
 	lwaColorKey      = 0x00000001
-	ulwColorKey      = 0x00000001
 	wmPaint          = 0x000F
 
 	defaultOverlayFont = "Segoe UI"
@@ -70,9 +69,6 @@ var (
 	procInvalidateRect         = user32.NewProc("InvalidateRect")
 	procUpdateWindow           = user32.NewProc("UpdateWindow")
 	procIsWindow               = user32.NewProc("IsWindow")
-	procGetDC                  = user32.NewProc("GetDC")
-	procReleaseDC              = user32.NewProc("ReleaseDC")
-	procUpdateLayeredWindow    = user32.NewProc("UpdateLayeredWindow")
 	procBeginPaint             = user32.NewProc("BeginPaint")
 	procEndPaint               = user32.NewProc("EndPaint")
 	procFillRect               = user32.NewProc("FillRect")
@@ -352,7 +348,7 @@ func (o *OverlayWindow) SetColorBlendRGB(rgb uint32) {
 
 // Show displays the overlay without taking focus.
 func (o *OverlayWindow) Show() {
-	if o == nil || o.hwnd == 0 {
+	if o == nil {
 		return
 	}
 
@@ -377,7 +373,7 @@ func (o *OverlayWindow) Show() {
 			swpNoActivate|swpShowWindow|swpNomove|swpNosize,
 		)
 		o.visible = true
-		_ = o.presentLayeredLocked()
+		o.requestPaintLocked()
 	})
 }
 
@@ -386,31 +382,23 @@ func (o *OverlayWindow) prepareForDisplayLocked() {
 		return
 	}
 
-	ret, _, _ := procSetLayeredWindowAttributes.Call(
+	// Reapply after SW_HIDE; layered color-key can be lost across hide/show cycles.
+	procSetLayeredWindowAttributes.Call(
 		uintptr(o.hwnd),
 		overlayColorKey,
 		0,
 		lwaColorKey,
 	)
-	if ret == 0 && o.visible {
-		// Layered attributes can be lost after hide/show cycles on some builds.
-		return
-	}
 }
 
-// Hide hides the overlay window and destroys the HWND so the next show gets a
-// fresh layered surface (WM_PAINT does not reliably refresh after hide/show).
+// Hide hides the overlay window without taking focus.
 func (o *OverlayWindow) Hide() {
-	if o == nil {
+	if o == nil || o.hwnd == 0 {
 		return
 	}
 
 	runOnOverlayUI(func() {
-		if o.hwnd != 0 {
-			procShowWindow.Call(uintptr(o.hwnd), swHide)
-		}
-
-		o.destroyHWNDLocked()
+		procShowWindow.Call(uintptr(o.hwnd), swHide)
 		o.visible = false
 	})
 }
@@ -558,97 +546,15 @@ func (o *OverlayWindow) DrawTextCentered(
 	o.mu.Unlock()
 }
 
-// Flush presents queued draw commands through UpdateLayeredWindow.
+// Flush presents queued draw commands via WM_PAINT.
 func (o *OverlayWindow) Flush() error {
-	if o == nil {
-		return fmt.Errorf("overlay window is nil")
+	if o == nil || o.hwnd == 0 {
+		return fmt.Errorf("overlay window is not initialized")
 	}
-
-	var flushErr error
 
 	runOnOverlayUI(func() {
-		flushErr = o.presentLayeredLocked()
+		o.requestPaintLocked()
 	})
-
-	return flushErr
-}
-
-func (o *OverlayWindow) presentLayeredLocked() error {
-	if o == nil {
-		return fmt.Errorf("overlay window is nil")
-	}
-
-	if o.hwnd == 0 {
-		if err := o.createHWNDLocked(); err != nil {
-			return err
-		}
-	}
-
-	if o.width <= 0 || o.height <= 0 {
-		return fmt.Errorf("overlay has invalid dimensions %dx%d", o.width, o.height)
-	}
-
-	o.mu.Lock()
-	fills := append([]rectFill(nil), o.fills...)
-	strokes := append([]rectStroke(nil), o.strokes...)
-	texts := append([]textDraw(nil), o.texts...)
-	o.dirty = false
-	o.mu.Unlock()
-
-	screenDC, _, _ := procGetDC.Call(0)
-	if screenDC == 0 {
-		return fmt.Errorf("GetDC failed")
-	}
-	defer procReleaseDC.Call(0, screenDC)
-
-	memDC, _, _ := procCreateCompatibleDC.Call(screenDC)
-	if memDC == 0 {
-		return fmt.Errorf("CreateCompatibleDC failed")
-	}
-	defer procDeleteDC.Call(memDC)
-
-	bitmap, _, _ := procCreateCompatibleBitmap.Call(
-		screenDC,
-		uintptr(o.width),
-		uintptr(o.height),
-	)
-	if bitmap == 0 {
-		return fmt.Errorf("CreateCompatibleBitmap failed")
-	}
-	defer procDeleteObject.Call(bitmap)
-
-	oldBitmap, _, _ := procSelectObject.Call(memDC, bitmap)
-	if oldBitmap == 0 {
-		return fmt.Errorf("SelectObject failed")
-	}
-	defer procSelectObject.Call(memDC, oldBitmap)
-
-	o.renderCommands(windows.Handle(memDC), fills, strokes, texts)
-
-	dstPoint := winPoint{
-		x: int32(o.bounds.Min.X),
-		y: int32(o.bounds.Min.Y),
-	}
-	windowSize := winSize{
-		cx: int32(o.width),
-		cy: int32(o.height),
-	}
-	srcPoint := winPoint{x: 0, y: 0}
-
-	ret, _, err := procUpdateLayeredWindow.Call(
-		uintptr(o.hwnd),
-		0,
-		uintptr(unsafe.Pointer(&dstPoint)),
-		uintptr(unsafe.Pointer(&windowSize)),
-		memDC,
-		uintptr(unsafe.Pointer(&srcPoint)),
-		overlayColorKey,
-		0,
-		ulwColorKey,
-	)
-	if ret == 0 {
-		return fmt.Errorf("UpdateLayeredWindow: %w", err)
-	}
 
 	return nil
 }
@@ -658,7 +564,8 @@ func (o *OverlayWindow) requestPaintLocked() {
 		return
 	}
 
-	_ = o.presentLayeredLocked()
+	procInvalidateRect.Call(uintptr(o.hwnd), 0, 1)
+	procUpdateWindow.Call(uintptr(o.hwnd))
 }
 
 func (o *OverlayWindow) paintLocked(hdc windows.Handle) {

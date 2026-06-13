@@ -301,6 +301,9 @@ func (m *Manager) DrawGrid(gridValue *domainGrid.Grid, input string, style grid.
 		return derrors.New(derrors.CodeNotSupported, "overlay grid not implemented on windows backend")
 	}
 
+	// Shared activation may call draw before resize; enforce monitor bounds here.
+	m.win.Resize()
+
 	if m.logger != nil {
 		cellCount := 0
 		if gridValue != nil {

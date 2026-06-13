@@ -34,6 +34,7 @@ type winOverlay struct {
 	sublayerKeys  string
 	cachedGrid    *domainGrid.Grid
 	cachedStyle   gridcomponent.Style
+	suppressDraw  bool
 }
 
 func newWinOverlay(logger *zap.Logger) *winOverlay {
@@ -97,7 +98,7 @@ func (o *winOverlay) ensureWindowForDraw() {
 		return
 	}
 
-	// HWND is destroyed on Hide; recreate whenever the backing window is gone.
+	// HWND may be hidden between grid sessions; recreate only when invalid.
 	if o.window == nil || !o.window.Healthy() {
 		o.recreateWindow()
 	}
@@ -133,6 +134,7 @@ func (o *winOverlay) Show() {
 		return
 	}
 
+	o.ensureWindowForDraw()
 	if o.window == nil {
 		if o.logger != nil {
 			o.logger.Error("win-grid: Show aborted, overlay window is nil")
@@ -140,6 +142,8 @@ func (o *winOverlay) Show() {
 
 		return
 	}
+
+	o.suppressDraw = false
 
 	if o.logger != nil {
 		bounds := o.window.Bounds()
@@ -152,6 +156,11 @@ func (o *winOverlay) Show() {
 		)
 	}
 
+	// Reopen after Esc: redraw from cache once the HWND is about to be shown.
+	if o.cachedGrid != nil {
+		o.redrawGridWithoutFlush()
+	}
+
 	o.window.Show()
 	o.flushOverlay("show")
 
@@ -161,7 +170,14 @@ func (o *winOverlay) Show() {
 }
 
 func (o *winOverlay) Hide() {
-	if o != nil && o.window != nil {
+	if o == nil {
+		return
+	}
+
+	o.suppressDraw = true
+	o.currentSubgrid = nil
+
+	if o.window != nil {
 		o.window.Hide()
 	}
 }
@@ -190,7 +206,13 @@ func (o *winOverlay) Destroy() {
 }
 
 func (o *winOverlay) UpdateGridMatches(prefix string) {
-	if o == nil || o.cachedGrid == nil {
+	if o == nil || o.cachedGrid == nil || o.suppressDraw {
+		return
+	}
+
+	if o.window != nil && !o.window.Visible() {
+		o.currentPrefix = strings.ToUpper(prefix)
+
 		return
 	}
 
@@ -241,10 +263,16 @@ func (o *winOverlay) DrawGrid(g *domainGrid.Grid, input string, style gridcompon
 	o.cachedStyle = style
 	o.currentPrefix = strings.ToUpper(input)
 	o.currentSubgrid = nil
+	o.suppressDraw = false
 	o.redrawGrid()
 }
 
 func (o *winOverlay) redrawGrid() {
+	o.redrawGridWithoutFlush()
+	o.flushOverlay("grid")
+}
+
+func (o *winOverlay) redrawGridWithoutFlush() {
 	if o == nil {
 		return
 	}
@@ -302,9 +330,6 @@ func (o *winOverlay) redrawGrid() {
 			zap.Bool("healthy", o.window.Healthy()),
 		)
 	}
-
-	// Paint while hidden when possible; Show() flushes again after the HWND is visible.
-	o.flushOverlay("grid")
 }
 
 func (o *winOverlay) flushOverlay(context string) {
