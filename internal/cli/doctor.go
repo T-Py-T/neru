@@ -10,10 +10,7 @@ import (
 	"github.com/y3owk1n/neru/internal/core/infra/ipc"
 )
 
-var (
-	errDaemonNotRunning  = errors.New("daemon not running")
-	errDaemonUnreachable = errors.New("daemon unreachable")
-)
+var errDaemonUnreachable = errors.New("daemon unreachable")
 
 // DoctorCmd is the CLI doctor command.
 var DoctorCmd = &cobra.Command{

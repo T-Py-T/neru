@@ -26,15 +26,15 @@ const (
 )
 
 type winOverlay struct {
-	window        *winplatform.OverlayWindow
-	logger        *zap.Logger
-	currentPrefix string
-	hideUnmatched bool
+	window         *winplatform.OverlayWindow
+	logger         *zap.Logger
+	currentPrefix  string
+	hideUnmatched  bool
 	currentSubgrid *domainGrid.Cell
-	sublayerKeys  string
-	cachedGrid    *domainGrid.Grid
-	cachedStyle   gridcomponent.Style
-	suppressDraw  bool
+	sublayerKeys   string
+	cachedGrid     *domainGrid.Grid
+	cachedStyle    gridcomponent.Style
+	suppressDraw   bool
 }
 
 func newWinOverlay(logger *zap.Logger) *winOverlay {
@@ -74,7 +74,7 @@ func (o *winOverlay) recreateWindow() {
 	window, err := winplatform.NewOverlayWindow()
 	if err != nil {
 		if o.logger != nil {
-			o.logger.Error("win-grid: failed to recreate overlay window", zap.Error(err))
+			o.logger.Error("failed to recreate overlay window", zap.Error(err))
 		}
 
 		return
@@ -84,8 +84,8 @@ func (o *winOverlay) recreateWindow() {
 
 	if o.logger != nil {
 		bounds := window.Bounds()
-		o.logger.Info(
-			"win-grid: recreated overlay window",
+		o.logger.Debug(
+			"recreated overlay window",
 			zap.Uintptr("hwnd", uintptr(window.HWND())),
 			zap.Int("width", bounds.Dx()),
 			zap.Int("height", bounds.Dy()),
@@ -137,7 +137,7 @@ func (o *winOverlay) Show() {
 	o.ensureWindowForDraw()
 	if o.window == nil {
 		if o.logger != nil {
-			o.logger.Error("win-grid: Show aborted, overlay window is nil")
+			o.logger.Error("Show aborted, overlay window is nil")
 		}
 
 		return
@@ -147,7 +147,7 @@ func (o *winOverlay) Show() {
 
 	if o.logger != nil {
 		bounds := o.window.Bounds()
-		o.logger.Info("win-grid: Show overlay window",
+		o.logger.Debug("Show overlay window",
 			zap.Uintptr("hwnd", uintptr(o.window.HWND())),
 			zap.Int("x", bounds.Min.X),
 			zap.Int("y", bounds.Min.Y),
@@ -165,7 +165,7 @@ func (o *winOverlay) Show() {
 	o.flushOverlay("show")
 
 	if o.logger != nil {
-		o.logger.Info("win-grid: Show overlay window done")
+		o.logger.Debug("Show overlay window done")
 	}
 }
 
@@ -245,7 +245,7 @@ func (o *winOverlay) DrawGrid(g *domainGrid.Grid, input string, style gridcompon
 
 	if o.window == nil {
 		if o.logger != nil {
-			o.logger.Error("win-grid: DrawGrid aborted, overlay window is nil")
+			o.logger.Error("DrawGrid aborted, overlay window is nil")
 		}
 
 		return
@@ -253,7 +253,7 @@ func (o *winOverlay) DrawGrid(g *domainGrid.Grid, input string, style gridcompon
 
 	if g == nil {
 		if o.logger != nil {
-			o.logger.Error("win-grid: DrawGrid aborted, grid is nil")
+			o.logger.Error("DrawGrid aborted, grid is nil")
 		}
 
 		return
@@ -279,7 +279,7 @@ func (o *winOverlay) redrawGridWithoutFlush() {
 
 	if o.window == nil {
 		if o.logger != nil {
-			o.logger.Error("win-grid: redrawGrid aborted, overlay window is nil")
+			o.logger.Error("redrawGrid aborted, overlay window is nil")
 		}
 
 		return
@@ -287,7 +287,7 @@ func (o *winOverlay) redrawGridWithoutFlush() {
 
 	if o.cachedGrid == nil {
 		if o.logger != nil {
-			o.logger.Error("win-grid: redrawGrid aborted, cached grid is nil")
+			o.logger.Error("redrawGrid aborted, cached grid is nil")
 		}
 
 		return
@@ -324,8 +324,8 @@ func (o *winOverlay) redrawGridWithoutFlush() {
 	}
 
 	if o.logger != nil {
-		o.logger.Info(
-			"win-grid: redraw complete",
+		o.logger.Debug(
+			"redraw complete",
 			zap.Int("cells", len(o.cachedGrid.AllCells())),
 			zap.Bool("healthy", o.window.Healthy()),
 		)
@@ -340,7 +340,7 @@ func (o *winOverlay) flushOverlay(context string) {
 	if err := o.window.Flush(); err != nil {
 		if o.logger != nil {
 			o.logger.Error(
-				"win-grid: overlay paint failed",
+				"overlay paint failed",
 				zap.String("context", context),
 				zap.Error(err),
 			)
@@ -350,7 +350,7 @@ func (o *winOverlay) flushOverlay(context string) {
 	}
 
 	if o.logger != nil {
-		o.logger.Info("win-grid: overlay paint ok", zap.String("context", context))
+		o.logger.Debug("overlay paint ok", zap.String("context", context))
 	}
 }
 

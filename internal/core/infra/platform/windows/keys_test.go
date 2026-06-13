@@ -8,10 +8,10 @@ func TestKeyComboFromBaseAndModifiers(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name  string
-		base  string
-		mods  []string
-		want  string
+		name string
+		base string
+		mods []string
+		want string
 	}{
 		{
 			name: "shift left click binding",

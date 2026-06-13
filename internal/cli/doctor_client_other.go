@@ -6,7 +6,13 @@
 
 package cli
 
-import "github.com/spf13/cobra"
+import (
+	"errors"
+
+	"github.com/spf13/cobra"
+)
+
+var errDaemonNotRunning = errors.New("daemon not running")
 
 func printClientDoctorWithoutDaemon(cmd *cobra.Command) error {
 	cmd.Println()

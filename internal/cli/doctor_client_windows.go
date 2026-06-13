@@ -34,9 +34,19 @@ func printClientDoctorWithoutDaemon(cmd *cobra.Command) error {
 	printCapabilityLine(cmd, "process", string(caps.Process.Status), caps.Process.Detail)
 	printCapabilityLine(cmd, "screen", string(caps.Screen.Status), caps.Screen.Detail)
 	printCapabilityLine(cmd, "cursor", string(caps.Cursor.Status), caps.Cursor.Detail)
-	printCapabilityLine(cmd, "accessibility", string(caps.Accessibility.Status), caps.Accessibility.Detail)
+	printCapabilityLine(
+		cmd,
+		"accessibility",
+		string(caps.Accessibility.Status),
+		caps.Accessibility.Detail,
+	)
 	printCapabilityLine(cmd, "overlay", string(caps.Overlay.Status), caps.Overlay.Detail)
-	printCapabilityLine(cmd, "global_hotkeys", string(caps.GlobalHotkeys.Status), caps.GlobalHotkeys.Detail)
+	printCapabilityLine(
+		cmd,
+		"global_hotkeys",
+		string(caps.GlobalHotkeys.Status),
+		caps.GlobalHotkeys.Detail,
+	)
 	printCapabilityLine(
 		cmd,
 		"keyboard_event_tap",

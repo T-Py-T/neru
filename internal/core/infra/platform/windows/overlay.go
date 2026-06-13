@@ -48,36 +48,36 @@ const (
 var (
 	gdi32 = windows.NewLazySystemDLL("gdi32.dll")
 
-	procCreateSolidBrush       = gdi32.NewProc("CreateSolidBrush")
-	procDeleteObject           = gdi32.NewProc("DeleteObject")
-	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
-	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
-	procSelectObject           = gdi32.NewProc("SelectObject")
-	procBitBlt                 = gdi32.NewProc("BitBlt")
-	procDeleteDC               = gdi32.NewProc("DeleteDC")
-	procCreateFontW            = gdi32.NewProc("CreateFontW")
-	procSetBkMode        = gdi32.NewProc("SetBkMode")
-	procSetTextColor     = gdi32.NewProc("SetTextColor")
-	procRegisterClassExW       = user32.NewProc("RegisterClassExW")
-	procCreateWindowExW        = user32.NewProc("CreateWindowExW")
-	procDestroyWindow          = user32.NewProc("DestroyWindow")
-	procShowWindow             = user32.NewProc("ShowWindow")
-	procSetWindowPos           = user32.NewProc("SetWindowPos")
-	procDefWindowProcW         = user32.NewProc("DefWindowProcW")
-	procUnregisterClassW       = user32.NewProc("UnregisterClassW")
+	procCreateSolidBrush           = gdi32.NewProc("CreateSolidBrush")
+	procDeleteObject               = gdi32.NewProc("DeleteObject")
+	procCreateCompatibleDC         = gdi32.NewProc("CreateCompatibleDC")
+	procCreateCompatibleBitmap     = gdi32.NewProc("CreateCompatibleBitmap")
+	procSelectObject               = gdi32.NewProc("SelectObject")
+	procBitBlt                     = gdi32.NewProc("BitBlt")
+	procDeleteDC                   = gdi32.NewProc("DeleteDC")
+	procCreateFontW                = gdi32.NewProc("CreateFontW")
+	procSetBkMode                  = gdi32.NewProc("SetBkMode")
+	procSetTextColor               = gdi32.NewProc("SetTextColor")
+	procRegisterClassExW           = user32.NewProc("RegisterClassExW")
+	procCreateWindowExW            = user32.NewProc("CreateWindowExW")
+	procDestroyWindow              = user32.NewProc("DestroyWindow")
+	procShowWindow                 = user32.NewProc("ShowWindow")
+	procSetWindowPos               = user32.NewProc("SetWindowPos")
+	procDefWindowProcW             = user32.NewProc("DefWindowProcW")
+	procUnregisterClassW           = user32.NewProc("UnregisterClassW")
 	procSetLayeredWindowAttributes = user32.NewProc("SetLayeredWindowAttributes")
-	procInvalidateRect         = user32.NewProc("InvalidateRect")
-	procUpdateWindow           = user32.NewProc("UpdateWindow")
-	procIsWindow               = user32.NewProc("IsWindow")
-	procBeginPaint             = user32.NewProc("BeginPaint")
-	procEndPaint               = user32.NewProc("EndPaint")
-	procFillRect               = user32.NewProc("FillRect")
-	procDrawTextW              = user32.NewProc("DrawTextW")
-	kernel32             = windows.NewLazySystemDLL("kernel32.dll")
-	procGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
+	procInvalidateRect             = user32.NewProc("InvalidateRect")
+	procUpdateWindow               = user32.NewProc("UpdateWindow")
+	procIsWindow                   = user32.NewProc("IsWindow")
+	procBeginPaint                 = user32.NewProc("BeginPaint")
+	procEndPaint                   = user32.NewProc("EndPaint")
+	procFillRect                   = user32.NewProc("FillRect")
+	procDrawTextW                  = user32.NewProc("DrawTextW")
+	kernel32                       = windows.NewLazySystemDLL("kernel32.dll")
+	procGetModuleHandleW           = kernel32.NewProc("GetModuleHandleW")
 
-	overlayClassOnce sync.Once
-	overlayClassErr  error
+	overlayClassOnce  sync.Once
+	overlayClassErr   error
 	overlayWndProcPtr uintptr
 
 	overlayRegistry sync.Map
@@ -688,7 +688,12 @@ func (o *OverlayWindow) fillRectGDI(hdc windows.Handle, rect image.Rectangle, co
 	procFillRect.Call(uintptr(hdc), uintptr(unsafe.Pointer(&winRect)), brush)
 }
 
-func (o *OverlayWindow) strokeRectGDI(hdc windows.Handle, bounds image.Rectangle, color uint32, width int) {
+func (o *OverlayWindow) strokeRectGDI(
+	hdc windows.Handle,
+	bounds image.Rectangle,
+	color uint32,
+	width int,
+) {
 	if bounds.Empty() || width < 1 {
 		return
 	}
@@ -774,4 +779,3 @@ func moduleHandle() uintptr {
 
 	return handle
 }
-

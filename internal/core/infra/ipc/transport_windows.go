@@ -19,10 +19,6 @@ func endpointPath() string {
 	return pipePath
 }
 
-func prepareEndpoint(_ string) error {
-	return nil
-}
-
 func listenEndpoint(ctx context.Context, path string) (net.Listener, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

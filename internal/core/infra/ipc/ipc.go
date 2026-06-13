@@ -131,7 +131,11 @@ func NewServer(handler CommandHandler, logger *zap.Logger) (*Server, error) {
 
 	listener, listenerErr := listenEndpoint(context.Background(), socketPath)
 	if listenerErr != nil {
-		return nil, derrors.Wrap(listenerErr, derrors.CodeIPCFailed, "failed to create IPC endpoint")
+		return nil, derrors.Wrap(
+			listenerErr,
+			derrors.CodeIPCFailed,
+			"failed to create IPC endpoint",
+		)
 	}
 
 	logger.Info("IPC server created", zap.String("endpoint", socketPath))

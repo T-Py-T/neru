@@ -24,12 +24,12 @@ type PassthroughCallback func()
 type EventTap struct {
 	logger *zap.Logger
 
-	mu                  sync.RWMutex
-	callback            Callback
-	passthroughCallback PassthroughCallback
-	hotkeys             []string
+	mu                   sync.RWMutex
+	callback             Callback
+	passthroughCallback  PassthroughCallback
+	hotkeys              []string
 	stickyModifierToggle bool
-	enabled             bool
+	enabled              bool
 
 	hook *winplatform.KeyboardHook
 }

@@ -14,12 +14,13 @@ import (
 	"syscall"
 	"unsafe"
 
-	derrors "github.com/y3owk1n/neru/internal/core/errors"
 	"golang.org/x/sys/windows"
+
+	derrors "github.com/y3owk1n/neru/internal/core/errors"
 )
 
 const (
-	cchDeviceName = 32
+	cchDeviceName                  = 32
 	processQueryLimitedInformation = 0x1000
 	processNameWin32               = 0
 	monitorDefaultToNearest        = 2
@@ -60,13 +61,13 @@ type winSize struct {
 var (
 	user32 = windows.NewLazySystemDLL("user32.dll")
 
-	procGetCursorPos          = user32.NewProc("GetCursorPos")
-	procSetCursorPos          = user32.NewProc("SetCursorPos")
-	procGetWindowRect         = user32.NewProc("GetWindowRect")
-	procEnumDisplayMonitors   = user32.NewProc("EnumDisplayMonitors")
-	procGetMonitorInfoW       = user32.NewProc("GetMonitorInfoW")
-	procMonitorFromPoint      = user32.NewProc("MonitorFromPoint")
-	procEnumDisplayDevicesW   = user32.NewProc("EnumDisplayDevicesW")
+	procGetCursorPos        = user32.NewProc("GetCursorPos")
+	procSetCursorPos        = user32.NewProc("SetCursorPos")
+	procGetWindowRect       = user32.NewProc("GetWindowRect")
+	procEnumDisplayMonitors = user32.NewProc("EnumDisplayMonitors")
+	procGetMonitorInfoW     = user32.NewProc("GetMonitorInfoW")
+	procMonitorFromPoint    = user32.NewProc("MonitorFromPoint")
+	procEnumDisplayDevicesW = user32.NewProc("EnumDisplayDevicesW")
 )
 
 func win32Bool(ret uintptr, err error) error {
@@ -351,7 +352,12 @@ func processImagePath(pid int) (string, error) {
 
 	buf := make([]uint16, windows.MAX_PATH)
 	size := uint32(len(buf))
-	if err := windows.QueryFullProcessImageName(handle, processNameWin32, &buf[0], &size); err != nil {
+	if err := windows.QueryFullProcessImageName(
+		handle,
+		processNameWin32,
+		&buf[0],
+		&size,
+	); err != nil {
 		return "", fmt.Errorf("QueryFullProcessImageName: %w", err)
 	}
 

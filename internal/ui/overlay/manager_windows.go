@@ -88,14 +88,10 @@ func (m *Manager) Show() {
 	m.ensureWinOverlayLocked()
 	if m.win == nil {
 		if m.logger != nil {
-			m.logger.Error("win-grid: manager Show aborted, overlay backend is nil")
+			m.logger.Error("manager Show aborted, overlay backend is nil")
 		}
 
 		return
-	}
-
-	if m.logger != nil {
-		m.logger.Info("win-grid: manager Show")
 	}
 
 	m.win.Show()
@@ -223,14 +219,16 @@ func (m *Manager) WaylandKeyboardChannel() <-chan string {
 	return nil
 }
 
-func (m *Manager) UseHintOverlay(o *hints.Overlay)            { m.hintOverlay = o }
-func (m *Manager) UseGridOverlay(o *grid.Overlay)             { m.gridOverlay = o }
+func (m *Manager) UseHintOverlay(o *hints.Overlay) { m.hintOverlay = o }
+func (m *Manager) UseGridOverlay(o *grid.Overlay)  { m.gridOverlay = o }
 func (m *Manager) UseModeIndicatorOverlay(o *modeindicator.Overlay) {
 	m.modeIndicatorOverlay = o
 }
+
 func (m *Manager) UseStickyModifiersOverlay(o *stickyindicator.Overlay) {
 	m.stickyModifiersOverlay = o
 }
+
 func (m *Manager) UseRecursiveGridOverlay(o *recursivegrid.Overlay) {
 	m.recursiveGridOverlay = o
 }
@@ -240,9 +238,11 @@ func (m *Manager) GridOverlay() *grid.Overlay  { return m.gridOverlay }
 func (m *Manager) ModeIndicatorOverlay() *modeindicator.Overlay {
 	return m.modeIndicatorOverlay
 }
+
 func (m *Manager) StickyModifiersOverlay() *stickyindicator.Overlay {
 	return m.stickyModifiersOverlay
 }
+
 func (m *Manager) RecursiveGridOverlay() *recursivegrid.Overlay {
 	return m.recursiveGridOverlay
 }
@@ -292,10 +292,13 @@ func (m *Manager) DrawGrid(gridValue *domainGrid.Grid, input string, style grid.
 	m.ensureWinOverlayLocked()
 	if m.win == nil {
 		if m.logger != nil {
-			m.logger.Error("win-grid: manager DrawGrid aborted, overlay backend is nil")
+			m.logger.Error("manager DrawGrid aborted, overlay backend is nil")
 		}
 
-		return derrors.New(derrors.CodeNotSupported, "overlay grid not implemented on windows backend")
+		return derrors.New(
+			derrors.CodeNotSupported,
+			"overlay grid not implemented on windows backend",
+		)
 	}
 
 	// Shared activation may call draw before resize; enforce monitor bounds here.
@@ -307,7 +310,7 @@ func (m *Manager) DrawGrid(gridValue *domainGrid.Grid, input string, style grid.
 			cellCount = len(gridValue.AllCells())
 		}
 
-		m.logger.Info("win-grid: manager DrawGrid", zap.Int("cells", cellCount))
+		m.logger.Debug("manager DrawGrid", zap.Int("cells", cellCount))
 	}
 
 	if m.gridOverlay != nil {
