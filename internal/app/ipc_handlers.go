@@ -437,23 +437,11 @@ func (h *IPCControllerModes) handleHints(_ context.Context, cmd ipc.Command) ipc
 
 func (h *IPCControllerModes) handleGrid(_ context.Context, cmd ipc.Command) ipc.Response {
 	if h.modes == nil {
-		if h.logger != nil {
-			h.logger.Error("win-grid: ipc handleGrid modes handler is nil")
-		}
-
 		return h.modesUnavailableResponse()
-	}
-
-	if h.logger != nil {
-		h.logger.Info("win-grid: ipc handleGrid enter", zap.Strings("args", cmd.Args))
 	}
 
 	opts, errResp := h.extractModeOptions(cmd)
 	if errResp != nil {
-		if h.logger != nil {
-			h.logger.Warn("win-grid: ipc handleGrid bad options", zap.String("message", errResp.Message))
-		}
-
 		return *errResp
 	}
 
@@ -463,10 +451,6 @@ func (h *IPCControllerModes) handleGrid(_ context.Context, cmd ipc.Command) ipc.
 		CursorFollowSelection: opts.CursorFollowSelection,
 		Toggle:                opts.Toggle,
 	})
-
-	if h.logger != nil {
-		h.logger.Info("win-grid: ipc handleGrid done")
-	}
 
 	return ipc.Response{Success: true, Message: "grid mode activated", Code: ipc.CodeOK}
 }

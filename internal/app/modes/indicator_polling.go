@@ -38,16 +38,8 @@ func (h *Handler) startIndicatorPolling(mode domain.Mode) {
 	// overlayManager.ResizeToActiveScreen() which covers this, but grid
 	// and recursive-grid modes manage their own windows and skip that
 	// call, so the mode indicator overlay could still be sized for a
-	// different monitor. Caller must hold h.mu.
-	h.runOverlayWork(func() {
-		if ind := h.overlayManager.ModeIndicatorOverlay(); ind != nil {
-			ind.ResizeToActiveScreen()
-		}
-
-		if stickyInd := h.overlayManager.StickyModifiersOverlay(); stickyInd != nil {
-			stickyInd.ResizeToActiveScreen()
-		}
-	})
+	// different monitor.
+	h.resizeIndicatorOverlays()
 
 	stopCh := make(chan struct{})
 	doneCh := make(chan struct{})
@@ -177,6 +169,12 @@ func (h *Handler) startIndicatorPolling(mode domain.Mode) {
 						stickyInd.Hide()
 					}
 				}
+
+				// Flush both indicator draws atomically to avoid intermediate
+				// buffer states appearing between the mode indicator and sticky
+				// modifiers draws. The overlay backend batches the buffer
+				// modifications and only sends them on Flush().
+				h.overlayManager.Flush()
 			}
 		}
 	}()
@@ -184,7 +182,7 @@ func (h *Handler) startIndicatorPolling(mode domain.Mode) {
 
 // stopIndicatorPolling stops the indicator polling goroutine and cleans up
 // both mode indicator and sticky modifiers indicator overlays.
-// Caller must hold h.mu; the lock is released while waiting on the poller.
+// Caller must hold h.mu.
 func (h *Handler) stopIndicatorPolling() {
 	// Restore keyboard capture if uinput scroll was active.
 	if m := overlay.Get(); m != nil && eventtap.IsUinputScrollAvailable() {
@@ -202,12 +200,7 @@ func (h *Handler) stopIndicatorPolling() {
 		close(stopCh)
 	}
 
-	waitDone := doneCh != nil
-	if waitDone {
-		// Release h.mu while waiting — the poller may need the lock (TryLock).
-		h.mu.Unlock()
-		<-doneCh
-	}
+	h.waitForIndicatorPoller(doneCh)
 
 	if ind := h.overlayManager.ModeIndicatorOverlay(); ind != nil {
 		ind.Clear()
@@ -221,10 +214,6 @@ func (h *Handler) stopIndicatorPolling() {
 
 	if ticker != nil {
 		ticker.Stop()
-	}
-
-	if waitDone {
-		h.mu.Lock()
 	}
 }
 

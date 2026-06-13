@@ -72,11 +72,11 @@ func (h *Handler) SetModeIdle() {
 	h.overlaySwitch(overlay.ModeIdle)
 }
 
-// setModeLocked sets the application mode and switches overlay.
-// Caller must hold h.mu. Event tap is enabled after h.mu is released
-// (see ActivateModeWithOptions and SetMode* helpers).
+// setModeLocked sets the application mode, enables event tap, and switches overlay.
+// Caller must hold h.mu.
 func (h *Handler) setModeLocked(appMode domain.Mode, overlayMode overlay.Mode) {
 	h.setAppModeLocked(appMode)
+	h.enableNavigationEventTapLocked()
 	h.overlaySwitch(overlayMode)
 }
 
@@ -101,12 +101,8 @@ func (h *Handler) activateModeBase(
 	actionString := domain.ActionString(actionEnum)
 	h.logger.Debug("Activating "+modeName+" mode", zap.String("action", actionString))
 
-	// Resize on the overlay/UI thread without holding h.mu (see runOverlayWork).
-	if h.overlayManager != nil {
-		h.runOverlayWork(func() {
-			h.overlayManager.ResizeToActiveScreen()
-		})
-	}
+	// Always resize overlay to the active screen
+	h.resizeOverlayForModeActivation()
 
 	return actionEnum, true
 }
@@ -118,10 +114,7 @@ func (h *Handler) SetModeHints() {
 	h.mu.Lock()
 	h.setModeLocked(domain.ModeHints, overlay.ModeHints)
 	h.mu.Unlock()
-
-	if h.enableEventTap != nil {
-		h.enableEventTap()
-	}
+	h.finishSetNavigationMode()
 }
 
 // SetModeGrid switches the application to grid mode for coordinate-based navigation.
@@ -131,10 +124,7 @@ func (h *Handler) SetModeGrid() {
 	h.mu.Lock()
 	h.setModeLocked(domain.ModeGrid, overlay.ModeGrid)
 	h.mu.Unlock()
-
-	if h.enableEventTap != nil {
-		h.enableEventTap()
-	}
+	h.finishSetNavigationMode()
 }
 
 // SetModeRecursiveGrid switches the application to recursive-grid mode for recursive cell navigation.
@@ -144,10 +134,7 @@ func (h *Handler) SetModeRecursiveGrid() {
 	h.mu.Lock()
 	h.setModeLocked(domain.ModeRecursiveGrid, overlay.ModeRecursiveGrid)
 	h.mu.Unlock()
-
-	if h.enableEventTap != nil {
-		h.enableEventTap()
-	}
+	h.finishSetNavigationMode()
 }
 
 // SetModeScroll switches the application to scroll mode for scroll-based navigation.
@@ -157,8 +144,5 @@ func (h *Handler) SetModeScroll() {
 	h.mu.Lock()
 	h.setModeLocked(domain.ModeScroll, overlay.ModeScroll)
 	h.mu.Unlock()
-
-	if h.enableEventTap != nil {
-		h.enableEventTap()
-	}
+	h.finishSetNavigationMode()
 }

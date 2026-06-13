@@ -20,11 +20,6 @@ func (h *Handler) activateGridModeWithAction(
 	repeat *bool,
 	cursorFollowSelection *bool,
 ) {
-	h.logger.Info("win-grid: step 1 enter activateGridModeWithAction",
-		zap.String("current_mode", h.CurrModeString()),
-		zap.Bool("grid_enabled", h.config.Grid.Enabled),
-		zap.Bool("neru_enabled", h.appState.IsEnabled()))
-
 	// Detect refresh before validation so we can do partial cleanup on re-activation.
 	isRefresh := h.appState.CurrentMode() == domain.ModeGrid
 
@@ -35,16 +30,12 @@ func (h *Handler) activateGridModeWithAction(
 		"",
 	)
 	if !activated {
-		h.logger.Warn("win-grid: step 2 stopped activateModeBase rejected activation")
-
 		if isRefresh {
 			h.exitModeLocked()
 		}
 
 		return
 	}
-
-	h.logger.Info("win-grid: step 2 activateModeBase ok")
 
 	actionString := domain.ActionString(actionEnum)
 
@@ -62,43 +53,22 @@ func (h *Handler) activateGridModeWithAction(
 	h.appState.SetGridOverlayNeedsRefresh(false)
 
 	gridInstance := h.createGridInstance()
-	h.logger.Info("win-grid: step 4 grid instance ready",
-		zap.Int("cells", len(gridInstance.AllCells())),
-		zap.Int("screen_width", h.screenBounds.Dx()),
-		zap.Int("screen_height", h.screenBounds.Dy()))
 	h.updateGridOverlayConfig()
 
-	h.initializeGridManager(gridInstance)
-
+	// Reset the grid manager state when setting up the grid.
+	// Note: Manager is reused across activations (holds grid state) but reset to clear input.
+	// Router is recreated each activation (stateless, needs fresh exit keys from config).
 	if h.grid.Manager != nil {
 		h.grid.Manager.Reset()
 	}
 
+	h.initializeGridManager(gridInstance)
+
 	h.grid.Router = domainGrid.NewRouter(h.grid.Manager, h.logger)
 
-	// Overlay draw/show marshals to the Win32 UI thread and must not run under h.mu.
-	var drawGridErr error
-
-	h.logger.Info("win-grid: step 5-8 overlay draw resize show")
-	h.runOverlayWork(func() {
-		h.logger.Info("win-grid: step 3 clear overlay")
-		h.overlayManager.Clear()
-
-		h.logger.Info("win-grid: step 6 draw grid")
-		drawGridErr = h.renderer.DrawGrid(gridInstance, "")
-		if drawGridErr != nil {
-			return
-		}
-
-		h.logger.Info("win-grid: step 7 resize overlay to active screen")
-		h.overlayManager.ResizeToActiveScreen()
-
-		h.logger.Info("win-grid: step 8 show overlay hwnd")
-		h.overlayManager.Show()
-	})
-
+	drawGridErr := h.presentGridOverlay(gridInstance)
 	if drawGridErr != nil {
-		h.logger.Error("win-grid: step 6 failed draw grid", zap.Error(drawGridErr))
+		h.logger.Error("Failed to draw grid", zap.Error(drawGridErr))
 
 		if isRefresh {
 			h.exitModeLocked()
@@ -144,7 +114,7 @@ func (h *Handler) activateGridModeWithAction(
 		h.setModeLocked(domain.ModeGrid, overlay.ModeGrid)
 	}
 
-	h.logger.Info("win-grid: step 9 grid mode activated", zap.String("action", actionString))
+	h.logger.Info("Grid mode activated", zap.String("action", actionString))
 
 	h.startIndicatorPolling(domain.ModeGrid)
 }
@@ -155,28 +125,14 @@ func (h *Handler) createGridInstance() *domainGrid.Grid {
 
 	if h.system != nil {
 		b, err := h.system.ScreenBounds(h.ctx)
-		if err == nil && b.Dx() > 0 && b.Dy() > 0 {
+		if err == nil {
 			screenBounds = b
-		} else if err != nil && !derrors.IsNotSupported(err) {
+		} else if !derrors.IsNotSupported(err) {
 			h.logger.Warn("Failed to get screen bounds for grid", zap.Error(err))
 		}
 	}
 
-	if screenBounds.Dx() == 0 || screenBounds.Dy() == 0 {
-		type overlayBoundsProvider interface {
-			ActiveScreenBounds() (image.Rectangle, bool)
-		}
-		if provider, ok := h.overlayManager.(overlayBoundsProvider); ok {
-			if b, ok := provider.ActiveScreenBounds(); ok {
-				screenBounds = b
-				h.logger.Warn(
-					"Using overlay window bounds as grid screen bounds fallback",
-					zap.Int("width", b.Dx()),
-					zap.Int("height", b.Dy()),
-				)
-			}
-		}
-	}
+	screenBounds = h.fallbackGridScreenBounds(screenBounds)
 
 	// Store screen bounds for coordinate conversion
 	h.screenBounds = screenBounds
@@ -280,24 +236,7 @@ func (h *Handler) initializeGridManager(gridInstance *domainGrid.Grid) {
 
 			input := h.grid.Manager.CurrentInput()
 
-			// Force redraw only when exiting subgrid to restore main grid
-			if forceRedraw {
-				h.overlayManager.Clear()
-
-				gridErr := h.renderer.DrawGrid(gridInstance, input)
-				if gridErr != nil {
-					h.logger.Error("Failed to redraw grid", zap.Error(gridErr))
-
-					return
-				}
-
-				h.overlayManager.Show()
-			}
-
-			// Hide unmatched cells if configured and input exists
-			hideUnmatched := h.config.Grid.HideUnmatched && len(input) > 0
-			h.renderer.SetHideUnmatched(hideUnmatched)
-			h.renderer.UpdateGridMatches(input)
+			h.refreshGridOverlayInput(gridInstance, input, forceRedraw)
 			h.refreshGridVirtualPointerLocked()
 		},
 		// Subgrid callback: moves cursor and shows subgrid overlay
