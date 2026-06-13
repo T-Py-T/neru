@@ -1,0 +1,71 @@
+//go:build darwin
+
+//nolint:testpackage
+package darwin
+
+import "testing"
+
+func TestMapDarwinGenericAlias_EmptyDefaultsToSans(t *testing.T) {
+	if got := mapDarwinGenericAlias(""); got != defaultDarwinSans {
+		t.Fatalf("expected %q for empty input, got %q", defaultDarwinSans, got)
+	}
+}
+
+func TestMapDarwinGenericAlias_GenericAliases(t *testing.T) {
+	cases := map[string]string{
+		"":           defaultDarwinSans,
+		"sans":       defaultDarwinSans,
+		"Sans":       defaultDarwinSans,
+		"sans-serif": defaultDarwinSans,
+		"Sans Serif": defaultDarwinSans,
+		"SANSSERIF":  defaultDarwinSans,
+		"serif":      defaultDarwinSerif,
+		"Serif":      defaultDarwinSerif,
+		"mono":       defaultDarwinMono,
+		"Monospace":  defaultDarwinMono,
+		"   mono   ": defaultDarwinMono,
+	}
+
+	for input, want := range cases {
+		t.Run(input, func(t *testing.T) {
+			if got := mapDarwinGenericAlias(input); got != want {
+				t.Fatalf("mapDarwinGenericAlias(%q) = %q, want %q", input, got, want)
+			}
+		})
+	}
+}
+
+func TestMapDarwinGenericAlias_NonGenericPassesThrough(t *testing.T) {
+	// Non-generic names are passed through to the C layer unchanged so
+	// NSFontManager can verify and weight-resolve them.
+	for _, input := range []string{"JetBrains Mono", "SF Mono", "Helvetica Neue"} {
+		if got := mapDarwinGenericAlias(input); got != input {
+			t.Fatalf("mapDarwinGenericAlias(%q) = %q, want %q", input, got, input)
+		}
+	}
+}
+
+func TestNSFontResolver_CachesByFamily(t *testing.T) {
+	fontResolver := &nsFontResolver{cache: make(map[string]string)}
+
+	for range 3 {
+		if got := fontResolver.Resolve("sans", true); got != defaultDarwinSans {
+			t.Fatalf("expected generic alias to resolve to %q, got %q", defaultDarwinSans, got)
+		}
+	}
+
+	fontResolver.mu.RLock()
+	defer fontResolver.mu.RUnlock()
+
+	if len(fontResolver.cache) != 1 {
+		t.Fatalf("expected exactly one cache entry, got %d", len(fontResolver.cache))
+	}
+}
+
+func TestNSFontResolver_EmptyDefaultsToSans(t *testing.T) {
+	fontResolver := &nsFontResolver{cache: make(map[string]string)}
+
+	if got := fontResolver.Resolve("", false); got != defaultDarwinSans {
+		t.Fatalf("expected empty input to resolve to %q, got %q", defaultDarwinSans, got)
+	}
+}

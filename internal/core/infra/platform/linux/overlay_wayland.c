@@ -425,6 +425,8 @@ void neru_wayland_overlay_destroy(NeruWaylandOverlay *overlay) {
 }
 
 void neru_wayland_overlay_setup_buffers(NeruWaylandOverlay *overlay) {
+	int new_surfaces = 0;
+
 	for (int i = 0; i < overlay->nr_screens; i++) {
 		NeruWaylandOverlayScreen *scr = &overlay->screens[i];
 
@@ -459,10 +461,14 @@ void neru_wayland_overlay_setup_buffers(NeruWaylandOverlay *overlay) {
 
 		zwlr_layer_surface_v1_add_listener(scr->layer_surface, &layer_surface_listener, overlay);
 		wl_surface_commit(scr->wl_surface);
+
+		new_surfaces = 1;
 	}
 
-	// Wait for configure events
-	wl_display_roundtrip(overlay->display);
+	// Only roundtrip when new surfaces were created (avoids sync delay on every draw).
+	if (new_surfaces) {
+		wl_display_roundtrip(overlay->display);
+	}
 
 	for (int i = 0; i < overlay->nr_screens; i++) {
 		NeruWaylandOverlayScreen *scr = &overlay->screens[i];
@@ -647,9 +653,7 @@ void neru_wayland_overlay_text(
 		cairo_t *cr = scr->cr;
 		cairo_text_extents_t extents;
 		cairo_save(cr);
-		cairo_select_font_face(
-		    cr, (font_family && font_family[0]) ? font_family : "Sans", CAIRO_FONT_SLANT_NORMAL,
-		    CAIRO_FONT_WEIGHT_BOLD);
+		cairo_select_font_face(cr, font_family, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
 		cairo_set_font_size(cr, font_size);
 		cairo_text_extents(cr, text, &extents);
 		neru_wayland_overlay_color(cr, color);

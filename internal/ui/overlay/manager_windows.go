@@ -375,3 +375,9 @@ func (m *Manager) SetHideUnmatched(hide bool) {
 
 // SetSharingType is a no-op on Windows.
 func (m *Manager) SetSharingType(_ bool) {}
+
+// Flush is a no-op on Windows.
+func (m *Manager) Flush() {}
+
+// SetKeyboardCaptureEnabled is a no-op on Windows.
+func (m *Manager) SetKeyboardCaptureEnabled(_ bool) {}
