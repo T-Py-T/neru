@@ -55,7 +55,9 @@ func (h *Handler) performModeSpecificCleanup() {
 // clearAndHideOverlay clears and hides the overlay manager.
 func (h *Handler) clearAndHideOverlay() {
 	h.stopIndicatorPolling()
-	h.clearAndHideOverlaySurface()
+
+	h.overlayManager.Clear()
+	h.overlayManager.Hide()
 }
 
 // cleanupHintsMode handles cleanup for hints mode.

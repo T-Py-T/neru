@@ -223,9 +223,6 @@ func (m *Manager) WaylandKeyboardChannel() <-chan string {
 	return nil
 }
 
-// SetKeyboardCaptureEnabled is a no-op on Windows until the event tap lands.
-func (m *Manager) SetKeyboardCaptureEnabled(_ bool) {}
-
 func (m *Manager) UseHintOverlay(o *hints.Overlay)            { m.hintOverlay = o }
 func (m *Manager) UseGridOverlay(o *grid.Overlay)             { m.gridOverlay = o }
 func (m *Manager) UseModeIndicatorOverlay(o *modeindicator.Overlay) {
@@ -376,8 +373,16 @@ func (m *Manager) SetHideUnmatched(hide bool) {
 // SetSharingType is a no-op on Windows.
 func (m *Manager) SetSharingType(_ bool) {}
 
-// Flush is a no-op on Windows.
-func (m *Manager) Flush() {}
+// Flush pushes any batched overlay draws to the layered window.
+func (m *Manager) Flush() {
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
 
-// SetKeyboardCaptureEnabled is a no-op on Windows.
+	if m.win != nil {
+		m.win.flushOverlay("manager-flush")
+	}
+}
+
+// SetKeyboardCaptureEnabled is a no-op on Windows; the low-level keyboard hook
+// manages capture directly and has no scroll-passthrough toggle.
 func (m *Manager) SetKeyboardCaptureEnabled(_ bool) {}

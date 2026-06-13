@@ -50,6 +50,10 @@ func (h *Handler) activateGridModeWithAction(
 		h.exitModeLocked()
 	}
 
+	// Clear any previous overlay content (e.g., scroll highlights) before drawing grid.
+	// This prevents scroll highlights from persisting when switching from scroll mode to grid mode.
+	h.overlayManager.Clear()
+
 	h.appState.SetGridOverlayNeedsRefresh(false)
 
 	gridInstance := h.createGridInstance()
@@ -66,7 +70,8 @@ func (h *Handler) activateGridModeWithAction(
 
 	h.grid.Router = domainGrid.NewRouter(h.grid.Manager, h.logger)
 
-	drawGridErr := h.presentGridOverlay(gridInstance)
+	// Draw the grid to populate the overlay
+	drawGridErr := h.renderer.DrawGrid(gridInstance, "")
 	if drawGridErr != nil {
 		h.logger.Error("Failed to draw grid", zap.Error(drawGridErr))
 
@@ -76,6 +81,11 @@ func (h *Handler) activateGridModeWithAction(
 
 		return
 	}
+
+	h.overlayManager.ResizeToActiveScreen()
+
+	// Show the overlay (the grid is already drawn with proper style)
+	h.overlayManager.Show()
 
 	// Store pending action and repeat flag if provided
 	if isRefresh {
@@ -131,8 +141,6 @@ func (h *Handler) createGridInstance() *domainGrid.Grid {
 			h.logger.Warn("Failed to get screen bounds for grid", zap.Error(err))
 		}
 	}
-
-	screenBounds = h.fallbackGridScreenBounds(screenBounds)
 
 	// Store screen bounds for coordinate conversion
 	h.screenBounds = screenBounds
@@ -236,7 +244,24 @@ func (h *Handler) initializeGridManager(gridInstance *domainGrid.Grid) {
 
 			input := h.grid.Manager.CurrentInput()
 
-			h.refreshGridOverlayInput(gridInstance, input, forceRedraw)
+			// Force redraw only when exiting subgrid to restore main grid
+			if forceRedraw {
+				h.overlayManager.Clear()
+
+				gridErr := h.renderer.DrawGrid(gridInstance, input)
+				if gridErr != nil {
+					h.logger.Error("Failed to redraw grid", zap.Error(gridErr))
+
+					return
+				}
+
+				h.overlayManager.Show()
+			}
+
+			// Hide unmatched cells if configured and input exists
+			hideUnmatched := h.config.Grid.HideUnmatched && len(input) > 0
+			h.renderer.SetHideUnmatched(hideUnmatched)
+			h.renderer.UpdateGridMatches(input)
 			h.refreshGridVirtualPointerLocked()
 		},
 		// Subgrid callback: moves cursor and shows subgrid overlay

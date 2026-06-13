@@ -414,17 +414,9 @@ func (a *App) refreshHotkeysForAppOrCurrent(bundleID string) {
 
 		bundleID, bundleIDErr = a.actionService.FocusedAppBundleID(ctx)
 		if bundleIDErr != nil {
-			if a.allowGlobalHotkeysWithoutBundleID() {
-				a.logger.Warn(
-					"Failed to get focused app bundle ID; registering global hotkeys anyway",
-					zap.Error(bundleIDErr),
-				)
-				bundleID = ""
-			} else {
-				a.logger.Warn("Failed to get focused app bundle ID", zap.Error(bundleIDErr))
+			a.logger.Warn("Failed to get focused app bundle ID", zap.Error(bundleIDErr))
 
-				return
-			}
+			return
 		}
 	}
 

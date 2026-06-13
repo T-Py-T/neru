@@ -39,7 +39,13 @@ func (h *Handler) startIndicatorPolling(mode domain.Mode) {
 	// and recursive-grid modes manage their own windows and skip that
 	// call, so the mode indicator overlay could still be sized for a
 	// different monitor.
-	h.resizeIndicatorOverlays()
+	if ind := h.overlayManager.ModeIndicatorOverlay(); ind != nil {
+		ind.ResizeToActiveScreen()
+	}
+
+	if stickyInd := h.overlayManager.StickyModifiersOverlay(); stickyInd != nil {
+		stickyInd.ResizeToActiveScreen()
+	}
 
 	stopCh := make(chan struct{})
 	doneCh := make(chan struct{})
@@ -182,38 +188,39 @@ func (h *Handler) startIndicatorPolling(mode domain.Mode) {
 
 // stopIndicatorPolling stops the indicator polling goroutine and cleans up
 // both mode indicator and sticky modifiers indicator overlays.
-// Caller must hold h.mu.
 func (h *Handler) stopIndicatorPolling() {
 	// Restore keyboard capture if uinput scroll was active.
 	if m := overlay.Get(); m != nil && eventtap.IsUinputScrollAvailable() {
 		m.SetKeyboardCaptureEnabled(true)
 	}
 
-	stopCh := h.indicatorStopCh
-	doneCh := h.indicatorDoneCh
-	ticker := h.indicatorTicker
-	h.indicatorStopCh = nil
-	h.indicatorDoneCh = nil
-	h.indicatorTicker = nil
-
-	if stopCh != nil {
-		close(stopCh)
+	// Signal stop first.
+	if h.indicatorStopCh != nil {
+		close(h.indicatorStopCh)
+		h.indicatorStopCh = nil
 	}
-
-	h.waitForIndicatorPoller(doneCh)
-
+	// Wait for polling goroutine to finish to avoid race conditions where
+	// the indicator is drawn after cleanup.
+	if h.indicatorDoneCh != nil {
+		<-h.indicatorDoneCh
+		h.indicatorDoneCh = nil
+	}
+	// Clear and hide the mode indicator overlay AFTER the goroutine has fully
+	// stopped. This ensures any late draw dispatched by the last tick is
+	// overridden, preventing the indicator from persisting on screen.
 	if ind := h.overlayManager.ModeIndicatorOverlay(); ind != nil {
 		ind.Clear()
 		ind.Hide()
 	}
-
+	// Also clear and hide the sticky modifiers indicator.
 	if stickyInd := h.overlayManager.StickyModifiersOverlay(); stickyInd != nil {
 		stickyInd.Clear()
 		stickyInd.Hide()
 	}
-
-	if ticker != nil {
-		ticker.Stop()
+	// Clean up resources after loop has exited.
+	if h.indicatorTicker != nil {
+		h.indicatorTicker.Stop()
+		h.indicatorTicker = nil
 	}
 }
 

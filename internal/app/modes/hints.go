@@ -52,15 +52,8 @@ func (h *Handler) ActivateModeWithAction(mode domain.Mode, action *string) {
 // ActivateModeWithOptions activates a mode with an optional action and repeat flag.
 // When repeat is true the mode re-activates after performing the pending action.
 func (h *Handler) ActivateModeWithOptions(mode domain.Mode, opts ModeActivationOptions) {
-	var enableEventTapAfterUnlock bool
-
 	h.mu.Lock()
-	defer func() {
-		h.mu.Unlock()
-		if enableEventTapAfterUnlock {
-			h.completeModeActivationDefer(true)
-		}
-	}()
+	defer h.mu.Unlock()
 
 	// Toggle: if the mode is already active and --toggle was specified,
 	// exit to idle instead of re-activating
@@ -84,9 +77,6 @@ func (h *Handler) ActivateModeWithOptions(mode domain.Mode, opts ModeActivationO
 	}
 
 	modeImpl.Activate(opts)
-
-	enableEventTapAfterUnlock = h.shouldDeferEventTapEnable() &&
-		h.appState.CurrentMode() != domain.ModeIdle
 }
 
 // filterHintsForScreen returns only the hints whose element center falls within

@@ -76,7 +76,11 @@ func (h *Handler) SetModeIdle() {
 // Caller must hold h.mu.
 func (h *Handler) setModeLocked(appMode domain.Mode, overlayMode overlay.Mode) {
 	h.setAppModeLocked(appMode)
-	h.enableNavigationEventTapLocked()
+
+	if h.enableEventTap != nil {
+		h.enableEventTap()
+	}
+
 	h.overlaySwitch(overlayMode)
 }
 
@@ -102,7 +106,9 @@ func (h *Handler) activateModeBase(
 	h.logger.Debug("Activating "+modeName+" mode", zap.String("action", actionString))
 
 	// Always resize overlay to the active screen
-	h.resizeOverlayForModeActivation()
+	if h.overlayManager != nil {
+		h.overlayManager.ResizeToActiveScreen()
+	}
 
 	return actionEnum, true
 }
@@ -112,9 +118,9 @@ func (h *Handler) activateModeBase(
 // for capturing keyboard input, and switches the overlay display to hints mode.
 func (h *Handler) SetModeHints() {
 	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	h.setModeLocked(domain.ModeHints, overlay.ModeHints)
-	h.mu.Unlock()
-	h.finishSetNavigationMode()
 }
 
 // SetModeGrid switches the application to grid mode for coordinate-based navigation.
@@ -122,9 +128,9 @@ func (h *Handler) SetModeHints() {
 // for capturing keyboard input, and switches the overlay display to grid mode.
 func (h *Handler) SetModeGrid() {
 	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	h.setModeLocked(domain.ModeGrid, overlay.ModeGrid)
-	h.mu.Unlock()
-	h.finishSetNavigationMode()
 }
 
 // SetModeRecursiveGrid switches the application to recursive-grid mode for recursive cell navigation.
@@ -132,9 +138,9 @@ func (h *Handler) SetModeGrid() {
 // for capturing keyboard input, and switches the overlay display to recursive-grid mode.
 func (h *Handler) SetModeRecursiveGrid() {
 	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	h.setModeLocked(domain.ModeRecursiveGrid, overlay.ModeRecursiveGrid)
-	h.mu.Unlock()
-	h.finishSetNavigationMode()
 }
 
 // SetModeScroll switches the application to scroll mode for scroll-based navigation.
@@ -142,7 +148,7 @@ func (h *Handler) SetModeRecursiveGrid() {
 // for capturing keyboard input, and switches the overlay display to scroll mode.
 func (h *Handler) SetModeScroll() {
 	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	h.setModeLocked(domain.ModeScroll, overlay.ModeScroll)
-	h.mu.Unlock()
-	h.finishSetNavigationMode()
 }
