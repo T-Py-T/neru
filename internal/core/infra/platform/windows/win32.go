@@ -321,6 +321,18 @@ func focusedWindowBounds() (image.Rectangle, bool, error) {
 	return rectToImage(rect), true, nil
 }
 
+// ForegroundWindowHandle returns the foreground top-level window handle for
+// accessibility enumeration. The bool is false when there is no usable
+// foreground window (e.g. the desktop is focused).
+func ForegroundWindowHandle() (uintptr, bool) {
+	hwnd, err := foregroundWindowHandle()
+	if err != nil {
+		return 0, false
+	}
+
+	return uintptr(hwnd), true
+}
+
 func focusedApplicationPID() (int, error) {
 	hwnd, err := foregroundWindowHandle()
 	if err != nil {

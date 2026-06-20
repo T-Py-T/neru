@@ -1,8 +1,9 @@
 //go:build windows
 
 // internal/ui/overlay/manager_windows.go
-// Windows overlay manager backed by a layered Win32 HWND and GDI grid rendering.
-// Does not implement hints, recursive grid, or keyboard capture.
+// Windows overlay manager backed by a layered Win32 HWND and GDI rendering of
+// grid, hints, and recursive-grid overlays.
+// Does not implement keyboard capture (handled by the low-level keyboard hook).
 
 package overlay
 
@@ -262,9 +263,24 @@ func (m *Manager) OverlayCapabilities() ports.FeatureCapability {
 	}
 }
 
-// DrawHintsWithStyle is not implemented on Windows yet.
-func (m *Manager) DrawHintsWithStyle(_ []*hints.Hint, _ hints.StyleMode) error {
-	return derrors.New(derrors.CodeNotSupported, "overlay hints not implemented on windows")
+// DrawHintsWithStyle draws the hints overlay using the Windows GDI backend.
+func (m *Manager) DrawHintsWithStyle(hintsSlice []*hints.Hint, style hints.StyleMode) error {
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
+
+	m.ensureWinOverlayLocked()
+	if m.win == nil {
+		return derrors.New(
+			derrors.CodeNotSupported,
+			"overlay hints not implemented on windows backend",
+		)
+	}
+
+	// Shared activation may draw before the resize; enforce monitor bounds here.
+	m.win.Resize()
+	m.win.DrawHints(hintsSlice, style)
+
+	return nil
 }
 
 func (m *Manager) DrawHintSearchInput(
@@ -327,23 +343,37 @@ func (m *Manager) DrawGrid(gridValue *domainGrid.Grid, input string, style grid.
 	return nil
 }
 
-// DrawRecursiveGrid is not implemented on Windows yet.
+// DrawRecursiveGrid draws the recursive-grid overlay using the Windows GDI backend.
+// The next-depth preview parameters are folded into the style by the renderer,
+// so they are unused here (matching the cross-platform software renderer).
 func (m *Manager) DrawRecursiveGrid(
-	_ image.Rectangle,
+	bounds image.Rectangle,
 	_ int,
+	keys string,
+	gridCols int,
+	gridRows int,
 	_ string,
 	_ int,
 	_ int,
-	_ string,
-	_ int,
-	_ int,
-	_ recursivegrid.Style,
-	_ recursivegrid.VirtualPointerState,
+	style recursivegrid.Style,
+	virtualPointer recursivegrid.VirtualPointerState,
 ) error {
-	return derrors.New(
-		derrors.CodeNotSupported,
-		"recursive grid overlay not implemented on windows",
-	)
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
+
+	m.ensureWinOverlayLocked()
+	if m.win == nil {
+		return derrors.New(
+			derrors.CodeNotSupported,
+			"recursive grid overlay not implemented on windows backend",
+		)
+	}
+
+	// Shared activation may draw before the resize; enforce monitor bounds here.
+	m.win.Resize()
+	m.win.DrawRecursiveGrid(bounds, keys, gridCols, gridRows, style, virtualPointer)
+
+	return nil
 }
 
 // UpdateGridMatches updates prefix highlighting for the grid overlay.

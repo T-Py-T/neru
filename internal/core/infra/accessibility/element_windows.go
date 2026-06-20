@@ -10,6 +10,7 @@ import (
 
 	"github.com/y3owk1n/neru/internal/config"
 	"github.com/y3owk1n/neru/internal/core/domain/action"
+	"github.com/y3owk1n/neru/internal/core/domain/element"
 	winplatform "github.com/y3owk1n/neru/internal/core/infra/platform/windows"
 )
 
@@ -20,9 +21,15 @@ var (
 )
 
 // Element represents a UI element for Windows.
+//
+// A window element carries the top-level HWND used to seed UI Automation
+// enumeration. Leaf elements (discovered controls) carry pre-extracted info
+// and hold no live COM reference, so Release is a no-op.
 type Element struct {
 	bundleIdentifier string
 	pid              int
+	hwnd             uintptr
+	info             *ElementInfo
 }
 
 // Children returns the element's children.
@@ -41,7 +48,13 @@ func (e *Element) Clone() (*Element, error) { return &Element{}, nil }
 func (e *Element) Release() {}
 
 // Info retrieves metadata and positioning information for the element.
-func (e *Element) Info() (*ElementInfo, error) { return &ElementInfo{}, nil }
+func (e *Element) Info() (*ElementInfo, error) {
+	if e == nil || e.info == nil {
+		return &ElementInfo{}, nil
+	}
+
+	return e.info, nil
+}
 
 // BundleIdentifier returns the bundle identifier (exe path on Windows).
 func (e *Element) BundleIdentifier() string {
@@ -55,22 +68,45 @@ func (e *Element) BundleIdentifier() string {
 // MenuBar returns the menu bar element (stub).
 func (e *Element) MenuBar() *Element { return nil }
 
-// IsClickable checks if the element is clickable (stub).
+// IsClickable reports whether the element is a clickable control. Clickability
+// is decided during UI Automation extraction (see mapControlType) and stored on
+// the element info, so this just reads the cached flag.
 func (e *Element) IsClickable(
-	_ *ElementInfo,
+	info *ElementInfo,
 	_ map[string]struct{},
 	_ config.Provider,
 	_ bool,
 ) bool {
+	if info != nil {
+		return info.clickable
+	}
+
+	if e != nil && e.info != nil {
+		return e.info.clickable
+	}
+
 	return false
 }
 
+var (
+	windowsClickableRolesMu sync.RWMutex
+	windowsClickableRoles   []string
+)
+
 // SetClickableRoles configures which accessibility roles are treated as clickable.
-func SetClickableRoles(roles []string, logger *zap.Logger) {}
+func SetClickableRoles(roles []string, _ *zap.Logger) {
+	windowsClickableRolesMu.Lock()
+	defer windowsClickableRolesMu.Unlock()
+
+	windowsClickableRoles = append(windowsClickableRoles[:0:0], roles...)
+}
 
 // ClickableRoles returns the configured clickable roles.
 func ClickableRoles() []string {
-	return nil
+	windowsClickableRolesMu.RLock()
+	defer windowsClickableRolesMu.RUnlock()
+
+	return append([]string(nil), windowsClickableRoles...)
 }
 
 // ElementInfo contains metadata and positioning information for a UI element.
@@ -86,6 +122,7 @@ type ElementInfo struct {
 	roleDescription string
 	isEnabled       bool
 	isFocused       bool
+	clickable       bool
 	pid             int
 }
 
@@ -155,14 +192,49 @@ func ApplicationByBundleID(bundleID string) *Element { return nil }
 // ElementAtPosition returns the element at a position (stub).
 func ElementAtPosition(x, y int) *Element { return nil }
 
-// AllWindows returns all windows (stub).
-func AllWindows() ([]*Element, error) { return []*Element{}, nil }
+// AllWindows returns the windows of the focused application. Windows
+// enumeration is limited to the foreground top-level window for now.
+func AllWindows() ([]*Element, error) {
+	window := FrontmostWindow()
+	if window == nil {
+		return []*Element{}, nil
+	}
 
-// FrontmostAndPopoverWindows returns frontmost/popover windows (Windows stub).
-func FrontmostAndPopoverWindows() ([]*Element, error) { return []*Element{}, nil }
+	return []*Element{window}, nil
+}
 
-// FrontmostWindow returns the frontmost window (stub).
-func FrontmostWindow() *Element { return nil }
+// FrontmostAndPopoverWindows returns the foreground window. Popover tracking is
+// not modeled on Windows; UI Automation enumerates popups under the same root.
+func FrontmostAndPopoverWindows() ([]*Element, error) {
+	window := FrontmostWindow()
+	if window == nil {
+		return []*Element{}, nil
+	}
+
+	return []*Element{window}, nil
+}
+
+// FrontmostWindow returns the foreground top-level window as an Element seeded
+// with its HWND. BuildTree uses that handle to enumerate clickable controls.
+func FrontmostWindow() *Element {
+	hwnd, ok := winplatform.ForegroundWindowHandle()
+	if !ok {
+		return nil
+	}
+
+	bundleID, pid, _ := winplatform.FocusedApplicationIdentity()
+
+	return &Element{
+		bundleIdentifier: bundleID,
+		pid:              pid,
+		hwnd:             hwnd,
+		info: &ElementInfo{
+			role:      string(element.RoleWindow),
+			isEnabled: true,
+			pid:       pid,
+		},
+	}
+}
 
 // SetLeftMouseDown sets the left mouse down state.
 func SetLeftMouseDown(down bool, position image.Point) {

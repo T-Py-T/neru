@@ -10,11 +10,26 @@ import (
 	"fmt"
 	"image"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+// Overlay UI-thread health counters. A failed BeginPaint that does not validate
+// the update region makes WM_PAINT regenerate forever, which would spin the
+// message pump and wedge the overlay UI thread (every later overlay op hangs).
+// These let the manager log when that path is hit.
+var (
+	overlayBeginPaintFails atomic.Int64
+	overlayPumpCapHits     atomic.Int64
+)
+
+// OverlayDiag returns (beginPaintFailures, pumpCapHits) for debug logging.
+func OverlayDiag() (int64, int64) {
+	return overlayBeginPaintFails.Load(), overlayPumpCapHits.Load()
+}
 
 const (
 	overlayClassName = "NeruOverlayWindow"
@@ -30,7 +45,6 @@ const (
 	wsExNoActivate   = 0x08000000
 	swHide           = 0
 	swShowNoActivate = 4
-	srccopy          = 0x00CC0020
 	transparentBk    = 1
 	dtCenter         = 0x00000001
 	dtVCenter        = 0x00000004
@@ -50,11 +64,6 @@ var (
 
 	procCreateSolidBrush           = gdi32.NewProc("CreateSolidBrush")
 	procDeleteObject               = gdi32.NewProc("DeleteObject")
-	procCreateCompatibleDC         = gdi32.NewProc("CreateCompatibleDC")
-	procCreateCompatibleBitmap     = gdi32.NewProc("CreateCompatibleBitmap")
-	procSelectObject               = gdi32.NewProc("SelectObject")
-	procBitBlt                     = gdi32.NewProc("BitBlt")
-	procDeleteDC                   = gdi32.NewProc("DeleteDC")
 	procCreateFontW                = gdi32.NewProc("CreateFontW")
 	procSetBkMode                  = gdi32.NewProc("SetBkMode")
 	procSetTextColor               = gdi32.NewProc("SetTextColor")
@@ -71,6 +80,7 @@ var (
 	procIsWindow                   = user32.NewProc("IsWindow")
 	procBeginPaint                 = user32.NewProc("BeginPaint")
 	procEndPaint                   = user32.NewProc("EndPaint")
+	procValidateRect               = user32.NewProc("ValidateRect")
 	procFillRect                   = user32.NewProc("FillRect")
 	procDrawTextW                  = user32.NewProc("DrawTextW")
 	kernel32                       = windows.NewLazySystemDLL("kernel32.dll")
@@ -156,6 +166,13 @@ func overlayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			}
 
 			procEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+		} else {
+			// BeginPaint failed, so EndPaint will not run to validate the
+			// update region. WM_PAINT is a generated message that PeekMessage
+			// keeps returning until the region is validated, so without this
+			// the pump would spin forever and wedge the overlay UI thread.
+			overlayBeginPaintFails.Add(1)
+			procValidateRect.Call(hwnd, 0)
 		}
 
 		return 0
@@ -580,60 +597,12 @@ func (o *OverlayWindow) paintLocked(hdc windows.Handle) {
 	o.dirty = false
 	o.mu.Unlock()
 
-	if o.paintDoubleBuffered(hdc, fills, strokes, texts) {
-		return
-	}
-
+	// Paint straight onto the BeginPaint DC. DWM redirects the whole WM_PAINT
+	// batch to an offscreen surface and composites it atomically, so a manual
+	// memory-DC double buffer adds no flicker protection here. It also breaks on
+	// virtual GPUs where the compositing BitBlt silently no-ops (reports success
+	// but copies nothing), leaving the overlay blank.
 	o.renderCommands(hdc, fills, strokes, texts)
-}
-
-func (o *OverlayWindow) paintDoubleBuffered(
-	hdc windows.Handle,
-	fills []rectFill,
-	strokes []rectStroke,
-	texts []textDraw,
-) bool {
-	if o.width <= 0 || o.height <= 0 {
-		return false
-	}
-
-	memDC, _, _ := procCreateCompatibleDC.Call(uintptr(hdc))
-	if memDC == 0 {
-		return false
-	}
-	defer procDeleteDC.Call(memDC)
-
-	bitmap, _, _ := procCreateCompatibleBitmap.Call(
-		uintptr(hdc),
-		uintptr(o.width),
-		uintptr(o.height),
-	)
-	if bitmap == 0 {
-		return false
-	}
-	defer procDeleteObject.Call(bitmap)
-
-	oldBitmap, _, _ := procSelectObject.Call(memDC, bitmap)
-	if oldBitmap == 0 {
-		return false
-	}
-	defer procSelectObject.Call(memDC, oldBitmap)
-
-	o.renderCommands(windows.Handle(memDC), fills, strokes, texts)
-
-	procBitBlt.Call(
-		uintptr(hdc),
-		0,
-		0,
-		uintptr(o.width),
-		uintptr(o.height),
-		memDC,
-		0,
-		0,
-		srccopy,
-	)
-
-	return true
 }
 
 func (o *OverlayWindow) renderCommands(

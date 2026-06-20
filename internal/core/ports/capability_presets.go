@@ -96,7 +96,9 @@ func WindowsCapabilities() PlatformCapabilities {
 		Cursor: supportedCapability(
 			"cursor movement and tracking available via SetCursorPos/GetCursorPos",
 		),
-		Accessibility: stubCapability("UI Automation integration not implemented yet"),
+		Accessibility: supportedCapability(
+			"clickable-element discovery available via UI Automation (initial coverage)",
+		),
 		Overlay: supportedCapability(
 			"native overlays available via layered Win32 window + GDI",
 		),

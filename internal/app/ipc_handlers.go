@@ -157,6 +157,7 @@ type ModeActivationOptions struct {
 	Search                *bool
 	Strategy              *string
 	Toggle                *bool
+	Debug                 *bool
 }
 
 // extractModeOptions extracts and validates the optional action and repeat
@@ -198,6 +199,9 @@ func (h *IPCControllerModes) extractModeOptions(
 		case arg == "--search" || arg == "-s":
 			searchTrue := true
 			opts.Search = &searchTrue
+		case arg == "--debug" || arg == "-d":
+			debugTrue := true
+			opts.Debug = &debugTrue
 		case strings.HasPrefix(arg, "--action="):
 			actionArg := strings.TrimPrefix(arg, "--action=")
 			opts.Action = &actionArg
@@ -411,7 +415,7 @@ func (h *IPCControllerModes) extractModeOptions(
 	return opts, nil
 }
 
-func (h *IPCControllerModes) handleHints(_ context.Context, cmd ipc.Command) ipc.Response {
+func (h *IPCControllerModes) handleHints(ctx context.Context, cmd ipc.Command) ipc.Response {
 	if h.modes == nil {
 		return h.modesUnavailableResponse()
 	}
@@ -419,6 +423,31 @@ func (h *IPCControllerModes) handleHints(_ context.Context, cmd ipc.Command) ipc
 	opts, errResp := h.extractModeOptions(cmd)
 	if errResp != nil {
 		return *errResp
+	}
+
+	// --debug short-circuits to a read-only probe: report what would be hinted
+	// for the focused window (count + sample) without drawing the overlay.
+	if opts.Debug != nil && *opts.Debug {
+		strategy := ""
+		if opts.Strategy != nil {
+			strategy = *opts.Strategy
+		}
+
+		summary, probeErr := h.modes.DebugProbeHints(
+			ctx,
+			opts.FilterRoles,
+			opts.FilterTextContains,
+			strategy,
+		)
+		if probeErr != nil {
+			return ipc.Response{
+				Success: false,
+				Message: "hints debug probe failed: " + probeErr.Error(),
+				Code:    ipc.CodeActionFailed,
+			}
+		}
+
+		return ipc.Response{Success: true, Message: summary, Code: ipc.CodeOK}
 	}
 
 	h.modes.ActivateModeWithOptions(domain.ModeHints, modes.ModeActivationOptions{

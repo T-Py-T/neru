@@ -24,17 +24,23 @@ Use --role and --text to filter which elements get hinted:
 Use --strategy vision to use the Vision Framework (macOS) for element
 detection instead of the default AX API.
 
+Use --debug to probe the focused window and print the clickable elements
+that would be hinted (count plus a sample) without showing the overlay.
+This is handy for verifying the platform accessibility pipeline.
+
 Examples:
   neru hints                               Activate hints mode
   neru hints --action left_click           Select a hint to click once
   neru hints --action left_click --repeat  Click multiple elements in sequence
   neru hints --search                      Start with search input shown
   neru hints --role AXButton               Hint only buttons
-  neru hints --strategy vision             Use Vision Framework detection`,
+  neru hints --strategy vision             Use Vision Framework detection
+  neru hints --debug                       Print detected elements, no overlay`,
 	ActionDesc:       "hint selection",
 	SupportSearch:    true,
 	SupportFiltering: true,
 	SupportStrategy:  true,
+	SupportDebug:     true,
 })
 
 func init() {

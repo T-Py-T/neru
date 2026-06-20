@@ -86,10 +86,16 @@ func curGoroutineID() uint64 {
 	return id
 }
 
+// maxMessagesPerPump bounds a single drain so a pathological message source
+// (e.g. WM_PAINT regenerating because an update region never validated) can
+// never spin this loop forever and wedge the overlay UI thread. Any remaining
+// messages are drained on the next pump, so a real backlog is not lost.
+const maxMessagesPerPump = 512
+
 func pumpOverlayMessages() {
 	var msg winMsg
 
-	for {
+	for i := 0; i < maxMessagesPerPump; i++ {
 		ret, _, _ := procPeekMessageW.Call(
 			uintptr(unsafe.Pointer(&msg)),
 			0,
@@ -104,4 +110,6 @@ func pumpOverlayMessages() {
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg)))
 	}
+
+	overlayPumpCapHits.Add(1)
 }

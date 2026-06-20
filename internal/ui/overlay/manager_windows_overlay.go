@@ -350,7 +350,12 @@ func (o *winOverlay) flushOverlay(context string) {
 	}
 
 	if o.logger != nil {
-		o.logger.Debug("overlay paint ok", zap.String("context", context))
+		beginFails, pumpCaps := winplatform.OverlayDiag()
+		o.logger.Debug("overlay paint ok",
+			zap.String("context", context),
+			zap.Int64("begin_paint_fails", beginFails),
+			zap.Int64("pump_cap_hits", pumpCaps),
+		)
 	}
 }
 
