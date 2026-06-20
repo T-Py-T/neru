@@ -23,6 +23,11 @@ const (
 	// BackendWaylandKDE targets KDE Plasma Wayland (KWin exposes the same
 	// wlr-style layer-shell and virtual-pointer protocols Neru uses on wlroots).
 	BackendWaylandKDE
+	// BackendWaylandCOSMIC targets System76 COSMIC (Smithay). cosmic-comp
+	// exposes zwlr_layer_shell_v1 + zxdg_output_manager_v1 for the overlay but
+	// neither zwlr_virtual_pointer_v1 nor a RemoteDesktop portal, so input is
+	// injected via a uinput virtual pointer.
+	BackendWaylandCOSMIC
 	// BackendWaylandOther means a non-wlroots Wayland compositor was detected.
 	BackendWaylandOther
 )
@@ -40,6 +45,8 @@ func (b LinuxBackend) String() string {
 		return "wayland-gnome"
 	case BackendWaylandKDE:
 		return "wayland-kde"
+	case BackendWaylandCOSMIC:
+		return "wayland-cosmic"
 	case BackendWaylandOther:
 		return "wayland-other"
 	case BackendUnknown:
@@ -96,6 +103,8 @@ func detectLinuxBackendFromEnv(
 			return BackendWaylandGNOME
 		case strings.Contains(desktop, "KDE"):
 			return BackendWaylandKDE
+		case strings.Contains(desktop, "COSMIC"):
+			return BackendWaylandCOSMIC
 		case desktop == "":
 			return BackendWaylandWlroots
 		case strings.Contains(desktop, "SWAY"),

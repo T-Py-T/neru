@@ -623,7 +623,8 @@ func detectLinuxOverlayBackend() linuxOverlayBackend {
 	switch platform.DetectLinuxBackend() {
 	case platform.BackendX11:
 		return linuxOverlayBackendX11
-	case platform.BackendWaylandWlroots, platform.BackendWaylandKDE:
+	case platform.BackendWaylandWlroots, platform.BackendWaylandKDE,
+		platform.BackendWaylandCOSMIC:
 		return linuxOverlayBackendWaylandWlroots
 	case platform.BackendUnknown, platform.BackendWaylandGNOME,
 		platform.BackendWaylandOther:

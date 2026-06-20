@@ -40,8 +40,14 @@ func TestDetectLinuxBackendFromEnv(t *testing.T) {
 			want:           BackendWaylandKDE,
 		},
 		{
-			name:           "wayland unknown desktop",
+			name:           "wayland cosmic desktop",
 			currentDesktop: "COSMIC",
+			waylandDisplay: waylandDisplay,
+			want:           BackendWaylandCOSMIC,
+		},
+		{
+			name:           "wayland unknown desktop",
+			currentDesktop: "Enlightenment",
 			waylandDisplay: waylandDisplay,
 			want:           BackendWaylandOther,
 		},

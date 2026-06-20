@@ -8,8 +8,14 @@
 package platform
 
 func linuxProfileForCurrentBackend() Profile {
-	if DetectLinuxBackend() == BackendWaylandKDE {
+	switch DetectLinuxBackend() {
+	case BackendWaylandKDE:
 		return linuxKDEProfile()
+	case BackendWaylandCOSMIC:
+		return linuxCOSMICProfile()
+	case BackendUnknown, BackendX11, BackendWaylandWlroots,
+		BackendWaylandGNOME, BackendWaylandOther:
+		return linuxProfile(DetectLinuxDisplayServer())
 	}
 
 	return linuxProfile(DetectLinuxDisplayServer())
@@ -31,6 +37,29 @@ func linuxKDEProfile() Profile {
 		},
 		Overlay: BackendPlan{
 			Name: "wlr-layer-shell via KWin",
+		},
+		Notifications: BackendPlan{
+			Name: "not implemented",
+		},
+	}
+}
+
+func linuxCOSMICProfile() Profile {
+	return Profile{
+		OS:              Linux,
+		PrimaryModifier: defaultPrimaryModifier,
+		DisplayServer:   DisplayServerWaylandCOSMIC,
+		Accessibility: BackendPlan{
+			Name: "AT-SPI over D-Bus (hints deferred: no COSMIC active-window geometry source yet)",
+		},
+		Hotkeys: BackendPlan{
+			Name: "evdev from /dev/input (requires input group; bind triggers in COSMIC Settings)",
+		},
+		KeyboardCapture: BackendPlan{
+			Name: "evdev capture + uinput virtual pointer (requires /dev/uinput via input group)",
+		},
+		Overlay: BackendPlan{
+			Name: "wlr-layer-shell via cosmic-comp",
 		},
 		Notifications: BackendPlan{
 			Name: "not implemented",

@@ -189,6 +189,29 @@ func wlrootsScreenBounds() (image.Rectangle, error) {
 	return globalWlrootsState.screens[0].Bounds, nil
 }
 
+// wlrootsMaxBounds returns the union rectangle covering every known output. The
+// uinput absolute-pointer backend (COSMIC) uses its width/height to size the
+// virtual device's ABS_X/ABS_Y range so injected coordinates map 1:1 to pixels.
+func wlrootsMaxBounds() (image.Rectangle, error) {
+	if err := ensureWlrootsState(); err != nil {
+		return image.Rectangle{}, err
+	}
+
+	globalWlrootsState.mu.RLock()
+	defer globalWlrootsState.mu.RUnlock()
+
+	if len(globalWlrootsState.screens) == 0 {
+		return image.Rect(0, 0, wlrootsDefaultWidth, wlrootsDefaultHeight), nil
+	}
+
+	bounds := globalWlrootsState.screens[0].Bounds
+	for _, screen := range globalWlrootsState.screens[1:] {
+		bounds = bounds.Union(screen.Bounds)
+	}
+
+	return bounds, nil
+}
+
 func wlrootsScreenBoundsByName(name string) (image.Rectangle, bool, error) {
 	if name == "" {
 		return image.Rectangle{}, false, nil

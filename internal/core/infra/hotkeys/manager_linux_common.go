@@ -56,7 +56,8 @@ func NewManager(logger *zap.Logger) *Manager {
 func isWaylandBackend(backend platform.LinuxBackend) bool {
 	switch backend {
 	case platform.BackendWaylandWlroots, platform.BackendWaylandKDE,
-		platform.BackendWaylandGNOME, platform.BackendWaylandOther:
+		platform.BackendWaylandCOSMIC, platform.BackendWaylandGNOME,
+		platform.BackendWaylandOther:
 		return true
 	default:
 		return false
@@ -83,7 +84,8 @@ func (m *Manager) Register(keyString string, callback Callback) (HotkeyID, error
 			return 0, err
 		}
 	case platform.BackendWaylandWlroots, platform.BackendWaylandKDE,
-		platform.BackendWaylandGNOME, platform.BackendWaylandOther:
+		platform.BackendWaylandCOSMIC, platform.BackendWaylandGNOME,
+		platform.BackendWaylandOther:
 		m.rebuildWaylandBindings()
 		m.ensureWaylandStarted()
 	case platform.BackendUnknown:
