@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestNewSystemPort_GNOMEWaylandReturnsHelpfulError(t *testing.T) {
+func TestNewSystemPort_GNOMEWaylandReturnsSystemPort(t *testing.T) {
 	resetLinuxBackendCache()
 
 	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
@@ -16,16 +16,16 @@ func TestNewSystemPort_GNOMEWaylandReturnsHelpfulError(t *testing.T) {
 	t.Setenv("XDG_CURRENT_DESKTOP", "GNOME")
 
 	systemPort, err := NewSystemPort()
-	if err == nil {
-		t.Fatal("NewSystemPort() error = nil, want error")
+	if err != nil {
+		t.Fatalf("NewSystemPort() error = %v, want nil", err)
 	}
 
-	if systemPort != nil {
-		t.Fatal("NewSystemPort() systemPort != nil, want nil")
+	if systemPort == nil {
+		t.Fatal("NewSystemPort() systemPort = nil, want non-nil")
 	}
 
-	if !strings.Contains(err.Error(), "GNOME") {
-		t.Fatalf("NewSystemPort() error = %q, want mention of GNOME", err.Error())
+	if got := systemPort.Capabilities().Platform; got != "linux/wayland-gnome" {
+		t.Fatalf("Capabilities().Platform = %q, want %q", got, "linux/wayland-gnome")
 	}
 }
 

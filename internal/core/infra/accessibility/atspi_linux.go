@@ -20,6 +20,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/config"
+	"github.com/y3owk1n/neru/internal/core/infra/platform/linux"
 )
 
 const (
@@ -35,6 +36,13 @@ const (
 
 	// ATSPI_COORD_TYPE_SCREEN: extents relative to the screen origin.
 	atspiCoordScreen = uint32(0)
+
+	// ATSPI_COORD_TYPE_WINDOW: extents relative to the window origin. GNOME's
+	// AT-SPI returns (0,0) for screen-relative x/y (the intra-window offset is
+	// lost), so on GNOME we request window-relative extents and add the window
+	// origin ourselves. KDE returns usable window-relative values for the
+	// screen coord type already, so it keeps using screen.
+	atspiCoordWindow = uint32(1)
 
 	// AT-SPI state bit indices (atspi-constants.h). All < 32, so they live in
 	// the first uint32 of the state bitfield array.
@@ -283,12 +291,12 @@ func (c *ATSPIClient) stateHas(conn *dbus.Conn, ref accRef, bit uint) bool {
 	return states[word]&(1<<(bit%32)) != 0
 }
 
-// extents returns the on-screen rectangle of an accessible.
-func (c *ATSPIClient) extents(conn *dbus.Conn, ref accRef) (image.Rectangle, bool) {
+// extents returns the rectangle of an accessible in the requested coord space.
+func (c *ATSPIClient) extents(conn *dbus.Conn, ref accRef, coord uint32) (image.Rectangle, bool) {
 	var e atspiExtents
 
 	err := conn.Object(ref.Name, ref.Path).
-		Call(atspiComponentIfc+".GetExtents", 0, atspiCoordScreen).Store(&e)
+		Call(atspiComponentIfc+".GetExtents", 0, coord).Store(&e)
 	if err != nil {
 		return image.Rectangle{}, false
 	}
@@ -331,15 +339,20 @@ func isDesktopShellApp(name string) bool {
 // isNonTargetSurfaceApp reports whether an AT-SPI application is a system
 // surface that is never a valid hint target and must never be picked as the
 // focused window — even as a last resort. The XWayland video bridge
-// ("xwaylandvideobridge") and the KDE portal consent dialog briefly steal the
+// ("xwaylandvideobridge") and the portal consent dialogs briefly steal the
 // ACTIVE state the moment we inject a cursor move via libei, which on
 // re-activation makes findActiveFrame select an empty surface and tears the
-// hints overlay down. This mirrors the KWin geometry bridge blocklist in
-// kwin_geometry_linux.go so both code paths ignore the same noise.
+// hints overlay down. The GNOME RemoteDesktop consent dialog
+// ("xdg-desktop-portal-gnome") is modal and grabs focus during the libei
+// warm-up, so without this it would be picked as the active window and hints
+// would land on its Cancel/Share buttons instead of the real app. This mirrors
+// the KWin geometry bridge blocklist in kwin_geometry_linux.go.
 func isNonTargetSurfaceApp(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "xwaylandvideobridge",
-		"org.freedesktop.impl.portal.desktop.kde":
+		"org.freedesktop.impl.portal.desktop.kde",
+		"xdg-desktop-portal-gnome",
+		"xdg-desktop-portal":
 		return true
 	default:
 		return false
@@ -446,6 +459,7 @@ func (c *ATSPIClient) walk(
 	visited *int,
 	offX int,
 	offY int,
+	coord uint32,
 ) {
 	if depth > atspiMaxDepth || len(*out) >= atspiMaxNodes {
 		return
@@ -464,9 +478,10 @@ func (c *ATSPIClient) walk(
 
 	if mappable {
 		if _, ok := roles[axRole]; ok && c.stateHas(conn, ref, atspiStateShowing) {
-			if rect, valid := c.extents(conn, ref); valid {
+			if rect, valid := c.extents(conn, ref, coord); valid {
 				// AT-SPI reports window-relative coords on Wayland; offset by the
-				// focused window's screen origin from the KWin bridge.
+				// focused window's screen origin (KWin bridge on KDE, Shell
+				// extension on GNOME).
 				rect = rect.Add(image.Pt(offX, offY))
 				*out = append(*out, &atspiNode{
 					id:    string(ref.Path) + "@" + ref.Name,
@@ -479,7 +494,7 @@ func (c *ATSPIClient) walk(
 	}
 
 	for _, child := range c.children(conn, ref) {
-		c.walk(ctx, conn, child, roles, depth+1, out, visited, offX, offY)
+		c.walk(ctx, conn, child, roles, depth+1, out, visited, offX, offY, coord)
 	}
 }
 
@@ -570,21 +585,45 @@ func (c *ATSPIClient) ClickableNodes(
 
 	start := time.Now()
 
-	offX, offY, haveOrigin := c.kwin.origin()
+	offX, offY, fromGNOME := c.activeWindowOrigin()
+
+	// GNOME's AT-SPI zeroes screen-relative x/y, so request window-relative
+	// extents there and add the window origin. KDE keeps screen coords.
+	coord := atspiCoordScreen
+	if fromGNOME {
+		coord = atspiCoordWindow
+	}
 
 	out := make([]AXNode, 0, 128)
 	visited := 0
-	c.walk(ctx, conn, win.ref, rolesSet(roles), 0, &out, &visited, offX, offY)
+	c.walk(ctx, conn, win.ref, rolesSet(roles), 0, &out, &visited, offX, offY, coord)
 
 	c.logger.Debug("AT-SPI clickable walk complete",
 		zap.Int("count", len(out)),
 		zap.Int("visited", visited),
 		zap.Int("offsetX", offX),
 		zap.Int("offsetY", offY),
-		zap.Bool("haveOrigin", haveOrigin),
+		zap.Bool("fromGNOME", fromGNOME),
 		zap.Duration("elapsed", time.Since(start)))
 
 	return out, nil
+}
+
+// activeWindowOrigin resolves the focused window's screen origin used to offset
+// AT-SPI window-relative coordinates into screen space. On GNOME this comes from
+// the Neru Shell extension (Mutter has no KWin scripting); on KDE from the KWin
+// geometry bridge. The GNOME source is tried first and only answers when the
+// extension owns org.neru.ShellOverlay, so KDE/wlroots fall through to KWin. The
+// bool reports specifically whether GNOME supplied the origin, which also
+// selects the AT-SPI coord type (GNOME needs window-relative extents).
+func (c *ATSPIClient) activeWindowOrigin() (int, int, bool) {
+	if rect, ok := linux.GNOMEShellActiveWindowRect(); ok {
+		return rect.Min.X, rect.Min.Y, true
+	}
+
+	x, y, _ := c.kwin.origin()
+
+	return x, y, false
 }
 
 // atspiWindow implements AXWindow for an AT-SPI frame.

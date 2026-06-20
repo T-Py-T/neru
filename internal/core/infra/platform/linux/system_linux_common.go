@@ -23,6 +23,7 @@ const (
 	backendX11            = "x11"
 	backendWaylandWlroots = "wayland-wlroots"
 	backendWaylandKDE     = "wayland-kde"
+	backendWaylandGNOME   = "wayland-gnome"
 )
 
 // SystemAdapter is a Linux system adapter.
@@ -138,6 +139,14 @@ func (s *SystemAdapter) ScreenBounds(ctx context.Context) (image.Rectangle, erro
 		return x11ActiveScreenBounds()
 	}
 
+	if s.backend == backendWaylandGNOME {
+		if r, ok := gnomeScreenBounds(); ok {
+			return r, nil
+		}
+
+		return wlrootsScreenBounds()
+	}
+
 	if s.waylandUsesWlrClientStack() {
 		return wlrootsScreenBounds()
 	}
@@ -158,7 +167,7 @@ func (s *SystemAdapter) ScreenBoundsByName(
 		return x11ScreenBoundsByName(name)
 	}
 
-	if s.waylandUsesWlrClientStack() {
+	if s.waylandUsesNeruInput() {
 		return wlrootsScreenBoundsByName(name)
 	}
 
@@ -175,7 +184,7 @@ func (s *SystemAdapter) ScreenNames(ctx context.Context) ([]string, error) {
 		return x11ScreenNames()
 	}
 
-	if s.waylandUsesWlrClientStack() {
+	if s.waylandUsesNeruInput() {
 		return wlrootsScreenNames()
 	}
 
@@ -207,9 +216,9 @@ func (s *SystemAdapter) MoveCursorToPoint(
 		return x11MoveCursorToPoint(point)
 	}
 
-	if s.waylandUsesWlrClientStack() {
-		// Route through the Wayland input dispatcher so KDE (no virtual
-		// pointer) uses libei while wlroots compositors use the native path.
+	if s.waylandUsesNeruInput() {
+		// Route through the Wayland input dispatcher so KDE/GNOME (no virtual
+		// pointer) use libei while wlroots compositors use the native path.
 		return waylandMoveCursorToPoint(point)
 	}
 
@@ -228,7 +237,7 @@ func (s *SystemAdapter) CursorPosition(ctx context.Context) (image.Point, error)
 		return x11CursorPosition()
 	}
 
-	if s.waylandUsesWlrClientStack() {
+	if s.waylandUsesNeruInput() {
 		return waylandCursorPosition()
 	}
 
@@ -275,6 +284,38 @@ func (s *SystemAdapter) ShowNotification(title, message string) {}
 // KDE Plasma's KWin implements these for third-party clients; GNOME does not.
 func (s *SystemAdapter) waylandUsesWlrClientStack() bool {
 	return s.backend == backendWaylandWlroots || s.backend == backendWaylandKDE
+}
+
+// waylandUsesNeruInput is true for every Wayland backend whose pointer input
+// Neru drives through the shared routing seam (system_linux_wayland_input.go):
+// wlroots via virtual-pointer, KDE/GNOME via libei. GNOME has no layer-shell
+// so it is excluded from waylandUsesWlrClientStack, but its pointer/cursor path
+// is identical to KDE (probe finds no virtual-pointer, falls back to libei, and
+// the cursor cache lives in the wlr client which connects fine without
+// layer-shell).
+func (s *SystemAdapter) waylandUsesNeruInput() bool {
+	return s.waylandUsesWlrClientStack() || s.backend == backendWaylandGNOME
+}
+
+// gnomeScreenBounds returns the primary monitor rectangle reported by the Neru
+// GNOME Shell extension. Mutter is the authoritative geometry source on GNOME,
+// and the extension is the only client that can read it.
+func gnomeScreenBounds() (image.Rectangle, bool) {
+	monitors, err := GNOMEShellMonitors()
+	if err != nil || len(monitors) == 0 {
+		return image.Rectangle{}, false
+	}
+
+	chosen := monitors[0]
+	for _, m := range monitors {
+		if m.Primary {
+			chosen = m
+
+			break
+		}
+	}
+
+	return image.Rect(chosen.X, chosen.Y, chosen.X+chosen.W, chosen.Y+chosen.H), true
 }
 
 // Ensure SystemAdapter implements ports.SystemPort.

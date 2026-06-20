@@ -8,11 +8,39 @@
 package platform
 
 func linuxProfileForCurrentBackend() Profile {
-	if DetectLinuxBackend() == BackendWaylandKDE {
+	switch DetectLinuxBackend() {
+	case BackendWaylandKDE:
 		return linuxKDEProfile()
+	case BackendWaylandGNOME:
+		return linuxGNOMEProfile()
+	case BackendUnknown, BackendX11, BackendWaylandWlroots, BackendWaylandOther:
+		return linuxProfile(DetectLinuxDisplayServer())
 	}
 
 	return linuxProfile(DetectLinuxDisplayServer())
+}
+
+func linuxGNOMEProfile() Profile {
+	return Profile{
+		OS:              Linux,
+		PrimaryModifier: defaultPrimaryModifier,
+		DisplayServer:   DisplayServerWaylandGNOME,
+		Accessibility: BackendPlan{
+			Name: "AT-SPI over D-Bus (hints corrected via the Neru GNOME Shell extension's active-window geometry)",
+		},
+		Hotkeys: BackendPlan{
+			Name: "evdev from /dev/input (requires input group)",
+		},
+		KeyboardCapture: BackendPlan{
+			Name: "evdev capture + libei input via xdg-desktop-portal-gnome RemoteDesktop (consent per daemon launch)",
+		},
+		Overlay: BackendPlan{
+			Name: "Neru GNOME Shell extension (org.neru.ShellOverlay) + Cairo; Mutter has no wlr-layer-shell",
+		},
+		Notifications: BackendPlan{
+			Name: "not implemented",
+		},
+	}
 }
 
 func linuxKDEProfile() Profile {

@@ -57,6 +57,7 @@ const (
 	linuxOverlayBackendUnknown        linuxOverlayBackend = "unknown"
 	linuxOverlayBackendX11            linuxOverlayBackend = "x11"
 	linuxOverlayBackendWaylandWlroots linuxOverlayBackend = "wayland-wlroots"
+	linuxOverlayBackendWaylandGNOME   linuxOverlayBackend = "wayland-gnome"
 	initialSubscriberCapacity                             = 4
 )
 
@@ -78,6 +79,7 @@ type Manager struct {
 	backend linuxOverlayBackend
 	x11     *x11Overlay
 	wlroots *wlrootsOverlay
+	gnome   *gnomeOverlay
 
 	keyboardCaptureEnabled bool
 
@@ -122,6 +124,10 @@ func NewOverlayManager(logger *zap.Logger) *Manager {
 			manager.wlroots.setDisplayMu(&manager.renderMu)
 			manager.wlroots.startPoller()
 		}
+	case linuxOverlayBackendWaylandGNOME:
+		// GNOME paints through the Neru Shell extension over D-Bus. No
+		// layer-shell surface, so no keyboard poller (evdev handles capture).
+		manager.gnome = newGnomeOverlay(logger)
 	case linuxOverlayBackendUnknown:
 		return nil
 	}
@@ -157,6 +163,8 @@ func (m *Manager) Show() {
 		m.x11.Show()
 	} else if m.wlroots != nil {
 		m.wlroots.Show()
+	} else if m.gnome != nil {
+		m.gnome.Show()
 	}
 }
 
@@ -169,6 +177,8 @@ func (m *Manager) Hide() {
 		m.x11.Hide()
 	} else if m.wlroots != nil {
 		m.wlroots.Hide()
+	} else if m.gnome != nil {
+		m.gnome.Hide()
 	}
 
 	m.stickyBadgeVisible = false
@@ -189,6 +199,8 @@ func (m *Manager) SetKeyboardCaptureEnabled(enabled bool) {
 
 	if m.wlroots != nil {
 		m.wlroots.setKeyboardCaptureEnabled(enabled)
+	} else if m.gnome != nil {
+		m.gnome.setKeyboardCaptureEnabled(enabled)
 	}
 }
 
@@ -201,6 +213,8 @@ func (m *Manager) Clear() {
 		m.x11.Clear()
 	} else if m.wlroots != nil {
 		m.wlroots.Clear()
+	} else if m.gnome != nil {
+		m.gnome.Clear()
 	}
 
 	m.stickyBadgeVisible = false
@@ -216,6 +230,8 @@ func (m *Manager) ResizeToActiveScreen() {
 		m.x11.Resize()
 	} else if m.wlroots != nil {
 		m.wlroots.Resize()
+	} else if m.gnome != nil {
+		m.gnome.Resize()
 	}
 }
 
@@ -267,8 +283,10 @@ func (m *Manager) Destroy() {
 	m.renderMu.Lock()
 	x11 := m.x11
 	wlroots := m.wlroots
+	gnome := m.gnome
 	m.x11 = nil
 	m.wlroots = nil
+	m.gnome = nil
 	m.renderMu.Unlock()
 
 	if x11 != nil {
@@ -277,6 +295,10 @@ func (m *Manager) Destroy() {
 
 	if wlroots != nil {
 		wlroots.Destroy()
+	}
+
+	if gnome != nil {
+		gnome.Destroy()
 	}
 }
 
@@ -294,6 +316,8 @@ func (m *Manager) WindowPtr() unsafe.Pointer {
 		return m.x11.WindowPtr()
 	} else if m.wlroots != nil {
 		return m.wlroots.WindowPtr()
+	} else if m.gnome != nil {
+		return m.gnome.WindowPtr()
 	}
 
 	return nil
@@ -366,6 +390,18 @@ func (m *Manager) OverlayCapabilities() ports.FeatureCapability {
 			Status: ports.FeatureStatusStub,
 			Detail: "wlroots layer-shell overlay backend failed to initialize",
 		}
+	case linuxOverlayBackendWaylandGNOME:
+		if m.gnome != nil && m.gnome.Healthy() {
+			return ports.FeatureCapability{
+				Status: ports.FeatureStatusSupported,
+				Detail: "GNOME overlays via the Neru Shell extension (org.neru.ShellOverlay) + Cairo",
+			}
+		}
+
+		return ports.FeatureCapability{
+			Status: ports.FeatureStatusStub,
+			Detail: "Neru GNOME Shell extension not detected; install neru-overlay@neru.dev and log in again",
+		}
 	case linuxOverlayBackendUnknown:
 		return ports.FeatureCapability{
 			Status: ports.FeatureStatusStub,
@@ -392,6 +428,12 @@ func (m *Manager) DrawHintsWithStyle(hintsSlice []*hints.Hint, style hints.Style
 
 	if m.wlroots != nil {
 		m.wlroots.DrawHints(hintsSlice, style)
+
+		return nil
+	}
+
+	if m.gnome != nil {
+		m.gnome.DrawHints(hintsSlice, style)
 
 		return nil
 	}
@@ -438,6 +480,8 @@ func (m *Manager) DrawModeIndicator(posX, posY int) {
 		m.x11.DrawBadge(posX, posY, label, colors, style)
 	} else if m.wlroots != nil {
 		m.wlroots.DrawBadge(posX, posY, label, colors, style)
+	} else if m.gnome != nil {
+		m.gnome.DrawBadge(posX, posY, label, colors, style)
 	}
 }
 
@@ -472,6 +516,8 @@ func (m *Manager) DrawStickyModifiersIndicator(posX, posY int, symbols string) {
 		m.x11.DrawBadge(posX, posY, symbols, colors, style)
 	} else if m.wlroots != nil {
 		m.wlroots.DrawBadge(posX, posY, symbols, colors, style)
+	} else if m.gnome != nil {
+		m.gnome.DrawBadge(posX, posY, symbols, colors, style)
 	}
 }
 
@@ -512,6 +558,21 @@ func (m *Manager) DrawGrid(grid *domainGrid.Grid, input string, style grid.Style
 		m.wlroots.DrawGrid(grid, input, style)
 
 		return nil
+	} else if m.gnome != nil {
+		if m.gridOverlay != nil {
+			cfg := m.gridOverlay.Config()
+
+			keys := strings.TrimSpace(cfg.SublayerKeys)
+			if keys == "" {
+				keys = cfg.Characters
+			}
+
+			m.gnome.sublayerKeys = strings.ToUpper(keys)
+		}
+
+		m.gnome.DrawGrid(grid, input, style)
+
+		return nil
 	}
 
 	return derrors.New(derrors.CodeNotSupported, "overlay grid not implemented on linux backend")
@@ -541,6 +602,10 @@ func (m *Manager) DrawRecursiveGrid(
 		m.wlroots.DrawRecursiveGrid(bounds, depth, keys, gridCols, gridRows, style, virtualPointer)
 
 		return nil
+	} else if m.gnome != nil {
+		m.gnome.DrawRecursiveGrid(bounds, depth, keys, gridCols, gridRows, style, virtualPointer)
+
+		return nil
 	}
 
 	_ = nextKeys
@@ -562,6 +627,8 @@ func (m *Manager) UpdateGridMatches(prefix string) {
 		m.x11.UpdateGridMatches(prefix)
 	} else if m.wlroots != nil {
 		m.wlroots.UpdateGridMatches(prefix)
+	} else if m.gnome != nil {
+		m.gnome.UpdateGridMatches(prefix)
 	}
 }
 
@@ -598,6 +665,19 @@ func (m *Manager) ShowSubgrid(cell *domainGrid.Cell, style grid.Style) {
 		}
 
 		m.wlroots.ShowSubgrid(cell, style)
+	} else if m.gnome != nil {
+		if m.gridOverlay != nil {
+			cfg := m.gridOverlay.Config()
+
+			keys := strings.TrimSpace(cfg.SublayerKeys)
+			if keys == "" {
+				keys = cfg.Characters
+			}
+
+			m.gnome.sublayerKeys = strings.ToUpper(keys)
+		}
+
+		m.gnome.ShowSubgrid(cell, style)
 	}
 }
 
@@ -610,6 +690,8 @@ func (m *Manager) SetHideUnmatched(hide bool) {
 		m.x11.SetHideUnmatched(hide)
 	} else if m.wlroots != nil {
 		m.wlroots.SetHideUnmatched(hide)
+	} else if m.gnome != nil {
+		m.gnome.SetHideUnmatched(hide)
 	}
 }
 
@@ -625,8 +707,9 @@ func detectLinuxOverlayBackend() linuxOverlayBackend {
 		return linuxOverlayBackendX11
 	case platform.BackendWaylandWlroots, platform.BackendWaylandKDE:
 		return linuxOverlayBackendWaylandWlroots
-	case platform.BackendUnknown, platform.BackendWaylandGNOME,
-		platform.BackendWaylandOther:
+	case platform.BackendWaylandGNOME:
+		return linuxOverlayBackendWaylandGNOME
+	case platform.BackendUnknown, platform.BackendWaylandOther:
 		return linuxOverlayBackendUnknown
 	}
 
@@ -661,6 +744,8 @@ func (m *Manager) clearStickyBadgeLocked() {
 		m.x11.ClearRect(m.stickyBadgeRect)
 	} else if m.wlroots != nil {
 		m.wlroots.ClearRect(m.stickyBadgeRect)
+	} else if m.gnome != nil {
+		m.gnome.ClearRect(m.stickyBadgeRect)
 	}
 
 	m.stickyBadgeVisible = false

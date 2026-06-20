@@ -1,0 +1,8 @@
+{
+  "uuid": "neru-overlay@neru.dev",
+  "name": "Neru Overlay",
+  "description": "Renders Neru's grid, recursive-grid, and hint overlays on GNOME Shell. Neru drives this over D-Bus (org.neru.ShellOverlay); the extension is a thin stable primitive painter so all overlay logic stays in the Neru daemon.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "session-modes": ["user", "unlock-dialog"],
+  "url": "https://github.com/y3owk1n/neru"
+}

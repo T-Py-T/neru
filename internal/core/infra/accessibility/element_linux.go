@@ -558,10 +558,15 @@ func currentLinuxBackend() linuxBackend {
 	switch platform.DetectLinuxBackend() {
 	case platform.BackendX11:
 		return linuxBackendX11
-	case platform.BackendWaylandWlroots, platform.BackendWaylandKDE:
+	case platform.BackendWaylandWlroots, platform.BackendWaylandKDE,
+		platform.BackendWaylandGNOME:
+		// GNOME (Mutter) has no wlr virtual-pointer/layer-shell, but its
+		// mouse/click/scroll path is the same Wayland dispatcher used by
+		// KDE/wlroots: it routes through WaylandClick -> libei via
+		// xdg-desktop-portal. Treating it as Unknown here made every
+		// click/move/scroll in this file a silent no-op on GNOME.
 		return linuxBackendWayland
-	case platform.BackendUnknown, platform.BackendWaylandGNOME,
-		platform.BackendWaylandOther:
+	case platform.BackendUnknown, platform.BackendWaylandOther:
 		return linuxBackendUnknown
 	}
 

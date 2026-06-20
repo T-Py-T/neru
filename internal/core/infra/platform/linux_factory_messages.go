@@ -10,11 +10,6 @@ import (
 
 func unsupportedLinuxBackendError(backend LinuxBackend) error {
 	switch backend {
-	case BackendWaylandGNOME:
-		return derrors.New(
-			derrors.CodeNotSupported,
-			"neru does not yet support GNOME Wayland. See docs/LINUX_SETUP.md and internal/core/infra/platform/linux/wayland_gnome/PLACEHOLDER.md.",
-		)
 	case BackendWaylandOther:
 		return derrors.Newf(
 			derrors.CodeNotSupported,
@@ -26,7 +21,7 @@ func unsupportedLinuxBackendError(backend LinuxBackend) error {
 			derrors.CodeNotSupported,
 			"neru could not detect a Linux display server. Ensure WAYLAND_DISPLAY or DISPLAY is set.",
 		)
-	case BackendX11, BackendWaylandWlroots, BackendWaylandKDE:
+	case BackendX11, BackendWaylandWlroots, BackendWaylandKDE, BackendWaylandGNOME:
 		return derrors.Newf(
 			derrors.CodeInternal,
 			"unsupportedLinuxBackendError called on supported backend: %s",
