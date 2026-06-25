@@ -59,6 +59,7 @@ type KeyboardHook struct {
 	callback func(key string, isUp bool)
 	stopCh   chan struct{}
 	doneCh   chan struct{}
+	startErr chan error
 	stopOnce sync.Once
 }
 
@@ -75,7 +76,12 @@ var (
 	activeKeyboardHook *KeyboardHook
 )
 
-var errKeyboardHookCallbackNil = errors.New("keyboard hook callback is nil")
+var (
+	errKeyboardHookCallbackNil   = errors.New("keyboard hook callback is nil")
+	errKeyboardHookInstallFailed = errors.New(
+		"SetWindowsHookExW failed: keyboard hook not installed",
+	)
+)
 
 // StartKeyboardHook installs a WH_KEYBOARD_LL hook and begins dispatching events.
 func StartKeyboardHook(callback func(key string, isUp bool)) (*KeyboardHook, error) {
@@ -87,9 +93,23 @@ func StartKeyboardHook(callback func(key string, isUp bool)) (*KeyboardHook, err
 		callback: callback,
 		stopCh:   make(chan struct{}),
 		doneCh:   make(chan struct{}),
+		startErr: make(chan error, 1),
 	}
 
 	go hook.run()
+
+	// Wait for the hook goroutine to report whether SetWindowsHookExW
+	// succeeded. Without this, Enable stores a hook handle and flips
+	// enabled=true even when no hook was actually installed, leaving grid and
+	// hints mode with no keyboard input.
+	select {
+	case err := <-hook.startErr:
+		if err != nil {
+			return nil, err
+		}
+	case <-hook.doneCh:
+		return nil, errKeyboardHookInstallFailed
+	}
 
 	return hook, nil
 }
@@ -190,6 +210,10 @@ func (h *KeyboardHook) run() {
 		0,
 	)
 	if handle == 0 {
+		// Report the install failure so StartKeyboardHook returns an error
+		// instead of a hook that never receives input.
+		h.startErr <- errKeyboardHookInstallFailed
+
 		return
 	}
 
@@ -199,6 +223,9 @@ func (h *KeyboardHook) run() {
 	h.threadID = uint32(threadID)
 	activeKeyboardHook = h
 	h.mu.Unlock()
+
+	// Signal successful install so StartKeyboardHook can return the hook.
+	close(h.startErr)
 
 	defer func() {
 		h.mu.Lock()
