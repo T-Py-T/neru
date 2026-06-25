@@ -26,6 +26,7 @@ func AppsUseDarkTheme() bool {
 	if err != nil {
 		return false
 	}
+
 	defer func() { _ = key.Close() }()
 
 	value, _, err := key.GetIntegerValue("AppsUseLightTheme")

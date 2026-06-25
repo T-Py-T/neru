@@ -377,6 +377,7 @@ func processImagePath(pid int) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("OpenProcess: %w", err)
 	}
+
 	defer func() { _ = windows.CloseHandle(handle) }()
 
 	buf := make([]uint16, windows.MAX_PATH)
