@@ -5,6 +5,7 @@
 - Unit tests: `*_test.go` (no build tag required)
 - macOS integration tests: `*_integration_darwin_test.go` (tagged `//go:build integration && darwin`)
 - Linux integration tests: `*_integration_linux_test.go` (tagged `//go:build integration && linux`)
+- Windows integration tests: `*_integration_windows_test.go` (tagged `//go:build integration && windows`; require an interactive desktop, skip on headless)
 - Examples: `*_example_test.go`
 
 ## Test Function Naming

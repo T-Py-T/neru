@@ -62,6 +62,7 @@ Before changing code, read these files first:
 - [internal/core/ports/capability_presets.go](../internal/core/ports/capability_presets.go)
 - [internal/core/ports/font.go](../internal/core/ports/font.go) — FontResolver port (fontconfig on Linux, NSFont on macOS)
 - [ARCHITECTURE.md](./ARCHITECTURE.md)
+- [WINDOWS.md](./WINDOWS.md)
 - [CONVENTIONS.md](./go/CONVENTIONS.md)
 
 If you are contributing Linux support, also inspect the reserved backend files in
@@ -271,6 +272,11 @@ Stubbed (not yet implemented):
 
 Do not introduce additional Windows backend naming until there is a real reason.
 
+Windows ships basic support (grid, recursive grid, hints, hotkeys, `neru doctor`,
+system tray). For the build model, pre-merge verification steps, the event
+architecture map (including where Windows diverges from darwin/linux), and
+Windows-specific interaction notes, see [WINDOWS.md](./WINDOWS.md).
+
 ---
 
 ## CGO Guidance
@@ -421,6 +427,7 @@ Usually that means checking these files:
 
 - [README.md](../README.md)
 - [ARCHITECTURE.md](./ARCHITECTURE.md)
+- [WINDOWS.md](./WINDOWS.md)
 - [DEVELOPMENT.md](./DEVELOPMENT.md)
 - [CONVENTIONS.md](./go/CONVENTIONS.md)
 
