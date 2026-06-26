@@ -10,17 +10,26 @@ package windows
 // Use a rare RGB value so grid theme colors are not punched through as holes.
 const overlayColorKey = 0x00010101 // RGB(1, 1, 1)
 
-// Bit offsets for the channels of an AARRGGBB / 0xRRGGBB packed color, and the
-// maximum value of a single 8-bit channel.
+// Bit offsets for the channels of an AARRGGBB / 0xRRGGBB packed color (the
+// Neru/config format), and the maximum value of a single 8-bit channel.
+// Note: this is NOT the Win32 COLORREF layout (0x00BBGGRR); rgbToColorRef
+// repacks into COLORREF separately.
 const (
 	greenShift = 8
-	redShift   = 16
+	redShift   = 16 // position of red in AARRGGBB / 0xRRGGBB input
+	blueShift  = 16 // position of blue in the output COLORREF 0x00BBGGRR
 	alphaShift = 24
 	maxChannel = 255
 )
 
+// rgbToColorRef packs an RGB triple into a Win32 COLORREF.
+//
+// COLORREF is 0x00BBGGRR: red is the low-order byte, green the middle, blue the
+// high byte (the RGB macro is r | (g << 8) | (b << 16); rgbRed = 0x000000FF,
+// rgbBlue = 0x00FF0000). Packing red into the high byte (0x00RRGGBB) swaps red
+// and blue, rendering blue theme accents as orange-red on GDI.
 func rgbToColorRef(red, green, blue uint8) uint32 {
-	return uint32(blue) | (uint32(green) << greenShift) | (uint32(red) << redShift)
+	return uint32(red) | (uint32(green) << greenShift) | (uint32(blue) << blueShift)
 }
 
 // argbToGDIColorRef converts AARRGGBB to an opaque COLORREF for GDI.
