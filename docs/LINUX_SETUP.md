@@ -1,17 +1,19 @@
 # Linux Setup & Testing Guide
 
-Neru provides native Linux support through two display server backends:
+Neru provides native Linux support through these display server backends:
 
 - **X11** — works with any X11-based session (XOrg, i3, etc.)
 - **Wayland (wlroots)** — works with wlroots-based compositors (Sway, Hyprland, niri, River)
+- **Wayland (KDE Plasma)** — KWin exposes `zwlr_layer_shell_v1` and `zxdg_output_manager_v1` (overlays and screen geometry use the shared wlroots client) but **not** `zwlr_virtual_pointer_v1`. Input (move/click/scroll/modifier) is injected through `libei` via the `org.freedesktop.portal.RemoteDesktop` portal instead, which requires approving a one-time "Remote Control" consent prompt per session. See [Measured Compositor Protocol Support](#measured-compositor-protocol-support).
 
-> **GNOME and KDE Wayland** are not yet supported. These compositors use their own private protocols instead of the wlroots protocols. See the placeholder files in `internal/core/infra/platform/linux/wayland_gnome/` and `wayland_kde/` for contribution guidance.
+> **GNOME Wayland** is not yet supported. GNOME Shell uses its own private protocols instead of the wlr protocols. See the placeholder files in `internal/core/infra/platform/linux/wayland_gnome/` for contribution guidance.
 
 ---
 
 ## Table of Contents
 
 - [Supported Compositors & Backends](#supported-compositors--backends)
+- [Install-Time Environment Adjustments (Non-Code)](#install-time-environment-adjustments-non-code)
 - [Wayland Keyboard Capture Permissions](#wayland-keyboard-capture-permissions)
 - [Using nix home manager](#using-nix-home-manager)
 - [Build Dependencies](#build-dependencies)
@@ -33,8 +35,107 @@ Neru provides native Linux support through two display server backends:
 | River      | wayland-wlroots | ✅ Supported     | Full virtual-pointer and layer-shell support            |
 | X11 / XOrg | x11             | ✅ Supported     | XTest for input, XRandR for screens                     |
 | i3         | x11             | ✅ Supported     | Runs under X11                                          |
+| KDE Plasma | wayland-kde     | ✅ Supported     | Overlay + screen geometry via the wlroots client; input via `libei` (RemoteDesktop portal). Needs a one-time per-session consent prompt |
 | GNOME      | wayland-gnome   | 🔲 Not Supported | Needs libei + GNOME Shell extension; see PLACEHOLDER.md |
-| KDE Plasma | wayland-kde     | 🔲 Not Supported | Needs KDE-specific protocols; see PLACEHOLDER.md        |
+
+> **KDE input goes through `libei`, not the wlroots virtual pointer (confirmed,
+> not assumed).** KWin 6.6.4 does not expose `zwlr_virtual_pointer_v1` (measured
+> directly with `wayland-info`; see
+> [Measured Compositor Protocol Support](#measured-compositor-protocol-support)),
+> so Neru injects input through `libei` via the
+> `org.freedesktop.portal.RemoteDesktop` portal. The overlay and screen geometry
+> still use the shared wlroots client because `zwlr_layer_shell_v1` and
+> `zxdg_output_manager_v1` are present. The portal shows a one-time "Remote
+> Control" consent prompt that must be approved before the cursor can move or
+> click.
+
+---
+
+## Install-Time Environment Adjustments (Non-Code)
+
+These are changes to the **host environment**, not to Neru's code, that a Linux
+install must account for. A from-source build, a Homebrew formula, or a distro
+package each needs to either perform these or clearly tell the user to. Keep this
+list current as new environment requirements are discovered.
+
+| #   | Adjustment                                                  | Why it is needed                                                                 | Backends affected      | Persists across reboot?      |
+| --- | ----------------------------------------------------------- | -------------------------------------------------------------------------------- | ---------------------- | ---------------------------- |
+| 1   | Install build dependencies (see [Build Dependencies](#build-dependencies)) | Compile the native CGO backends; a prebuilt binary still needs the matching runtime shared libs present | All Linux              | Yes (packages stay installed) |
+| 2   | Add the user to the `input` group: `sudo usermod -aG input "$USER"` | `evdev` keyboard capture for reliable modified clicks and sticky modifiers; see [Wayland Keyboard Capture Permissions](#wayland-keyboard-capture-permissions) | Wayland (wlroots, KDE) | Yes, but requires a re-login to take effect |
+| 3   | Bind `neru <mode>` in the compositor's own keybinding config (Sway/Hyprland/niri config, or KDE System Settings -> Custom Shortcuts); see [Hotkey Configuration](#1-hotkey-configuration) | Wayland has no global-hotkey protocol, so Neru cannot register hotkeys itself | All Wayland            | Yes (user config)            |
+
+Notes:
+
+- Item 1 is the only one X11 needs; on X11 global hotkeys work natively via `XGrabKey`.
+- Item 2 only changes the effective permission **after a full logout/login or reboot**;
+  the running session keeps its old group set. Without it, Neru falls back to the
+  less capable overlay-focused keyboard path.
+- Item 3 is user configuration by nature and cannot be automated by a package; the
+  most an installer can do is ship example snippets.
+
+### Not Fixable At Install Time (Compositor Capability Gaps)
+
+Some requirements are properties of the **compositor**, not the host, so no install
+step can add them:
+
+- **`zwlr_virtual_pointer_v1`** — used for pointer move/click on wlroots
+  compositors (Sway, Hyprland, niri, River). **KWin 6.6.4 does not advertise it**
+  (confirmed below); on KDE, Neru injects input through `libei` via the
+  RemoteDesktop portal instead, so a missing virtual pointer is not fatal there.
+- **`zwp_virtual_keyboard_manager_v1`** — used for sticky-modifier key injection
+  on wlroots compositors; on KDE the same modifiers go through the libei keyboard
+  device when the portal grants one.
+
+### Measured Compositor Protocol Support
+
+The clean way to answer "will Neru work on compositor X" is to enumerate the
+Wayland globals it advertises, with no build or install required:
+
+```bash
+# Run inside the graphical session (needs WAYLAND_DISPLAY).
+wayland-info | grep -E 'zwlr_layer_shell|zwlr_virtual_pointer|zwp_virtual_keyboard|fake_input|xdg_output'
+```
+
+Neru's wlroots path needs **both** `zwlr_layer_shell_v1` (overlay) and
+`zwlr_virtual_pointer_v1` (pointer). If both are present, the shared wlroots path
+works as-is; if the pointer protocol is missing, the compositor needs a
+desktop-specific input path instead.
+
+| Protocol                            | Purpose                       | wlroots (Sway/Hyprland/niri/River) | KWin 6.6.4 (KDE Plasma) |
+| ----------------------------------- | ----------------------------- | ---------------------------------- | ----------------------- |
+| `zwlr_layer_shell_v1`               | overlay surfaces              | yes                                | yes (v5)                |
+| `zxdg_output_manager_v1`            | screen geometry / xdg-output  | yes                                | yes (v3)                |
+| `zwlr_virtual_pointer_v1`           | pointer move / click          | yes                                | **no**                  |
+| `zwp_virtual_keyboard_manager_v1`   | sticky-modifier key injection | yes                                | **no**                  |
+| `org_kde_kwin_fake_input`           | KWin-native input emulation   | n/a                                | **no** (not advertised) |
+
+**Conclusion for KDE:** the overlay and screen-geometry half uses the shared
+wlroots client (both protocols are present); the input half goes through
+something KWin actually exposes — `libei` via the
+`org.freedesktop.portal.RemoteDesktop` portal. The backend choice is made at the
+Wayland input dispatcher (`system_linux_wayland_input.go`): if the compositor
+advertises `zwlr_virtual_pointer_v1` it uses the wlroots virtual pointer,
+otherwise it uses libei. The two input mechanisms never overlap, and libei never
+touches the wlroots input implementation.
+
+> **Reusing this for other desktops (e.g. COSMIC):** run the same `wayland-info`
+> check in that session. If it lists both `zwlr_layer_shell_v1` and
+> `zwlr_virtual_pointer_v1`, support is the straightforward shared-wlroots case;
+> if not, it needs the same desktop-specific input path KDE will need.
+
+### Open Questions for Maintainers (Packaging)
+
+Before this lands, we should ask the repo owner how the build/packaging process is
+expected to handle the OS-specific steps above:
+
+- How should the **Homebrew formula** (or distro packages) handle the `input` group
+  membership (item 2)? Homebrew on Linux runs unprivileged and should not modify
+  system groups or invoke `sudo`, so this likely has to be a documented post-install
+  manual step (a `caveats` message), not an automated action.
+- Which **runtime shared libraries** must be present on the target system for a bottled
+  binary, and how is that expressed in the formula?
+- Is manual compositor keybinding setup (item 3) acceptable as the supported path, or
+  should we ship per-compositor example configs?
 
 ---
 
@@ -126,6 +227,12 @@ Below is a minimal single flake with home manager setup.
 
 ## Build Dependencies
 
+`libei` and `liboeffis` provide the KDE Plasma input path (input injection
+through the `org.freedesktop.portal.RemoteDesktop` portal, since KWin does not
+implement `zwlr_virtual_pointer_v1`). The CGO build links them via
+`pkg-config libei-1.0 liboeffis-1.0`, so the `-devel`/`-dev` packages are
+required at build time and the runtime shared libs at run time.
+
 ### Debian / Ubuntu
 
 ```bash
@@ -138,6 +245,8 @@ sudo apt-get install -y \
   libxinerama-dev \
   libxfixes-dev \
   libxkbcommon-dev \
+  libei-dev \
+  liboeffis-dev \
   libfontconfig-dev \
   wayland-protocols \
   fonts-dejavu-core
@@ -155,6 +264,8 @@ sudo dnf install -y \
   libXinerama-devel \
   libXfixes-devel \
   libxkbcommon-devel \
+  libei-devel \
+  liboeffis-devel \
   fontconfig-devel \
   wayland-protocols-devel \
   dejavu-sans-fonts dejavu-serif-fonts dejavu-sans-mono-fonts
@@ -172,6 +283,7 @@ sudo pacman -S \
   libxinerama \
   libxfixes \
   libxkbcommon \
+  libei \
   fontconfig \
   wayland-protocols \
   ttf-dejavu
@@ -189,14 +301,31 @@ modifier indicator) works equally well.
 ## Building
 
 ```bash
-# Build for current platform
+# Build for the current host architecture (recommended for local dev/testing).
+# No arch flag needed: Go targets the host arch automatically.
 just build
 
-# Build specifically for Linux
-just build-linux
+# Build an explicitly-named Linux arch. NOTE: this recipe defaults to amd64.
+just build-linux arm64   # Apple Silicon / arm64 hosts (e.g. UTM VMs on a Mac)
+just build-linux amd64   # x86_64 hosts
 
 # Cross-compilation from macOS is NOT supported for Linux targets
 # because the native backends require CGo and Linux system headers.
+```
+
+### Architecture note (Apple Silicon / UTM)
+
+On an Apple Silicon Mac, UTM VMs are **arm64**. Use the native `just build`
+there — it produces an arm64 binary with no extra flags. Only the
+`just build-linux` recipe needs an explicit arch, and it **defaults to amd64**,
+so pass `arm64` on these VMs (`just build-linux arm64`); running it bare
+cross-compiles for amd64 with CGO and fails without an amd64 toolchain.
+
+Verify what you built:
+
+```bash
+go env GOARCH        # expect: arm64
+file bin/neru        # expect: ... ARM aarch64
 ```
 
 ---
@@ -279,6 +408,19 @@ binds {
 }
 ```
 
+#### KDE Plasma Example
+
+KDE Plasma Wayland cannot register global hotkeys from inside Neru, so bind
+`neru <mode>` in **System Settings -> Shortcuts -> Custom Shortcuts**. Use the
+absolute path to the binary so KWin resolves it reliably:
+
+| Action         | Command                                       |
+| -------------- | --------------------------------------------- |
+| Hints          | `/home/<you>/.local/bin/neru hints`           |
+| Grid           | `/home/<you>/.local/bin/neru grid`            |
+| Recursive grid | `/home/<you>/.local/bin/neru recursive_grid`  |
+| Scroll         | `/home/<you>/.local/bin/neru scroll`          |
+
 ### 2. Application Exclusions
 
 On Linux, applications are identified by their X11 `WM_CLASS` (X11) or process name from `/proc/<pid>/cmdline` (Wayland). Use these exact identifiers in your `excluded_apps` list.
@@ -316,13 +458,36 @@ systemctl --user enable --now neru
 ## Known Limitations
 
 1. **Wayland global hotkeys**: Must be configured in the compositor, not in Neru's config. See [Hotkey Configuration](#1-hotkey-configuration).
-2. **Accessibility (AT-SPI)**: Full AT-SPI integration for clickable element discovery (hints mode) is currently unavailable natively under Wayland without relying on experimental plugins. Grid mode and scroll mode both work perfectly without AT-SPI.
-3. **Dark mode detection**: Detected via the `org.freedesktop.appearance` xdg-desktop-portal interface, with a `~/.config/kdeglobals` fallback, so `neru doctor` reports the current color scheme on any desktop that ships a portal. Restyling overlays to match the detected theme is not yet wired up.
+2. **Accessibility (AT-SPI)**: Hints mode discovers clickable elements through an AT-SPI D-Bus client (validated on KDE Plasma). It needs the AT-SPI stack enabled (`org.a11y.Bus`) — Neru turns it on at daemon start — and translates AT-SPI roles to the AX role names used in config. On KDE, element coordinates are corrected with a KWin geometry bridge, since AT-SPI reports window-relative positions under Wayland. Coverage depends on each app exposing an AT-SPI tree; apps that don't (or toolkits without AT-SPI) yield no hints. Grid and scroll modes work without AT-SPI.
+3. **Dark mode detection**: Detected via the `org.freedesktop.appearance` xdg-desktop-portal interface, with a `~/.config/kdeglobals` fallback, so `neru doctor` reports the current color scheme on any desktop that ships a portal. Overlays restyle live when the portal emits `SettingChanged` signals; a 5s polling fallback covers sessions where D-Bus subscription is unavailable.
 4. **Notifications**: Desktop notifications (`org.freedesktop.Notifications`) will log to stdout/file instead of pushing to DBus.
 5. **Wayland modified clicks need evdev access**: On wlroots compositors, reliable
    modified pointer actions depend on the `evdev` keyboard-capture path described
    above. Without `/dev/input/event*` access, Neru falls back to a less capable
    overlay-focused path.
+6. **KDE input needs RemoteDesktop consent (re-prompts every daemon launch)**:
+   On KDE Plasma, input goes through `libei` via the RemoteDesktop portal, which
+   shows a "Remote Control" consent prompt before Neru can inject input. Approve
+   it or input fails with `CodeActionFailed`. The grant is held for the **whole
+   daemon lifetime** — approve once and every later hint/grid action reuses the
+   same session with no further prompt. However, the prompt **reappears on every
+   fresh daemon start** (reboot, logout/login, or manual relaunch): the helper
+   library Neru uses (`liboeffis`) does not expose the portal's restore-token /
+   `persist_mode`, so KDE cannot remember the decision across launches and there
+   is no honored "remember this" option. Startup warm-up surfaces the prompt
+   before the first hint so the overlay does not hide it; if warm-up is not
+   approved in time, the next input action re-surfaces it.
+   *Future work:* bypass `liboeffis` and drive `org.freedesktop.portal.RemoteDesktop`
+   directly with a stored `restore_token` + `persist_mode` so the grant survives
+   daemon restarts.
+   Modifier keys also require the portal to grant a keyboard device; if it grants
+   only a pointer, modified clicks degrade.
+7. **Screen resolution is read once at startup**: Neru enumerates output geometry
+   (`xdg_output` logical size) when the daemon starts and caches it. If the
+   resolution changes afterward — common when resizing a VM window, and also on
+   monitor hotplug / docking — the overlay and hint coordinates stay at the old
+   size. Relaunch Neru after changing resolution to pick up the new geometry.
+   Tracking resolution changes live is a planned follow-up.
 
 ---
 
@@ -334,7 +499,24 @@ You're running under X11 or a TTY. Neru will automatically use the X11 backend w
 
 ### "compositor does not support zwlr_virtual_pointer_v1"
 
-Your Wayland compositor does not currently implement `wlr` unstable protocols. This typically occurs under strictly isolated GNOME or KDE sessions. Check the placeholder docs to learn how libei implementations will govern GNOME support in the future.
+Your Wayland compositor does not currently implement `wlr` unstable protocols. This typically occurs under GNOME Shell, which uses its own private protocols. Check the placeholder docs to learn how libei implementations will govern GNOME support in the future. On KDE Plasma this is expected — KWin does not advertise the protocol and Neru routes input through `libei` instead (see below).
+
+### KDE: "could not establish a libei input session via the RemoteDesktop portal"
+
+On KDE Plasma, Neru injects input through `libei` via the
+`org.freedesktop.portal.RemoteDesktop` portal. The first input action in a
+session pops a "Remote Control" consent dialog; approve it before the connect
+times out. If you denied it, revoke/re-grant the permission in System Settings
+(Apps & Window Management / portal permissions) and retry. The session also
+needs the portal services running (`xdg-desktop-portal` and
+`xdg-desktop-portal-kde`).
+
+### Overlay or hints are the wrong size / offset after resizing
+
+Neru reads screen geometry once when the daemon starts. If you resized a VM
+window, changed display scaling, or hotplugged a monitor after launch, the
+overlay still uses the old logical size. Relaunch Neru (`neru stop` then
+`neru launch`) to pick up the new resolution.
 
 ### "failed to connect to Wayland compositor"
 

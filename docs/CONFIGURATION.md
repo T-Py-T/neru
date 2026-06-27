@@ -986,6 +986,14 @@ When `log_file` is empty, Neru writes to a platform default location:
 | Linux    | `~/.local/state/neru/log/app.log` |
 | Windows  | `%LOCALAPPDATA%\neru\log\app.log` |
 
+When `log_file` is empty, Neru writes to a platform default location:
+
+| Platform | Default log file                          |
+| -------- | ----------------------------------------- |
+| macOS    | `~/Library/Logs/neru/app.log`             |
+| Linux    | `~/.local/state/neru/log/app.log`         |
+| Windows  | `%LOCALAPPDATA%\neru\log\app.log`         |
+
 At the default `info` level, logs focus on lifecycle, configuration, mode activation, and actionable operational events. Use `debug` temporarily when investigating key routing, hint generation, accessibility collection, overlay redraws, or IPC action flow. Debug logs intentionally avoid typed UI text, feed-key payloads, exec output, and full configuration values.
 
 ---
