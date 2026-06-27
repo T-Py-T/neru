@@ -258,10 +258,14 @@ two axes separate:
   both `linux` + Wayland at compile time), so the suffix never encodes a single
   DE on its own.
 - **Runtime axis** — which compositor is live. Expressed by the `LinuxBackend`
-  family in [linux_backend.go](/Users/kylewong/Dev/neru/internal/core/infra/platform/linux_backend.go)
+  family in [linux_backend.go](../internal/core/infra/platform/linux_backend.go)
   (`BackendWaylandWlroots`, `BackendWaylandKDE`, `BackendWaylandGNOME`,
   `BackendWaylandOther`), detected from `XDG_CURRENT_DESKTOP` and routed by the
   factory + dispatch seams (e.g. `system_linux_wayland_input.go`).
+
+Per-DE behavior, protocol measurements, and known issues live in
+[LINUX-DESKTOPS.md](./LINUX-DESKTOPS.md). Host setup (deps, build, deploy) lives
+in [LINUX_SETUP.md](./LINUX_SETUP.md).
 
 Organize implementation by the axis that actually varies, which is usually the
 **mechanism**, not the DE, because DEs share mechanisms:
@@ -465,6 +469,8 @@ Usually that means checking these files:
 - [README.md](../README.md)
 - [ARCHITECTURE.md](./ARCHITECTURE.md)
 - [DEVELOPMENT.md](./DEVELOPMENT.md)
+- [LINUX_SETUP.md](./LINUX_SETUP.md) — build, deps, deploy (keep DE-agnostic)
+- [LINUX-DESKTOPS.md](./LINUX-DESKTOPS.md) — per-DE decisions and known issues
 - [CONVENTIONS.md](./go/CONVENTIONS.md)
 
 Update them when:

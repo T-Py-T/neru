@@ -83,7 +83,7 @@ func initializeAdapters(
 	excludedBundles := cfg.General.ExcludedApps
 	clickableRoles := cfg.Hints.ClickableRoles
 
-	// Create infrastructure client (platform-specific: AT-SPI on Linux).
+	// Create infrastructure client.
 	axClient := accessibilityAdapter.NewPlatformAXClient(logger, cfgService)
 
 	// Create base accessibility adapter with core functionality
