@@ -30,42 +30,24 @@ jobs:
                   repository: ${{ github.event.pull_request.head.repo.full_name }}
                   ref: ${{ github.head_ref }}
 
-            # Install Linux-only build dependencies for CGo backends
-            - name: Install Linux build dependencies
-              if: runner.os == 'Linux'
-              run: |
-                  sudo apt-get update
-                  sudo apt-get install -y \
-                    libcairo2-dev \
-                    libwayland-dev \
-                    libx11-dev \
-                    libxtst-dev \
-                    libxrandr-dev \
-                    libxinerama-dev \
-                    libxfixes-dev \
-                    libxkbcommon-dev \
-                    wayland-protocols \
-                    libei-dev \
-                    liboeffis-dev
-
-            # Install Devbox on macOS only
+            # Install Devbox on macOS and Linux only
             - name: Install Devbox
-              if: runner.os == 'macOS'
+              if: runner.os != 'macOS'
               uses: jetify-com/devbox-install-action@v0.15.0
               with:
                   enable-cache: true
 
-            # Install Go directly on Windows & Linux
+            # Install Go directly on Windows
             - name: Setup Go
-              if: runner.os == 'Windows' || runner.os == 'Linux'
+              if: runner.os == 'Windows'
               uses: actions/setup-go@v6
               with:
                   go-version-file: "go.mod"
                   cache: true
 
-            # Install Golangci directly on Windows & Linux (install only, lint step runs it)
+            # Install Golangci directly on Windows (install only, lint step runs it)
             - name: Setup Golangci
-              if: matrix.check == 'lint' && (runner.os == 'Windows' || runner.os == 'Linux')
+              if: matrix.check == 'lint' && (runner.os == 'Windows')
               uses: golangci/golangci-lint-action@v9
               with:
                   version: v2.11.3
@@ -78,47 +60,42 @@ jobs:
                   choco install just -y
               shell: pwsh
 
-            # Install just on Linux
-            - name: Install just (Linux)
-              if: runner.os == 'Linux'
-              uses: extractions/setup-just@v4
-
-            # Run checks with Devbox on macOS
-            - name: Run just lint (macOS)
-              if: matrix.check == 'lint' && runner.os == 'macOS'
+            # Run checks with Devbox on macOS and Linux
+            - name: Run just lint
+              if: matrix.check == 'lint' && runner.os != 'Windows'
               run: devbox run -- just lint
 
-            - name: Run just fmt-check (macOS)
-              if: matrix.check == 'formatting' && runner.os == 'macOS'
+            - name: Run just fmt-check
+              if: matrix.check == 'formatting' && runner.os != 'Windows'
               run: devbox run -- just fmt-check
 
-            - name: Run just vet (macOS)
-              if: matrix.check == 'vet' && runner.os == 'macOS'
+            - name: Run just vet
+              if: matrix.check == 'vet' && runner.os != 'Windows'
               run: devbox run -- just vet
 
-            - name: Run just build (macOS)
-              if: matrix.check == 'build' && runner.os == 'macOS'
+            - name: Run just build
+              if: matrix.check == 'build' && runner.os != 'Windows'
               run: devbox run -- just build
 
-            - name: Run just test-all (macOS)
-              if: matrix.check == 'test' && runner.os == 'macOS'
+            - name: Run just test-all
+              if: matrix.check == 'test' && runner.os != 'Windows'
               run: devbox run -- just test-all
 
-            # Run checks directly on Windows & Linux
-            - name: Run just lint (native)
-              if: matrix.check == 'lint' && (runner.os == 'Windows' || runner.os == 'Linux')
+            # Run checks directly on Windows
+            - name: Run just lint (Windows)
+              if: matrix.check == 'lint' && runner.os == 'Windows'
               run: just lint
 
-            - name: Run just vet (native)
-              if: matrix.check == 'vet' && (runner.os == 'Windows' || runner.os == 'Linux')
+            - name: Run just vet (Windows)
+              if: matrix.check == 'vet' && runner.os == 'Windows'
               run: just vet
 
-            - name: Run just build (native)
-              if: matrix.check == 'build' && (runner.os == 'Windows' || runner.os == 'Linux')
+            - name: Run just build (Windows)
+              if: matrix.check == 'build' && runner.os == 'Windows'
               run: just build
               shell: bash
 
-            - name: Run just test-all (native)
-              if: matrix.check == 'test' && (runner.os == 'Windows' || runner.os == 'Linux')
+            - name: Run just test-all (Windows)
+              if: matrix.check == 'test' && runner.os == 'Windows'
               run: just test-all
               shell: bash
