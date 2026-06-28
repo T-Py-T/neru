@@ -44,7 +44,9 @@ jobs:
                     libxinerama-dev \
                     libxfixes-dev \
                     libxkbcommon-dev \
-                    wayland-protocols
+                    wayland-protocols \
+                    libei-dev \
+                    liboeffis-dev
 
             # Install Devbox on macOS only
             - name: Install Devbox
