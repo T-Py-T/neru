@@ -1,5 +1,68 @@
 # Changelog
 
+## [1.45.0](https://github.com/y3owk1n/neru/compare/v1.44.1...v1.45.0) (2026-06-29)
+
+
+### Features
+
+* **hints:** add `label_direction` with different algo ([#934](https://github.com/y3owk1n/neru/issues/934)) ([9cf45b7](https://github.com/y3owk1n/neru/commit/9cf45b76cda3c6da801271dd470f224b5ed0851a))
+* **linux,wayland:** render overlay at output buffer scale ([#955](https://github.com/y3owk1n/neru/issues/955)) ([8c8482a](https://github.com/y3owk1n/neru/commit/8c8482a6a67c1462a9ab8b12fb692e0a4260db9a))
+* **windows,overlay:** rewrite overlay renderenig with real per-pixel alpha and full theme support ([#950](https://github.com/y3owk1n/neru/issues/950)) ([8b1fa57](https://github.com/y3owk1n/neru/commit/8b1fa57d46bc067254174906f36511b78d6f3e4a))
+* **windows:** add native alert dialogs for validation and startup ([#948](https://github.com/y3owk1n/neru/issues/948)) ([1b52c02](https://github.com/y3owk1n/neru/commit/1b52c02cc0274a3c02698ab925107c20fc35febd))
+* **windows:** embed app icon in .exe ([#949](https://github.com/y3owk1n/neru/issues/949)) ([90850f0](https://github.com/y3owk1n/neru/commit/90850f00608a9dccd21f9436d54772d809269262))
+* **windows:** initial basic support implementation ([2b637ba](https://github.com/y3owk1n/neru/commit/2b637ba07bc43e91827ace74f4e4f6608bb8c9d1))
+
+
+### Bug Fixes
+
+* **darwin,overlay:** keep mode indicator visible after reactivation ([#936](https://github.com/y3owk1n/neru/issues/936)) ([c41f96f](https://github.com/y3owk1n/neru/commit/c41f96f083de0badf7df74b880e1e6583043c9b0))
+* **grid:** avoid overlay redraw flash on mode exit ([#954](https://github.com/y3owk1n/neru/issues/954)) ([5f07607](https://github.com/y3owk1n/neru/commit/5f076074485a8a26c523bb92861bcd5578c333e6))
+* **linux,wayland:** prevent keyboard grab leak from evdev EINTR and blocked poll ([#953](https://github.com/y3owk1n/neru/issues/953)) ([d1bea3d](https://github.com/y3owk1n/neru/commit/d1bea3d7ac6978b0f22d1b00abeefeff8331a423))
+* **windows,config:** use proper windows path for config, shell and path validation ([#943](https://github.com/y3owk1n/neru/issues/943)) ([c679e6f](https://github.com/y3owk1n/neru/commit/c679e6fd0708384907b49632d7e17d09707fb860))
+* **windows,hints:** render badges atomically for correct z index ([#952](https://github.com/y3owk1n/neru/issues/952)) ([208db03](https://github.com/y3owk1n/neru/commit/208db036f2eddb1999cf56263247be1a3d477b76))
+* **windows:** align roles for hints and fix styling ([#951](https://github.com/y3owk1n/neru/issues/951)) ([7677bb4](https://github.com/y3owk1n/neru/commit/7677bb4bca27d5ea73a41af2c9f9f75bc4e29529))
+* **windows:** auto launch daemon when running .exe ([#944](https://github.com/y3owk1n/neru/issues/944)) ([6d504ef](https://github.com/y3owk1n/neru/commit/6d504ef8b3bd922a7eed2dfda19855ab61224fef))
+* **windows:** consume non-modifier key-down events to prevent passthrough to apps ([#947](https://github.com/y3owk1n/neru/issues/947)) ([a10a27a](https://github.com/y3owk1n/neru/commit/a10a27a6bcf842ce6224f2b0066cef3a99e28b71))
+* **windows:** ensure exe launches and quit properly ([#946](https://github.com/y3owk1n/neru/issues/946)) ([f12d0cd](https://github.com/y3owk1n/neru/commit/f12d0cd3e1876eeff2d50696abac6ec49591602c))
+
+## [1.44.1](https://github.com/y3owk1n/neru/compare/v1.44.0...v1.44.1) (2026-06-13)
+
+
+### Bug Fixes
+
+* **linux,wayland:** send 1-notch scroll events to prevent clipping ([#927](https://github.com/y3owk1n/neru/issues/927)) ([0a12df9](https://github.com/y3owk1n/neru/commit/0a12df94358f2f3f16d9c08dfc9309e581bff154))
+* **linux:** badge overlay to follow cursor pointer ([#920](https://github.com/y3owk1n/neru/issues/920)) ([5288eee](https://github.com/y3owk1n/neru/commit/5288eee91023b45ca5c0399e618b38adde2dbf02))
+* **linux:** improve sticky modifier detection ([#926](https://github.com/y3owk1n/neru/issues/926)) ([8c685dd](https://github.com/y3owk1n/neru/commit/8c685ddfdfdaec3af7d6b2f6d08bf012fd7c5ce8))
+* resolve fonts via ports on all platforms ([#928](https://github.com/y3owk1n/neru/issues/928)) ([e807897](https://github.com/y3owk1n/neru/commit/e807897417b51db1b5ce14789a8a0ed98a43a3a8))
+
+## [1.44.0](https://github.com/y3owk1n/neru/compare/v1.43.0...v1.44.0) (2026-06-11)
+
+
+### Features
+
+* add `--toggle` flag for all modes ([#910](https://github.com/y3owk1n/neru/issues/910)) ([80725a4](https://github.com/y3owk1n/neru/commit/80725a435fbcc82e648e1fa7ed66b5337f0e8bbd))
+* **cli:** remove actions `space`, `move_window_to_space` and `focus_window` ([#902](https://github.com/y3owk1n/neru/issues/902)) ([088f535](https://github.com/y3owk1n/neru/commit/088f535c208897edde57c67aee03782395effa5c))
+* **config:** make held-key repeat configurable ([#914](https://github.com/y3owk1n/neru/issues/914)) ([0230a63](https://github.com/y3owk1n/neru/commit/0230a63f8f10412ee4388d4bb4b69655a9409095))
+* **default-config:** tweak `recursive_grid.min_size_*` to 1px ([#913](https://github.com/y3owk1n/neru/issues/913)) ([219015c](https://github.com/y3owk1n/neru/commit/219015c3b2f9bb16d38a118c092d614a60b6b392))
+* **linux,overlay:** hook grid colors into theme ([8b5df46](https://github.com/y3owk1n/neru/commit/8b5df462410bdfc53da435ed780814a7a895fe04))
+* **linux:** detect dark mode via xdg portal + kdeglobals ([#892](https://github.com/y3owk1n/neru/issues/892)) ([34d9db4](https://github.com/y3owk1n/neru/commit/34d9db4230b0206a9dd85409dfdbfc547addecd8))
+* **linux:** proper theme observer for mode changes ([#918](https://github.com/y3owk1n/neru/issues/918)) ([8b5df46](https://github.com/y3owk1n/neru/commit/8b5df462410bdfc53da435ed780814a7a895fe04))
+* **systray:** add `Open in Editor` for config ([#911](https://github.com/y3owk1n/neru/issues/911)) ([c8e12f7](https://github.com/y3owk1n/neru/commit/c8e12f7a4634989e23ace891c0ed80354ecd5981))
+
+
+### Bug Fixes
+
+* ensure cross platform log file path ([#908](https://github.com/y3owk1n/neru/issues/908)) ([4aaf9df](https://github.com/y3owk1n/neru/commit/4aaf9df1f324122dfc6a304e0e2e66cc99c36cb1))
+* **hints:** validate and dedupe hint characters ([#916](https://github.com/y3owk1n/neru/issues/916)) ([c3e5169](https://github.com/y3owk1n/neru/commit/c3e5169894f47f46e62de2bced053c394bb507ce))
+* **linux:** ensure `devbox` works with proper `png-config` initialisation ([8b5df46](https://github.com/y3owk1n/neru/commit/8b5df462410bdfc53da435ed780814a7a895fe04))
+* properly resolve keyboard layouts on layout switch ([#907](https://github.com/y3owk1n/neru/issues/907)) ([b9e4c6f](https://github.com/y3owk1n/neru/commit/b9e4c6f6a5f61aab6ed9195b5b80aee66179fc83))
+
+
+### Documentation
+
+* **config:** add PWA related docs ([#917](https://github.com/y3owk1n/neru/issues/917)) ([3904ea0](https://github.com/y3owk1n/neru/commit/3904ea0a6d1b588722e21434cdbf8965ece680d0))
+* **config:** clarify more about keyboard layout ([#905](https://github.com/y3owk1n/neru/issues/905)) ([d9b3c90](https://github.com/y3owk1n/neru/commit/d9b3c90311f83d340dea5a646e01419bf3a9278f))
+
 ## [1.43.0](https://github.com/y3owk1n/neru/compare/v1.42.0...v1.43.0) (2026-06-05)
 
 

@@ -46,6 +46,7 @@ const (
 	textHeightMultiplier                   = 1.4
 	centeredRectDivisor                    = 2
 	centeredRectHalf                       = 0.5
+	hintPillRadiusDivisor                  = 2.0
 	paddingMultiplier                      = 2
 	subKeyPreviewPaddingBottom             = 4
 	stickyBadgeClearPadding                = 3
@@ -89,6 +90,9 @@ type Manager struct {
 
 	stickyBadgeRect    image.Rectangle
 	stickyBadgeVisible bool
+
+	modeIndicatorBadgeRect    image.Rectangle
+	modeIndicatorBadgeVisible bool
 }
 
 var (
@@ -173,6 +177,8 @@ func (m *Manager) Hide() {
 
 	m.stickyBadgeVisible = false
 	m.stickyBadgeRect = image.Rectangle{}
+	m.modeIndicatorBadgeVisible = false
+	m.modeIndicatorBadgeRect = image.Rectangle{}
 }
 
 // SetKeyboardCaptureEnabled controls whether the Wayland overlay requests
@@ -205,7 +211,13 @@ func (m *Manager) Clear() {
 
 	m.stickyBadgeVisible = false
 	m.stickyBadgeRect = image.Rectangle{}
+	m.modeIndicatorBadgeVisible = false
+	m.modeIndicatorBadgeRect = image.Rectangle{}
 }
+
+// ClearCache is a no-op on Linux; the overlay backend does not retain stale
+// cross-mode cache state.
+func (m *Manager) ClearCache() {}
 
 // ResizeToActiveScreen resizes the overlay to the active screen.
 func (m *Manager) ResizeToActiveScreen() {
@@ -434,6 +446,12 @@ func (m *Manager) DrawModeIndicator(posX, posY int) {
 	m.renderMu.Lock()
 	defer m.renderMu.Unlock()
 
+	m.clearModeIndicatorBadgeLocked()
+
+	rect := badgeBounds(posX, posY, label, style)
+	m.modeIndicatorBadgeRect = expandRect(rect, stickyBadgeClearPadding)
+	m.modeIndicatorBadgeVisible = true
+
 	if m.x11 != nil {
 		m.x11.DrawBadge(posX, posY, label, colors, style)
 	} else if m.wlroots != nil {
@@ -616,6 +634,18 @@ func (m *Manager) SetHideUnmatched(hide bool) {
 // SetSharingType is a no-op on Linux.
 func (m *Manager) SetSharingType(_ bool) {}
 
+// Flush commits all pending drawing operations to the display.
+func (m *Manager) Flush() {
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
+
+	if m.x11 != nil {
+		m.x11.Flush()
+	} else if m.wlroots != nil {
+		m.wlroots.Flush()
+	}
+}
+
 // detectLinuxOverlayBackend delegates to the canonical
 // platform.DetectLinuxBackend so that compositor-family detection (GNOME, KDE,
 // wlroots, etc.) is consistent across all layers.
@@ -623,8 +653,7 @@ func detectLinuxOverlayBackend() linuxOverlayBackend {
 	switch platform.DetectLinuxBackend() {
 	case platform.BackendX11:
 		return linuxOverlayBackendX11
-	case platform.BackendWaylandWlroots, platform.BackendWaylandKDE,
-		platform.BackendWaylandCOSMIC:
+	case platform.BackendWaylandWlroots, platform.BackendWaylandKDE:
 		return linuxOverlayBackendWaylandWlroots
 	case platform.BackendUnknown, platform.BackendWaylandGNOME,
 		platform.BackendWaylandOther:
@@ -666,6 +695,21 @@ func (m *Manager) clearStickyBadgeLocked() {
 
 	m.stickyBadgeVisible = false
 	m.stickyBadgeRect = image.Rectangle{}
+}
+
+func (m *Manager) clearModeIndicatorBadgeLocked() {
+	if !m.modeIndicatorBadgeVisible {
+		return
+	}
+
+	if m.x11 != nil {
+		m.x11.ClearRect(m.modeIndicatorBadgeRect)
+	} else if m.wlroots != nil {
+		m.wlroots.ClearRect(m.modeIndicatorBadgeRect)
+	}
+
+	m.modeIndicatorBadgeVisible = false
+	m.modeIndicatorBadgeRect = image.Rectangle{}
 }
 
 func (m *Manager) publish(change StateChange) {
@@ -732,7 +776,7 @@ func resolveModeIndicatorAppearance(
 	}
 
 	style := overlayBadgeStyle{
-		fontFamily:  cfg.UI.FontFamily,
+		fontFamily:  ports.ResolveFont(cfg.UI.FontFamily, true),
 		fontSize:    float64(max(cfg.UI.FontSize, 1)),
 		paddingX:    cfg.UI.PaddingX,
 		paddingY:    cfg.UI.PaddingY,
@@ -779,7 +823,7 @@ func resolveStickyIndicatorAppearance(
 	}
 
 	style := overlayBadgeStyle{
-		fontFamily:  cfg.FontFamily,
+		fontFamily:  ports.ResolveFont(cfg.FontFamily, false),
 		fontSize:    float64(max(cfg.FontSize, 1)),
 		paddingX:    cfg.PaddingX,
 		paddingY:    cfg.PaddingY,
@@ -874,7 +918,7 @@ func hintLabelBounds(posX, posY int, label string, style hints.StyleMode) image.
 // means "auto", which renders a full pill (radius = half the height), matching
 // the macOS default look.
 func hintCornerRadius(borderRadius, height int) float64 {
-	maxRadius := float64(height) / 2.0
+	maxRadius := float64(height) / hintPillRadiusDivisor
 
 	if borderRadius < 0 {
 		return maxRadius

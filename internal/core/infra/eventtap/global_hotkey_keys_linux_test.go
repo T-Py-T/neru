@@ -4,9 +4,11 @@
 // Tests that config-side and live-evdev-side chord spellings canonicalize equal.
 // Does NOT test device reading or callback dispatch.
 
-package eventtap
+package eventtap //nolint:testpackage // white-box: exercises the unexported canonicalChordSignature.
 
 import "testing"
+
+const wantGridChord = "ctrl+shift+g"
 
 func TestCanonicalChordSignature(t *testing.T) {
 	cases := []struct {
@@ -14,14 +16,14 @@ func TestCanonicalChordSignature(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"config grid", "Ctrl+Shift+G", "ctrl+shift+g"},
-		{"live grid (evdev order)", "Shift+Ctrl+g", "ctrl+shift+g"},
+		{"config grid", "Ctrl+Shift+G", wantGridChord},
+		{"live grid (evdev order)", "Shift+Ctrl+g", wantGridChord},
 		{"config hints space", "Ctrl+Shift+Space", "ctrl+shift+space"},
 		{"live hints space", "Shift+Ctrl+Space", "ctrl+shift+space"},
 		{"primary alias", "Primary+Shift+C", "ctrl+shift+c"},
 		{"super alias", "Super+L", "cmd+l"},
-		{"dedupe + trim", " ctrl + Ctrl + shift + g ", "ctrl+shift+g"},
-		{"bare key", "Escape", "escape"},
+		{"dedupe + trim", " ctrl + Ctrl + shift + g ", wantGridChord},
+		{"bare key", evdevKeyNameEscape, "escape"},
 		{"empty", "", ""},
 	}
 

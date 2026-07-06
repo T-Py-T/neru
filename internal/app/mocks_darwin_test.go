@@ -163,6 +163,9 @@ func (m *mockOverlayManager) Clear() {
 	m.mu.Unlock()
 }
 
+// ClearCache implements OverlayManager.
+func (m *mockOverlayManager) ClearCache() {}
+
 // ResizeToActiveScreen implements OverlayManager.
 func (m *mockOverlayManager) ResizeToActiveScreen() {}
 
@@ -261,6 +264,7 @@ func (m *mockOverlayManager) DrawRecursiveGrid(
 func (m *mockOverlayManager) UpdateGridMatches(_ string)                   {}
 func (m *mockOverlayManager) ShowSubgrid(_ *domainGrid.Cell, _ grid.Style) {}
 func (m *mockOverlayManager) SetHideUnmatched(_ bool)                      {}
+func (m *mockOverlayManager) Flush()                                       {}
 func (m *mockOverlayManager) SetSharingType(_ bool)                        {}
 
 func (m *mockOverlayManager) DrawHintSearchInput(

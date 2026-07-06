@@ -53,6 +53,7 @@ func (m *GenericMode) Activate(opts ModeActivationOptions) {
 				opts.FilterTextContains,
 				opts.Search,
 				opts.Strategy,
+				opts.LabelDirection,
 			)
 		case domain.ModeGrid:
 			m.handler.activateGridModeWithAction(
@@ -70,6 +71,8 @@ func (m *GenericMode) Activate(opts ModeActivationOptions) {
 			m.handler.StartInteractiveScroll()
 		case domain.ModeIdle:
 			// Idle mode doesn't need activation
+		case domain.ModeMonitorSelect:
+			// ModeMonitorSelect uses its own ActivateFunc
 		}
 	}
 }
@@ -91,6 +94,8 @@ func (m *GenericMode) HandleKey(key string) {
 			m.handler.handleGenericScrollKey(key)
 		case domain.ModeIdle:
 			// These modes don't handle keys in this context
+		case domain.ModeMonitorSelect:
+			// ModeMonitorSelect uses its own HandleKeyFunc
 		}
 	}
 }
@@ -116,6 +121,8 @@ func (m *GenericMode) Exit() {
 			if m.handler.cursorState != nil {
 				m.handler.cursorState.Reset()
 			}
+		case domain.ModeMonitorSelect:
+			// ModeMonitorSelect uses its own ExitFunc
 		case domain.ModeIdle:
 			// Idle mode doesn't need cleanup
 		}

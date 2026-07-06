@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <linux/input.h>
 #include <linux/uinput.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -51,7 +52,13 @@ int neru_evdev_get_bustype(int fd) {
 	return id.bustype;
 }
 
-ssize_t neru_evdev_read_event(int fd, struct input_event *event) { return read(fd, event, sizeof(struct input_event)); }
+ssize_t neru_evdev_read_event(int fd, struct input_event *event) {
+	ssize_t n;
+	do {
+		n = read(fd, event, sizeof(struct input_event));
+	} while (n < 0 && errno == EINTR);
+	return n;
+}
 
 int neru_uinput_create_scroll(int *out_fd) {
 	int fd = open("/dev/uinput", O_RDWR);
@@ -126,118 +133,40 @@ int neru_uinput_scroll(int fd, int axis, int value) {
 	return (w1 == sizeof(ev) && w2 == sizeof(ev) && w3 == sizeof(ev)) ? 1 : 0;
 }
 
-// Create an absolute virtual pointer with left/right/middle buttons and a
-// scroll wheel. libinput maps the ABS_X/ABS_Y range 1:1 onto the screen, so
-// move_abs lands at the exact pixel. Used on compositors that expose neither
-// zwlr_virtual_pointer_v1 nor a RemoteDesktop portal (e.g. COSMIC/Smithay).
-int neru_uinput_create_pointer(int *out_fd, int max_x, int max_y) {
-	int fd = open("/dev/uinput", O_RDWR);
-	if (fd < 0) {
-		fd = open("/dev/input/uinput", O_RDWR);
-	}
-	if (fd < 0) {
+int neru_uinput_scroll_batch(int fd, int axis, int *values, int count) {
+	if (fd < 0 || !values || count <= 0)
 		return 0;
-	}
 
-	if (ioctl(fd, UI_SET_EVBIT, EV_ABS) < 0 || ioctl(fd, UI_SET_ABSBIT, ABS_X) < 0 ||
-	    ioctl(fd, UI_SET_ABSBIT, ABS_Y) < 0) {
-		close(fd);
+	size_t event_size = sizeof(struct input_event);
+	size_t total = (size_t)count * 3 * event_size;
+	struct input_event *events = (struct input_event *)malloc(total);
+	if (!events)
 		return 0;
-	}
-	if (ioctl(fd, UI_SET_EVBIT, EV_KEY) < 0 || ioctl(fd, UI_SET_KEYBIT, BTN_LEFT) < 0 ||
-	    ioctl(fd, UI_SET_KEYBIT, BTN_RIGHT) < 0 || ioctl(fd, UI_SET_KEYBIT, BTN_MIDDLE) < 0) {
-		close(fd);
-		return 0;
-	}
-	// Wheel axes so the same device can also scroll.
-	if (ioctl(fd, UI_SET_EVBIT, EV_REL) < 0) {
-		close(fd);
-		return 0;
-	}
-	ioctl(fd, UI_SET_RELBIT, REL_WHEEL);
-	ioctl(fd, UI_SET_RELBIT, REL_HWHEEL);
-	ioctl(fd, UI_SET_RELBIT, REL_WHEEL_HI_RES);
-	ioctl(fd, UI_SET_RELBIT, REL_HWHEEL_HI_RES);
 
-	struct uinput_abs_setup abs_x;
-	memset(&abs_x, 0, sizeof(abs_x));
-	abs_x.code = ABS_X;
-	abs_x.absinfo.minimum = 0;
-	abs_x.absinfo.maximum = max_x > 0 ? max_x : 1;
-	abs_x.absinfo.resolution = 1;
-	if (ioctl(fd, UI_ABS_SETUP, &abs_x) < 0) {
-		close(fd);
-		return 0;
+	int rel_code = (axis == 0) ? REL_WHEEL : REL_HWHEEL;
+	int rel_hi_code = (axis == 0) ? REL_WHEEL_HI_RES : REL_HWHEEL_HI_RES;
+
+	for (int i = 0; i < count; i++) {
+		int base = i * 3;
+		int v = values[i];
+
+		memset(&events[base], 0, event_size);
+		events[base].type = EV_REL;
+		events[base].code = rel_hi_code;
+		events[base].value = v * 120;
+
+		memset(&events[base + 1], 0, event_size);
+		events[base + 1].type = EV_REL;
+		events[base + 1].code = rel_code;
+		events[base + 1].value = v;
+
+		memset(&events[base + 2], 0, event_size);
+		events[base + 2].type = EV_SYN;
+		events[base + 2].code = SYN_REPORT;
+		events[base + 2].value = 0;
 	}
 
-	struct uinput_abs_setup abs_y;
-	memset(&abs_y, 0, sizeof(abs_y));
-	abs_y.code = ABS_Y;
-	abs_y.absinfo.minimum = 0;
-	abs_y.absinfo.maximum = max_y > 0 ? max_y : 1;
-	abs_y.absinfo.resolution = 1;
-	if (ioctl(fd, UI_ABS_SETUP, &abs_y) < 0) {
-		close(fd);
-		return 0;
-	}
-
-	struct uinput_setup usetup;
-	memset(&usetup, 0, sizeof(usetup));
-	usetup.id.bustype = BUS_USB;
-	usetup.id.vendor = 0x1234;
-	usetup.id.product = 0x567a;
-	strcpy(usetup.name, "neru-pointer");
-	if (ioctl(fd, UI_DEV_SETUP, &usetup) < 0) {
-		close(fd);
-		return 0;
-	}
-	if (ioctl(fd, UI_DEV_CREATE) < 0) {
-		close(fd);
-		return 0;
-	}
-
-	*out_fd = fd;
-	return 1;
-}
-
-int neru_uinput_move_abs(int fd, int x, int y) {
-	struct input_event ev;
-
-	memset(&ev, 0, sizeof(ev));
-	ev.type = EV_ABS;
-	ev.code = ABS_X;
-	ev.value = x;
-	ssize_t w1 = write(fd, &ev, sizeof(ev));
-
-	memset(&ev, 0, sizeof(ev));
-	ev.type = EV_ABS;
-	ev.code = ABS_Y;
-	ev.value = y;
-	ssize_t w2 = write(fd, &ev, sizeof(ev));
-
-	memset(&ev, 0, sizeof(ev));
-	ev.type = EV_SYN;
-	ev.code = SYN_REPORT;
-	ev.value = 0;
-	ssize_t w3 = write(fd, &ev, sizeof(ev));
-
-	return (w1 == sizeof(ev) && w2 == sizeof(ev) && w3 == sizeof(ev)) ? 1 : 0;
-}
-
-int neru_uinput_button(int fd, int button, int pressed) {
-	struct input_event ev;
-
-	memset(&ev, 0, sizeof(ev));
-	ev.type = EV_KEY;
-	ev.code = button;
-	ev.value = pressed ? 1 : 0;
-	ssize_t w1 = write(fd, &ev, sizeof(ev));
-
-	memset(&ev, 0, sizeof(ev));
-	ev.type = EV_SYN;
-	ev.code = SYN_REPORT;
-	ev.value = 0;
-	ssize_t w2 = write(fd, &ev, sizeof(ev));
-
-	return (w1 == sizeof(ev) && w2 == sizeof(ev)) ? 1 : 0;
+	ssize_t written = write(fd, events, total);
+	free(events);
+	return (written == (ssize_t)total) ? 1 : 0;
 }

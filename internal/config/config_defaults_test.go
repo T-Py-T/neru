@@ -1,6 +1,8 @@
 package config_test
 
 import (
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/y3owk1n/neru/internal/config"
@@ -46,21 +48,39 @@ func TestDefaultConfig(t *testing.T) {
 	})
 
 	t.Run("General Exec Shell Defaults", func(t *testing.T) {
-		if cfg.General.ExecShell != config.DefaultExecShell {
-			t.Errorf(
-				"Expected General.ExecShell to be %q, got %q",
-				config.DefaultExecShell,
-				cfg.General.ExecShell,
-			)
-		}
+		if runtime.GOOS == goosWindows {
+			if !filepath.IsAbs(cfg.General.ExecShell) {
+				t.Errorf(
+					"Expected General.ExecShell to be an absolute path, got %q",
+					cfg.General.ExecShell,
+				)
+			}
 
-		if len(cfg.General.ExecShellArgs) != 1 ||
-			cfg.General.ExecShellArgs[0] != config.DefaultExecShellFlag {
-			t.Errorf(
-				"Expected General.ExecShellArgs to be [%q], got %v",
-				config.DefaultExecShellFlag,
-				cfg.General.ExecShellArgs,
-			)
+			if len(cfg.General.ExecShellArgs) != 1 ||
+				cfg.General.ExecShellArgs[0] != "/c" {
+				t.Errorf(
+					"Expected General.ExecShellArgs to be [%q], got %v",
+					"/c",
+					cfg.General.ExecShellArgs,
+				)
+			}
+		} else {
+			if cfg.General.ExecShell != config.DefaultExecShell {
+				t.Errorf(
+					"Expected General.ExecShell to be %q, got %q",
+					config.DefaultExecShell,
+					cfg.General.ExecShell,
+				)
+			}
+
+			if len(cfg.General.ExecShellArgs) != 1 ||
+				cfg.General.ExecShellArgs[0] != config.DefaultExecShellFlag {
+				t.Errorf(
+					"Expected General.ExecShellArgs to be [%q], got %v",
+					config.DefaultExecShellFlag,
+					cfg.General.ExecShellArgs,
+				)
+			}
 		}
 	})
 

@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -11,6 +12,11 @@ import (
 	"github.com/y3owk1n/neru/internal/config"
 	"github.com/y3owk1n/neru/internal/core/domain/state"
 	"github.com/y3owk1n/neru/internal/core/infra/ipc"
+)
+
+const (
+	actionGrid  = "grid"
+	actionHints = "hints"
 )
 
 func TestExtractModeOptions_InvalidCursorSelectionModeEqualsValue(t *testing.T) {
@@ -36,8 +42,8 @@ func TestExtractModeOptions_InvalidCursorSelectionModeEqualsValue(t *testing.T) 
 	)
 
 	resp := controller.HandleCommand(context.Background(), ipc.Command{
-		Action: "grid",
-		Args:   []string{"grid", "--cursor-selection-mode=invalid"},
+		Action: actionGrid,
+		Args:   []string{actionGrid, "--cursor-selection-mode=invalid"},
 	})
 
 	if resp.Success {
@@ -45,6 +51,42 @@ func TestExtractModeOptions_InvalidCursorSelectionModeEqualsValue(t *testing.T) 
 	}
 
 	if resp.Message != "--cursor-selection-mode requires follow or hold" {
+		t.Fatalf("unexpected error message: %q", resp.Message)
+	}
+}
+
+func TestExtractModeOptions_InvalidLabelDirection(t *testing.T) {
+	cfg := config.DefaultConfig()
+	appState := state.NewAppState()
+	logger := zap.NewNop()
+	configService := config.NewService(cfg, "", logger, nil)
+
+	controller := app.NewIPCController(
+		nil,
+		nil,
+		nil,
+		nil,
+		configService,
+		appState,
+		cfg,
+		&modes.Handler{},
+		nil,
+		nil,
+		nil,
+		nil,
+		logger,
+	)
+
+	resp := controller.HandleCommand(context.Background(), ipc.Command{
+		Action: actionHints,
+		Args:   []string{actionHints, "--label-direction=sideways"},
+	})
+
+	if resp.Success {
+		t.Fatal("HandleCommand() expected error response")
+	}
+
+	if !strings.Contains(resp.Message, "--label-direction") {
 		t.Fatalf("unexpected error message: %q", resp.Message)
 	}
 }

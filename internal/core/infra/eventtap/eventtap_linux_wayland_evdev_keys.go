@@ -100,6 +100,11 @@ const (
 	evdevModifierAlt   = "alt"
 	evdevModifierCmd   = "cmd"
 
+	// Alias spellings accepted in configs for the canonical modifier tokens.
+	evdevModifierAliasControl = "control"
+	evdevModifierAliasOption  = "option"
+	evdevModifierAliasSuper   = "super"
+
 	evdevPrefixShift = "Shift+"
 	evdevPrefixCtrl  = "Ctrl+"
 	evdevPrefixAlt   = "Alt+"
@@ -223,28 +228,7 @@ var evdevKeyNames = map[uint16]string{
 }
 
 type evdevModifierState struct {
-	shift int
-	ctrl  int
-	alt   int
-	cmd   int
-}
-
-func (s *evdevModifierState) update(modifier string, isDown bool) {
-	delta := 1
-	if !isDown {
-		delta = -1
-	}
-
-	switch modifier {
-	case evdevModifierShift:
-		s.shift += delta
-	case evdevModifierCtrl:
-		s.ctrl += delta
-	case evdevModifierAlt:
-		s.alt += delta
-	case evdevModifierCmd:
-		s.cmd += delta
-	}
+	linuxModifierState
 }
 
 func (s *evdevModifierState) prefix() string {

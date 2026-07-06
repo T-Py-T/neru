@@ -108,7 +108,8 @@ func (s *libeiState) tryAcquire() error {
 		)
 	}
 
-	if err := s.ensureLocked(); err != nil {
+	err := s.ensureLocked()
+	if err != nil {
 		s.mu.Unlock()
 
 		return err
@@ -117,17 +118,20 @@ func (s *libeiState) tryAcquire() error {
 	return nil
 }
 
-func libeiMoveAbs(x, y int) error {
-	if err := globalLibeiState.tryAcquire(); err != nil {
+func libeiMoveAbs(posX, posY int) error {
+	err := globalLibeiState.tryAcquire()
+	if err != nil {
 		return err
 	}
 	defer globalLibeiState.mu.Unlock()
 
-	if C.neru_ei_move_abs(globalLibeiState.client, C.int(x), C.int(y)) == 0 {
+	client := globalLibeiState.client
+
+	if C.neru_ei_move_abs(client, C.int(posX), C.int(posY)) == 0 { //nolint:nlreturn
 		return derrors.Newf(
 			derrors.CodeActionFailed,
 			"libei failed to move pointer to (%d, %d)",
-			x, y,
+			posX, posY,
 		)
 	}
 
@@ -135,17 +139,20 @@ func libeiMoveAbs(x, y int) error {
 }
 
 func libeiButton(button int, pressed bool) error {
-	if err := globalLibeiState.tryAcquire(); err != nil {
+	err := globalLibeiState.tryAcquire()
+	if err != nil {
 		return err
 	}
 	defer globalLibeiState.mu.Unlock()
+
+	client := globalLibeiState.client
 
 	pressedInt := C.int(0)
 	if pressed {
 		pressedInt = C.int(1)
 	}
 
-	if C.neru_ei_button(globalLibeiState.client, C.int(button), pressedInt) == 0 {
+	if C.neru_ei_button(client, C.int(button), pressedInt) == 0 { //nolint:nlreturn
 		return derrors.New(derrors.CodeActionFailed, "libei failed to emit button event")
 	}
 
@@ -153,12 +160,15 @@ func libeiButton(button int, pressed bool) error {
 }
 
 func libeiScroll(axis, delta int) error {
-	if err := globalLibeiState.tryAcquire(); err != nil {
+	err := globalLibeiState.tryAcquire()
+	if err != nil {
 		return err
 	}
 	defer globalLibeiState.mu.Unlock()
 
-	if C.neru_ei_scroll(globalLibeiState.client, C.int(axis), C.int(delta)) == 0 {
+	client := globalLibeiState.client
+
+	if C.neru_ei_scroll(client, C.int(axis), C.int(delta)) == 0 { //nolint:nlreturn
 		return derrors.New(derrors.CodeActionFailed, "libei failed to emit scroll event")
 	}
 
@@ -166,17 +176,20 @@ func libeiScroll(axis, delta int) error {
 }
 
 func libeiKey(keycode int, pressed bool) error {
-	if err := globalLibeiState.tryAcquire(); err != nil {
+	err := globalLibeiState.tryAcquire()
+	if err != nil {
 		return err
 	}
 	defer globalLibeiState.mu.Unlock()
+
+	client := globalLibeiState.client
 
 	pressedInt := C.int(0)
 	if pressed {
 		pressedInt = C.int(1)
 	}
 
-	if C.neru_ei_key(globalLibeiState.client, C.int(keycode), pressedInt) == 0 {
+	if C.neru_ei_key(client, C.int(keycode), pressedInt) == 0 { //nolint:nlreturn
 		return derrors.New(
 			derrors.CodeNotSupported,
 			"libei keyboard injection unavailable; the RemoteDesktop portal "+

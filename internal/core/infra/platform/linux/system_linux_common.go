@@ -23,7 +23,6 @@ const (
 	backendX11            = "x11"
 	backendWaylandWlroots = "wayland-wlroots"
 	backendWaylandKDE     = "wayland-kde"
-	backendWaylandCOSMIC  = "wayland-cosmic"
 )
 
 // SystemAdapter is a Linux system adapter.
@@ -272,14 +271,10 @@ func (s *SystemAdapter) ShowAlert(ctx context.Context, title, message string) er
 func (s *SystemAdapter) ShowNotification(title, message string) {}
 
 // waylandUsesWlrClientStack is true when the session uses the same Wayland
-// client protocols as wlroots for the overlay and screen geometry (layer shell,
-// xdg-output). KDE Plasma's KWin and System76's cosmic-comp both implement
-// these for third-party clients; GNOME does not. (Input injection still differs
-// per backend and is routed separately in system_linux_wayland_input.go.)
+// client protocols as wlroots (layer shell, xdg-output, virtual pointer, etc.).
+// KDE Plasma's KWin implements these for third-party clients; GNOME does not.
 func (s *SystemAdapter) waylandUsesWlrClientStack() bool {
-	return s.backend == backendWaylandWlroots ||
-		s.backend == backendWaylandKDE ||
-		s.backend == backendWaylandCOSMIC
+	return s.backend == backendWaylandWlroots || s.backend == backendWaylandKDE
 }
 
 // Ensure SystemAdapter implements ports.SystemPort.

@@ -45,6 +45,15 @@ func WaylandScroll(axis, delta, discrete int) error {
 	return waylandScroll(axis, delta, discrete)
 }
 
+// WlrootsScrollBatch sends multiple scroll events in a single flush.
+// deltas and discretes must have the same length. Routes through the
+// waylandScrollBatch seam so KDE (libei, no virtual pointer) emits one
+// libeiScroll event per delta instead of taking the wlroots-only batch path
+// (which fails on KWin with "failed to perform wlroots batch scroll").
+func WlrootsScrollBatch(axis int, deltas, discretes []int) error {
+	return waylandScrollBatch(axis, deltas, discretes)
+}
+
 // WaylandModifierEvent presses or releases a modifier key.
 func WaylandModifierEvent(modifier string, isDown bool) error {
 	return globalWlrootsModifierDispatcher.event(modifier, isDown)

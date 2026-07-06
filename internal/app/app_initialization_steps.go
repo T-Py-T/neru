@@ -15,12 +15,14 @@ import (
 	"github.com/y3owk1n/neru/internal/app/services/modeindicator"
 	"github.com/y3owk1n/neru/internal/app/services/stickyindicator"
 	"github.com/y3owk1n/neru/internal/config"
+	domainHint "github.com/y3owk1n/neru/internal/core/domain/hint"
 	"github.com/y3owk1n/neru/internal/core/domain/state"
 	derrors "github.com/y3owk1n/neru/internal/core/errors"
 	eventtapadapter "github.com/y3owk1n/neru/internal/core/infra/eventtap"
 	ipcadapter "github.com/y3owk1n/neru/internal/core/infra/ipc"
 	"github.com/y3owk1n/neru/internal/core/infra/platform"
 	textinputadapter "github.com/y3owk1n/neru/internal/core/infra/textinput"
+	"github.com/y3owk1n/neru/internal/core/ports"
 	"github.com/y3owk1n/neru/internal/ui"
 )
 
@@ -65,6 +67,14 @@ func initializeInfrastructure(app *App) error {
 		app.textInput = textinputadapter.NewAdapter(textinputadapter.NewTextInput(logger), logger)
 	}
 
+	// Install the platform font resolver. SetFontResolver makes the
+	// resolver available globally to every call site that builds an
+	// overlay style, so they do not have to thread the port through
+	// their own signatures.
+	if resolver := platform.NewFontResolver(); resolver != nil {
+		ports.SetFontResolver(resolver)
+	}
+
 	return nil
 }
 
@@ -99,6 +109,11 @@ func initializeServicesAndAdapters(app *App) error {
 		return err
 	}
 
+	// Pre-build a generator for the opposite label direction so the
+	// per-activation `hints --label-direction <opposite>` path resolves to
+	// a real generator instead of silently falling back to the default.
+	registerOppositeLabelDirectionGenerator(app, hintService, cfg)
+
 	// Store services on app
 	app.hintService = hintService
 	app.gridService = gridService
@@ -109,6 +124,52 @@ func initializeServicesAndAdapters(app *App) error {
 	app.configService = cfgService
 
 	return nil
+}
+
+// registerOppositeLabelDirectionGenerator builds and registers a generator for
+// the label direction opposite to the configured one, so the per-activation
+// `hints --label-direction <opposite>` override resolves to a real generator
+// instead of silently falling back to the default.
+func registerOppositeLabelDirectionGenerator(
+	app *App,
+	hintService *services.HintService,
+	cfg *config.Config,
+) {
+	if hintService == nil {
+		return
+	}
+
+	primaryDirection := domainHint.LabelDirectionFromString(
+		cfg.Hints.LabelDirectionForApp(""),
+	)
+
+	oppositeDirection := primaryDirection.Opposite()
+
+	if primaryDirection == oppositeDirection {
+		return
+	}
+
+	oppositeGen, oppositeGenErr := domainHint.NewAlphabetGenerator(
+		cfg.Hints.HintCharacters,
+		oppositeDirection,
+	)
+	if oppositeGenErr != nil {
+		app.logger.Error(
+			"Failed to build opposite-direction hint generator",
+			zap.String("direction", oppositeDirection.String()),
+			zap.Error(oppositeGenErr),
+		)
+
+		return
+	}
+
+	hintService.UpdateGenerator(app.ctx, oppositeGen)
+
+	app.logger.Debug(
+		"Registered opposite-direction hint generator",
+		zap.String("primary_direction", primaryDirection.String()),
+		zap.String("opposite_direction", oppositeDirection.String()),
+	)
 }
 
 // initializeApplicationState sets up the core application state objects.
@@ -421,7 +482,7 @@ func initializeEventTapAndIPC(app *App) error {
 		app.configureEventTapHotkeys(cfg, logger)
 	}
 
-	// Register Go-level keyboard layout change handler so Carbon hotkeys
+	// Register Go-level keyboard layout change handler so CGEventTap hotkeys
 	// (registered with raw keycodes) are re-registered when the layout changes.
 	app.registerLayoutChangeHandler()
 

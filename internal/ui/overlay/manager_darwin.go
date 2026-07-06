@@ -166,6 +166,10 @@ func (m *Manager) Clear() {
 	}
 }
 
+// ClearCache is a no-op on Darwin; each overlay owns its own NSWindow and
+// does not retain stale cross-mode cache state.
+func (m *Manager) ClearCache() {}
+
 // ResizeToActiveScreen resizes the overlay window to the active screen.
 func (m *Manager) ResizeToActiveScreen() {
 	C.NeruResizeOverlayToActiveScreen(m.window)
@@ -494,6 +498,10 @@ func (m *Manager) SetHideUnmatched(hide bool) {
 	}
 	m.gridOverlay.SetHideUnmatched(hide)
 }
+
+// Flush is a no-op on macOS — indicator overlays use independent windows
+// that are positioned dynamically per draw call.
+func (m *Manager) Flush() {}
 
 // SetSharingType sets the window sharing type for screen sharing visibility.
 // When hide is true, sets NSWindowSharingNone (hidden from screen share).

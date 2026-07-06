@@ -126,6 +126,10 @@ func (a *App) dispatchHotkeyActions(key string, actions []string) {
 
 		executeHotkeyActionErr := a.executeHotkeyAction(key, trimmedAction)
 		if executeHotkeyActionErr != nil {
+			if derrors.IsCode(executeHotkeyActionErr, derrors.CodeChainBail) {
+				return
+			}
+
 			a.logger.Error("hotkey action failed",
 				zap.String("key", key),
 				zap.String("action", trimmedAction),
@@ -315,7 +319,8 @@ func (a *App) executeHotkeyAction(key, actionStr string) error {
 		case domain.ModeString(domain.ModeHints),
 			domain.ModeString(domain.ModeGrid),
 			domain.ModeString(domain.ModeRecursiveGrid),
-			domain.ModeString(domain.ModeScroll):
+			domain.ModeString(domain.ModeScroll),
+			domain.ModeString(domain.ModeMonitorSelect):
 			hotkeyMods := hotkeyModifiersFromKey(key)
 			a.modes.SuppressModifiersUntilReleased(hotkeyMods)
 		}
@@ -326,6 +331,10 @@ func (a *App) executeHotkeyAction(key, actionStr string) error {
 		ipc.Command{Action: actionStr, Args: params},
 	)
 	if !ipcResponse.Success {
+		if ipcResponse.Code == ipc.CodeChainBail {
+			return derrors.New(derrors.CodeChainBail, ipcResponse.Message)
+		}
+
 		return derrors.New(derrors.CodeIPCFailed, ipcResponse.Message)
 	}
 
@@ -406,6 +415,8 @@ func (a *App) refreshHotkeysForAppOrCurrent(bundleID string) {
 		return
 	}
 
+	cfg := a.configSnapshot()
+
 	if bundleID == "" {
 		// Use ActionService to get focused bundle ID
 		ctx := a.ctx
@@ -415,20 +426,26 @@ func (a *App) refreshHotkeysForAppOrCurrent(bundleID string) {
 		bundleID, bundleIDErr = a.actionService.FocusedAppBundleID(ctx)
 		if bundleIDErr != nil {
 			// Fail open: when the focused app can't be determined (always the
-			// case on Linux, where there is no accessibility focus API), fall
+			// case on Linux Wayland, which has no focus-query API), fall
 			// through with an empty bundle ID so global hotkeys still register.
-			// An empty bundle ID is never excluded, and the next focus event
-			// re-evaluates per-app exclusion on platforms that support it.
-			a.logger.Warn(
-				"Failed to get focused app bundle ID; registering global hotkeys without per-app exclusion",
+			// Failing closed would permanently disable Neru on those platforms.
+			// The next focus event re-evaluates per-app exclusion on platforms
+			// that support it. When exclusions are configured but cannot be
+			// enforced, warn so the user knows; otherwise this is routine.
+			logFn := a.logger.Debug
+			if len(cfg.General.ExcludedApps) > 0 {
+				logFn = a.logger.Warn
+			}
+
+			logFn(
+				"Focused app unknown; registering global hotkeys without per-app exclusion (configured excluded_apps are not enforced)",
+				zap.Int("excluded_apps", len(cfg.General.ExcludedApps)),
 				zap.Error(bundleIDErr),
 			)
 
 			bundleID = ""
 		}
 	}
-
-	cfg := a.configSnapshot()
 
 	if cfg.IsAppExcluded(bundleID) {
 		if a.appState.HotkeysRegistered() {
