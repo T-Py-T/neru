@@ -118,6 +118,28 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
     .closed = neru_layer_surface_closed,
 };
 
+// Output listener to track per-output buffer scale.
+static void neru_wl_output_geometry(
+    void *data, struct wl_output *output, int32_t x, int32_t y, int32_t phys_w, int32_t phys_h, int32_t subpixel,
+    const char *make, const char *model, int32_t transform) {}
+
+static void neru_wl_output_mode(
+    void *data, struct wl_output *output, uint32_t flags, int32_t width, int32_t height, int32_t refresh) {}
+
+static void neru_wl_output_done(void *data, struct wl_output *output) {}
+
+static void neru_wl_output_scale(void *data, struct wl_output *output, int32_t factor) {
+	NeruWaylandOverlayScreen *scr = (NeruWaylandOverlayScreen *)data;
+	scr->scale = factor;
+}
+
+static const struct wl_output_listener wl_output_listener = {
+    .geometry = neru_wl_output_geometry,
+    .mode = neru_wl_output_mode,
+    .done = neru_wl_output_done,
+    .scale = neru_wl_output_scale,
+};
+
 static void neru_overlay_registry_global(
     void *data, struct wl_registry *registry, uint32_t name, const char *interface, uint32_t version) {
 	NeruWaylandOverlay *overlay = (NeruWaylandOverlay *)data;
@@ -130,8 +152,10 @@ static void neru_overlay_registry_global(
 		overlay->layer_shell = wl_registry_bind(registry, name, &zwlr_layer_shell_v1_interface, 1);
 	} else if (strcmp(interface, "wl_output") == 0) {
 		if (overlay->nr_screens < NERU_MAX_OUTPUTS) {
-			overlay->screens[overlay->nr_screens].wl_output =
-			    wl_registry_bind(registry, name, &wl_output_interface, 3 < version ? 3 : version);
+			NeruWaylandOverlayScreen *scr = &overlay->screens[overlay->nr_screens];
+			scr->scale = 1;
+			scr->wl_output = wl_registry_bind(registry, name, &wl_output_interface, 3 < version ? 3 : version);
+			wl_output_add_listener(scr->wl_output, &wl_output_listener, scr);
 			overlay->nr_screens++;
 		}
 	} else if (strcmp(interface, "zxdg_output_manager_v1") == 0) {
@@ -425,6 +449,8 @@ void neru_wayland_overlay_destroy(NeruWaylandOverlay *overlay) {
 }
 
 void neru_wayland_overlay_setup_buffers(NeruWaylandOverlay *overlay) {
+	int new_surfaces = 0;
+
 	for (int i = 0; i < overlay->nr_screens; i++) {
 		NeruWaylandOverlayScreen *scr = &overlay->screens[i];
 
@@ -459,18 +485,26 @@ void neru_wayland_overlay_setup_buffers(NeruWaylandOverlay *overlay) {
 
 		zwlr_layer_surface_v1_add_listener(scr->layer_surface, &layer_surface_listener, overlay);
 		wl_surface_commit(scr->wl_surface);
+
+		new_surfaces = 1;
 	}
 
-	// Wait for configure events
-	wl_display_roundtrip(overlay->display);
+	// Only roundtrip when new surfaces were created (avoids sync delay on every draw).
+	if (new_surfaces) {
+		wl_display_roundtrip(overlay->display);
+	}
 
 	for (int i = 0; i < overlay->nr_screens; i++) {
 		NeruWaylandOverlayScreen *scr = &overlay->screens[i];
 		if (scr->buffer)
 			continue;
 
-		size_t stride = ((size_t)scr->width) * 4u;
-		scr->shm_size = stride * (size_t)scr->height;
+		int scale = scr->scale > 0 ? scr->scale : 1;
+		int buf_width = scr->width * scale;
+		int buf_height = scr->height * scale;
+
+		size_t stride = ((size_t)buf_width) * 4u;
+		scr->shm_size = stride * (size_t)buf_height;
 		int fd = create_shm_file(scr->shm_size);
 		if (fd < 0)
 			continue;
@@ -481,13 +515,17 @@ void neru_wayland_overlay_setup_buffers(NeruWaylandOverlay *overlay) {
 			continue;
 		}
 		struct wl_shm_pool *pool = wl_shm_create_pool(overlay->shm, fd, (int)scr->shm_size);
-		scr->buffer = wl_shm_pool_create_buffer(pool, 0, scr->width, scr->height, (int)stride, WL_SHM_FORMAT_ARGB8888);
+		scr->buffer = wl_shm_pool_create_buffer(pool, 0, buf_width, buf_height, (int)stride, WL_SHM_FORMAT_ARGB8888);
 		wl_shm_pool_destroy(pool);
 		close(fd);
 
-		scr->cairo_surface = cairo_image_surface_create_for_data(
-		    scr->shm_data, CAIRO_FORMAT_ARGB32, scr->width, scr->height, (int)stride);
+		scr->cairo_surface =
+		    cairo_image_surface_create_for_data(scr->shm_data, CAIRO_FORMAT_ARGB32, buf_width, buf_height, (int)stride);
 		scr->cr = cairo_create(scr->cairo_surface);
+		cairo_scale(scr->cr, scale, scale);
+
+		if (scr->wl_surface)
+			wl_surface_set_buffer_scale(scr->wl_surface, scale);
 	}
 }
 
@@ -690,9 +728,7 @@ void neru_wayland_overlay_text(
 		cairo_t *cr = scr->cr;
 		cairo_text_extents_t extents;
 		cairo_save(cr);
-		cairo_select_font_face(
-		    cr, (font_family && font_family[0]) ? font_family : "Sans", CAIRO_FONT_SLANT_NORMAL,
-		    CAIRO_FONT_WEIGHT_BOLD);
+		cairo_select_font_face(cr, font_family, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
 		cairo_set_font_size(cr, font_size);
 		cairo_text_extents(cr, text, &extents);
 		neru_wayland_overlay_color(cr, color);
@@ -708,14 +744,31 @@ int neru_wayland_overlay_poll(NeruWaylandOverlay *overlay) {
 	if (!overlay || !overlay->display)
 		return -1;
 
-	struct pollfd pfd = {.fd = wl_display_get_fd(overlay->display), .events = POLLIN, .revents = 0};
+	struct wl_display *display = overlay->display;
+
+	int prepare_retries = 0;
+	while (wl_display_prepare_read(display) != 0) {
+		if (wl_display_dispatch_pending(display) < 0)
+			return -1;
+		if (++prepare_retries > 100)
+			return -1;
+	}
+
+	wl_display_flush(display);
+
+	struct pollfd pfd = {.fd = wl_display_get_fd(display), .events = POLLIN, .revents = 0};
 
 	int ret = poll(&pfd, 1, 0);
 	if (ret > 0 && (pfd.revents & POLLIN)) {
-		wl_display_dispatch(overlay->display);
+		if (wl_display_read_events(display) < 0)
+			ret = -1;
 	} else {
-		wl_display_dispatch_pending(overlay->display);
+		wl_display_cancel_read(display);
+		if (ret > 0)
+			ret = -1;
 	}
+
+	wl_display_dispatch_pending(display);
 	return ret;
 }
 

@@ -63,6 +63,7 @@ const (
 	ModeNameGrid          = "grid"
 	ModeNameRecursiveGrid = "recursive_grid"
 	ModeNameScroll        = "scroll"
+	ModeNameMonitorSelect = "monitor_select"
 )
 
 // Display-form key name constants used in config files and maps.
@@ -436,6 +437,7 @@ type Config struct {
 	Hints           HintsConfig           `json:"hints"           toml:"hints"`
 	Grid            GridConfig            `json:"grid"            toml:"grid"`
 	RecursiveGrid   RecursiveGridConfig   `json:"recursiveGrid"   toml:"recursive_grid"`
+	MonitorSelect   MonitorSelectConfig   `json:"monitorSelect"   toml:"monitor_select"`
 	VirtualPointer  VirtualPointerConfig  `json:"virtualPointer"  toml:"virtual_pointer"`
 	MouseAction     MouseActionConfig     `json:"mouseAction"     toml:"mouse_action_indicator"`
 	Scroll          ScrollConfig          `json:"scroll"          toml:"scroll"`
@@ -508,6 +510,7 @@ type ModeIndicatorConfig struct {
 	Hints         ModeIndicatorModeConfig `json:"hints"         toml:"hints"`
 	Grid          ModeIndicatorModeConfig `json:"grid"          toml:"grid"`
 	RecursiveGrid ModeIndicatorModeConfig `json:"recursiveGrid" toml:"recursive_grid"`
+	MonitorSelect ModeIndicatorModeConfig `json:"monitorSelect" toml:"monitor_select"`
 	UI            ModeIndicatorUI         `json:"ui"            toml:"ui"`
 }
 
@@ -537,6 +540,7 @@ type StickyModifiersConfig struct {
 type AppConfig struct {
 	BundleID             string                         `json:"bundleId"             toml:"bundle_id"`
 	Strategy             string                         `json:"strategy"             toml:"strategy"`
+	LabelDirection       string                         `json:"labelDirection"       toml:"label_direction"`
 	AdditionalClickable  []string                       `json:"additionalClickable"  toml:"additional_clickable_roles"`
 	IgnoreClickableCheck bool                           `json:"ignoreClickableCheck" toml:"ignore_clickable_check"`
 	VisibleCheckEnabled  bool                           `json:"visibleCheckEnabled"  toml:"visible_check_enabled"`
@@ -573,6 +577,32 @@ type ScrollConfig struct {
 	AppConfigs []AppConfig `json:"appConfigs" toml:"app_configs"`
 
 	Hotkeys map[string]StringOrStringArray `json:"hotkeys" toml:"-"`
+}
+
+// MonitorSelectUI defines the visual/appearance settings for monitor_select mode.
+type MonitorSelectUI struct {
+	FontSize           int    `json:"fontSize"           toml:"font_size"`
+	FontFamily         string `json:"fontFamily"         toml:"font_family"`
+	BorderRadius       int    `json:"borderRadius"       toml:"border_radius"`
+	PaddingX           int    `json:"paddingX"           toml:"padding_x"`
+	PaddingY           int    `json:"paddingY"           toml:"padding_y"`
+	BorderWidth        int    `json:"borderWidth"        toml:"border_width"`
+	BackgroundColor    Color  `json:"backgroundColor"    toml:"background_color"`
+	TextColor          Color  `json:"textColor"          toml:"text_color"`
+	MatchedTextColor   Color  `json:"matchedTextColor"   toml:"matched_text_color"`
+	BorderColor        Color  `json:"borderColor"        toml:"border_color"`
+	BackdropColor      Color  `json:"backdropColor"      toml:"backdrop_color"`
+	SubtitleFontSize   int    `json:"subtitleFontSize"   toml:"subtitle_font_size"`
+	SubtitleFontFamily string `json:"subtitleFontFamily" toml:"subtitle_font_family"`
+	SubtitleTextColor  Color  `json:"subtitleTextColor"  toml:"subtitle_text_color"`
+}
+
+// MonitorSelectConfig defines behavior and appearance settings for monitor_select mode.
+type MonitorSelectConfig struct {
+	Enabled    bool                           `json:"enabled"    toml:"enabled"`
+	Characters string                         `json:"characters" toml:"characters"`
+	UI         MonitorSelectUI                `json:"ui"         toml:"ui"`
+	Hotkeys    map[string]StringOrStringArray `json:"hotkeys"    toml:"-"`
 }
 
 // HintsUI defines the visual/appearance settings for hints mode.
@@ -646,11 +676,23 @@ const (
 	StrategyVision = "vision"
 )
 
+// Label direction constants for hint label enumeration.
+const (
+	// LabelDirectionReverse spreads labels across the alphabet by varying the
+	// first character so same-prefix labels never cluster together.
+	LabelDirectionReverse = "reverse"
+
+	// LabelDirectionNormal uses the original prefix-avoidance algorithm that
+	// prefers shorter labels. This is the default.
+	LabelDirectionNormal = "normal"
+)
+
 // HintsConfig defines the visual and behavioral settings for hints mode.
 type HintsConfig struct {
 	Enabled           bool                `json:"enabled"           toml:"enabled"`
 	Strategy          string              `json:"strategy"          toml:"strategy"`
 	HintCharacters    string              `json:"hintCharacters"    toml:"hint_characters"`
+	LabelDirection    string              `json:"labelDirection"    toml:"label_direction"`
 	MaxDepth          int                 `json:"maxDepth"          toml:"max_depth"`
 	UI                HintsUI             `json:"ui"                toml:"ui"`
 	SearchInputUI     SearchInputUI       `json:"searchInputUi"     toml:"search_input_ui"`
@@ -913,6 +955,11 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	err = c.ValidateMonitorSelect()
+	if err != nil {
+		return err
+	}
+
 	err = c.ValidateModeIndicator()
 	if err != nil {
 		return err
@@ -1103,7 +1150,7 @@ func (c *Config) ValidateGeneral() error {
 		)
 	}
 
-	if !strings.HasPrefix(c.General.ExecShell, "/") {
+	if !filepath.IsAbs(c.General.ExecShell) {
 		return derrors.Newf(
 			derrors.CodeInvalidConfig,
 			"general.exec_shell must be an absolute path (got: %q)",
@@ -1350,6 +1397,11 @@ func (c *Config) Save(path string) error {
 			c.RecursiveGrid.Hotkeys,
 			defaults.RecursiveGrid.Hotkeys,
 		},
+		{
+			"monitor_select.hotkeys",
+			c.MonitorSelect.Hotkeys,
+			defaults.MonitorSelect.Hotkeys,
+		},
 	}
 	for _, section := range hotkeysSections {
 		err = writeStringOrStringArrayMap(file, section.header, section.hotkeys, section.defaults)
@@ -1390,6 +1442,8 @@ func (c *Config) HotkeysForModeAndApp(
 		appConfig = c.RecursiveGrid.AppConfigForBundleID(bundleID)
 	case ModeNameScroll:
 		appConfig = c.Scroll.AppConfigForBundleID(bundleID)
+	case ModeNameMonitorSelect:
+		return base
 	}
 
 	if appConfig == nil || len(appConfig.Hotkeys) == 0 {
@@ -1652,6 +1706,8 @@ func (c *Config) baseHotkeysForMode(modeName string) map[string]StringOrStringAr
 		return c.RecursiveGrid.Hotkeys
 	case ModeNameScroll:
 		return c.Scroll.Hotkeys
+	case ModeNameMonitorSelect:
+		return c.MonitorSelect.Hotkeys
 	default:
 		return nil
 	}
@@ -1673,6 +1729,23 @@ func (c *HintsConfig) StrategyForApp(bundleID string) string {
 	}
 
 	return c.Strategy
+}
+
+// LabelDirectionForApp returns the label direction for the given bundle ID.
+// Falls back to the global `HintsConfig.LabelDirection` if no app-specific
+// override is set. An empty global value is normalized to the default
+// `normal` so callers can always treat the result as a fully-qualified direction.
+func (c *HintsConfig) LabelDirectionForApp(bundleID string) string {
+	appConfig := c.AppConfigForBundleID(bundleID)
+	if appConfig != nil && appConfig.LabelDirection != "" {
+		return appConfig.LabelDirection
+	}
+
+	if c.LabelDirection == "" {
+		return LabelDirectionNormal
+	}
+
+	return c.LabelDirection
 }
 
 // buildRolesMap builds a map of clickable roles for the given bundle ID.

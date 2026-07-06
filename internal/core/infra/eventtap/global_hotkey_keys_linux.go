@@ -12,6 +12,16 @@ import (
 	"strings"
 )
 
+// Canonical base-key spellings shared between config parsing and the evdev
+// decoder so both sides compare equal without drifting on string literals.
+const (
+	canonicalKeyReturn    = "return"
+	canonicalKeySpace     = "space"
+	canonicalKeyTab       = "tab"
+	canonicalKeyEscape    = "escape"
+	canonicalKeyBackspace = "backspace"
+)
+
 // canonicalChordSignature normalizes a chord such as "Ctrl+Shift+G" or the
 // evdev-decoded "Shift+Ctrl+g" into a stable signature like "ctrl+shift+g":
 // modifiers lowercased, de-duplicated and sorted, base key lowercased/normalized.
@@ -60,14 +70,14 @@ func canonicalChordSignature(chord string) string {
 // ctrl here because it is already Ctrl on Linux by the time hotkeys register.
 func canonicalModifierToken(token string) string {
 	switch strings.ToLower(strings.TrimSpace(token)) {
-	case "shift":
-		return "shift"
-	case "ctrl", "control", "primary":
-		return "ctrl"
-	case "alt", "option", "opt":
-		return "alt"
-	case "cmd", "command", "super", "meta", "win", "windows":
-		return "cmd"
+	case evdevModifierShift:
+		return evdevModifierShift
+	case evdevModifierCtrl, evdevModifierAliasControl, "primary":
+		return evdevModifierCtrl
+	case evdevModifierAlt, evdevModifierAliasOption, "opt":
+		return evdevModifierAlt
+	case evdevModifierCmd, "command", evdevModifierAliasSuper, "meta", "win", "windows":
+		return evdevModifierCmd
 	default:
 		return ""
 	}
@@ -81,16 +91,16 @@ func canonicalBaseKey(base string) string {
 	switch lowered {
 	case "":
 		return ""
-	case "return", "enter":
-		return "return"
-	case "space", "spacebar":
-		return "space"
-	case "tab":
-		return "tab"
-	case "escape", "esc":
-		return "escape"
-	case "backspace":
-		return "backspace"
+	case canonicalKeyReturn, "enter":
+		return canonicalKeyReturn
+	case canonicalKeySpace, "spacebar":
+		return canonicalKeySpace
+	case canonicalKeyTab:
+		return canonicalKeyTab
+	case canonicalKeyEscape, "esc":
+		return canonicalKeyEscape
+	case canonicalKeyBackspace:
+		return canonicalKeyBackspace
 	default:
 		return lowered
 	}

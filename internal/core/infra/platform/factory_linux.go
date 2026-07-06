@@ -10,13 +10,19 @@ import (
 // NewSystemPort returns a Linux SystemPort implementation.
 func NewSystemPort() (ports.SystemPort, error) {
 	switch backend := detectLinuxBackend(); backend {
-	case BackendX11, BackendWaylandWlroots, BackendWaylandKDE, BackendWaylandGNOME:
+	case BackendX11, BackendWaylandWlroots, BackendWaylandKDE:
 		return linux.NewSystemAdapter(backend.String()), nil
-	case BackendUnknown, BackendWaylandOther:
+	case BackendUnknown, BackendWaylandGNOME, BackendWaylandOther:
 		return nil, unsupportedLinuxBackendError(backend)
 	default:
 		return nil, unsupportedLinuxBackendError(backend)
 	}
+}
+
+// NewFontResolver returns a Linux-backed FontResolver backed by fontconfig
+// (CGO builds) or a no-CGO passthrough that still maps generic aliases.
+func NewFontResolver() ports.FontResolver {
+	return linux.NewFontResolver()
 }
 
 // ShowConfigOnboardingAlert is a stub on Linux.

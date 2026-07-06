@@ -98,23 +98,25 @@ neru hints
 neru hints --search                                # Start with search input active
 neru hints --action left_click --repeat            # Click multiple elements in succession
 neru hints --strategy vision                       # Use Vision Framework for element detection
+neru hints --label-direction normal                # Use prefix-avoidance label algorithm for this activation
 
 # Filtering
-neru hints --role AXButton --text submit           # Show only buttons containing "submit"
+neru hints --role AXButton --text submit              # Show only buttons containing "submit"
 neru hints --role AXButton,AXLink --text save,cancel  # Multiple roles/texts (comma-separated)
 neru hints --text next --action left_click --repeat   # Filter persists across repeats
 ```
 
-| Flag                      | Type   | Description                                                                                                                        |
-| ------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `--action, -a`            | string | Action on selection (same values as [Common Flags](#common-flags))                                                                 |
-| `--repeat, -r`            | bool   | Re-activate hints after action (requires `--action`)                                                                               |
-| `--toggle, -t`            | bool   | Toggle hints on/off                                                                                                                |
-| `--cursor-selection-mode` | string | `follow` (default) or `hold` — whether cursor jumps to selection                                                                   |
-| `--search, -s`            | bool   | Start with search input active.                                                                                                    |
-| `--role`                  | string | Filter by AX role. Comma-separated for multiple (e.g. `--role AXButton,AXLink`).                                                   |
-| `--text`                  | string | Filter elements by text content (title, description, value). Case-insensitive substring match. Comma-separated for OR match.       |
-| `--strategy`              | string | Element detection strategy: `axtree` (macOS AX API, default) or `vision` (Vision Framework). Overrides config for this invocation. |
+| Flag                      | Type   | Description                                                                                                                                                      |
+| ------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--action, -a`            | string | Action on selection (same values as [Common Flags](#common-flags))                                                                                               |
+| `--repeat, -r`            | bool   | Re-activate hints after action (requires `--action`)                                                                                                             |
+| `--toggle, -t`            | bool   | Toggle hints on/off                                                                                                                                              |
+| `--cursor-selection-mode` | string | `follow` (default) or `hold` — whether cursor jumps to selection                                                                                                 |
+| `--search, -s`            | bool   | Start with search input active.                                                                                                                                  |
+| `--role`                  | string | Filter by AX role. Comma-separated for multiple (e.g. `--role AXButton,AXLink`).                                                                                 |
+| `--text`                  | string | Filter elements by text content (title, description, value). Case-insensitive substring match. Comma-separated for OR match.                                     |
+| `--strategy`              | string | Element detection strategy: `axtree` (macOS AX API, default) or `vision` (Vision Framework). Overrides config for this invocation.                               |
+| `--label-direction`       | string | Hint label algorithm: `normal` (default, prefix-avoidance) or `reverse` (spread). Overrides `[hints].label_direction` and per-app overrides for this invocation. |
 
 The filter is preserved across repeat activations.
 
@@ -181,6 +183,24 @@ neru scroll
 neru scroll --toggle                              # Toggle scroll on/off
 # Use j/k to scroll, gg/G to jump, Esc to exit
 ```
+
+### Monitor Select Mode
+
+Opens per-display overlay panels showing labelled selection badges. Type a label to move the cursor to that monitor. The current monitor is excluded from selection.
+
+```bash
+neru monitor_select
+neru monitor_select --toggle              # Toggle monitor_select on/off
+```
+
+| Flag           | Type | Description                       |
+| -------------- | ---- | --------------------------------- |
+| `--toggle, -t` | bool | Toggle monitor_select mode on/off |
+
+| Key     | Action                       |
+| ------- | ---------------------------- |
+| `1`–`9` | Type label to select monitor |
+| `Esc`   | Cancel and return to idle    |
 
 ---
 
@@ -305,9 +325,14 @@ neru action go_bottom                         # Jump to bottom
 neru action reset                             # Reset state in current mode
 neru action backspace                         # Mode-aware backspace
 neru action wait_for_mode_exit                # Block until mode exits to idle
+neru action wait_for_mode_exit --bail         # Block; abort chain if mode was cancelled (no selection)
 neru action save_cursor_pos                   # Save current cursor position
 neru action restore_cursor_pos                # Restore saved cursor position
 ```
+
+| Flag      | Description                                                                   |
+| --------- | ----------------------------------------------------------------------------- |
+| `--bail`  | Abort the action chain if the mode exits without a completed selection        |
 
 ### Feed Keys
 
@@ -546,6 +571,7 @@ Commands are queued by the daemon, so concurrent calls from scripts work safely.
 | --------------------- | ------------------------------------ |
 | `ERR_MODE_DISABLED`   | Requested mode is disabled in config |
 | `ERR_UNKNOWN_COMMAND` | Invalid command name                 |
+| `ERR_CHAIN_BAIL`      | Chain aborted (e.g. `--bail` on `wait_for_mode_exit` when user cancelled) |
 | _(connection error)_  | Daemon is not running                |
 
 ### Log Monitoring

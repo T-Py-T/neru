@@ -28,6 +28,8 @@ const (
 	ModeScroll Mode = Mode(domain.ModeNameScroll)
 	// ModeRecursiveGrid represents the recursive-grid mode.
 	ModeRecursiveGrid Mode = Mode(domain.ModeNameRecursiveGrid)
+	// ModeMonitorSelect represents the monitor_select mode.
+	ModeMonitorSelect Mode = Mode(domain.ModeNameMonitorSelect)
 )
 
 // StateChange represents a change in overlay mode.
@@ -63,6 +65,9 @@ func (n *NoOpManager) Hide() {}
 
 // Clear is a no-op implementation.
 func (n *NoOpManager) Clear() {}
+
+// ClearCache is a no-op implementation.
+func (n *NoOpManager) ClearCache() {}
 
 // ResizeToActiveScreen is a no-op implementation.
 func (n *NoOpManager) ResizeToActiveScreen() {}
@@ -186,6 +191,9 @@ func (n *NoOpManager) SetHideUnmatched(hide bool) {}
 // SetSharingType is a no-op implementation.
 func (n *NoOpManager) SetSharingType(hide bool) {}
 
+// Flush is a no-op implementation.
+func (n *NoOpManager) Flush() {}
+
 // OverlayCapabilities reports that NoOpManager does not render overlays.
 func (n *NoOpManager) OverlayCapabilities() ports.FeatureCapability {
 	return ports.FeatureCapability{
@@ -205,6 +213,7 @@ type ManagerInterface interface {
 	Show()
 	Hide()
 	Clear()
+	ClearCache()
 	ResizeToActiveScreen()
 	SwitchTo(next Mode)
 	Subscribe(fn func(StateChange)) uint64
@@ -252,5 +261,6 @@ type ManagerInterface interface {
 	UpdateGridMatches(prefix string)
 	ShowSubgrid(cell *domainGrid.Cell, style grid.Style)
 	SetHideUnmatched(hide bool)
+	Flush()
 	SetSharingType(hide bool)
 }

@@ -19,8 +19,6 @@ const (
 	DisplayServerWin32 DisplayServer = "win32"
 	// DisplayServerWaylandKDE is Wayland on KDE Plasma (doctor/runtime label).
 	DisplayServerWaylandKDE DisplayServer = "wayland (KDE Plasma)"
-	// DisplayServerWaylandGNOME is Wayland on GNOME Shell (doctor/runtime label).
-	DisplayServerWaylandGNOME DisplayServer = "wayland (GNOME Shell)"
 	// DisplayServerUnknown means the display server could not be identified yet.
 	DisplayServerUnknown DisplayServer = "unknown"
 )
@@ -77,9 +75,9 @@ func ProfileFor(target OS) Profile {
 				Notes:     "Objective-C bridge into macOS accessibility APIs",
 			},
 			Hotkeys: BackendPlan{
-				Name:      "carbon-hotkeys",
+				Name:      "cgeventtap-hotkeys",
 				BuildMode: BuildModeCGORequired,
-				Notes:     "Carbon registration lives behind the Objective-C bridge",
+				Notes:     "Per-hotkey CGEventTaps via Objective-C bridge",
 			},
 			KeyboardCapture: BackendPlan{
 				Name:      "quartz-event-tap",

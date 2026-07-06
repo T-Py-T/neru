@@ -5,9 +5,10 @@ VERSION := `git describe --tags --always --dirty 2>/dev/null || echo "dev"`
 GIT_COMMIT := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
 BUILD_DATE := `date -u +"%Y-%m-%dT%H:%M:%SZ"`
 
-# Ldflags for version injection
+# Ldflags for version injection; Windows uses GUI subsystem (no console window).
 
 LDFLAGS := "-s -w -X github.com/y3owk1n/neru/internal/cli.Version=" + VERSION + " -X github.com/y3owk1n/neru/internal/cli.GitCommit=" + GIT_COMMIT + " -X github.com/y3owk1n/neru/internal/cli.BuildDate=" + BUILD_DATE
+WIN_LDFLAGS := "-H windowsgui -s -w -X github.com/y3owk1n/neru/internal/cli.Version=" + VERSION + " -X github.com/y3owk1n/neru/internal/cli.GitCommit=" + GIT_COMMIT + " -X github.com/y3owk1n/neru/internal/cli.BuildDate=" + BUILD_DATE
 
 # Default build
 default: build
@@ -19,7 +20,7 @@ default: build
 build:
     @echo "Building Neru..."
     @echo "Version: {{ VERSION }}"
-    {{ if os() == "windows" { "CGO_ENABLED=0" } else { "CGO_ENABLED=1" } }} go build -ldflags="{{ LDFLAGS }}" -o bin/neru{{ if os() == "windows" { ".exe" } else { "" } }} ./cmd/neru
+    {{ if os() == "windows" { "CGO_ENABLED=0" } else { "CGO_ENABLED=1" } }} go build -ldflags="{{ if os() == "windows" { WIN_LDFLAGS } else { LDFLAGS } }}" -o bin/neru{{ if os() == "windows" { ".exe" } else { "" } }} ./cmd/neru
     @echo "✓ Build complete: bin/neru"
 
 # Build a Linux binary. Must run on a Linux host (CGO required for native backends).
@@ -29,14 +30,32 @@ build-linux ARCH="amd64":
     CGO_ENABLED=1 GOOS=linux GOARCH={{ ARCH }} go build -ldflags="{{ LDFLAGS }}" -o bin/neru-linux-{{ ARCH }} ./cmd/neru
     @echo "✓ Build complete: bin/neru-linux-{{ ARCH }}"
 
-# Build a Windows foundations binary from any host.
-# This is useful for contributor smoke tests while Windows backends are still
+# Generate Windows resource files (.syso) for embedding the app icon and manifest.
+#
+# Must be run before go build on/for Windows.  The .syso files are written into
+# cmd/neru/ so go build picks them up automatically.
+generate-winres ARCH="amd64":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd cmd/neru
+    echo "Generating Windows resources for {{ ARCH }}..."
+    go run github.com/tc-hib/go-winres@v0.3.3 simply \
+        --icon ../../assets/neru-appicon.png \
+        --manifest gui \
+        --arch {{ ARCH }} \
+        --file-description "Neru keyboard-driven navigation tool" \
+        --product-name "Neru" \
+        --original-filename "neru.exe"
+    echo "✓ Windows resources generated"
 
-# mostly scaffolding.
+# Build a Windows binary from any host.
+# This produces a binary with grid, recursive grid, scroll, global hotkeys,
+# mouse injection, IPC, and initial UIA accessibility.
 build-windows ARCH="amd64":
     @echo "Building Neru for windows/{{ ARCH }}..."
     mkdir -p bin
-    CGO_ENABLED=0 GOOS=windows GOARCH={{ ARCH }} go build -ldflags="{{ LDFLAGS }}" -o bin/neru-windows-{{ ARCH }}.exe ./cmd/neru
+    just generate-winres {{ ARCH }}
+    CGO_ENABLED=0 GOOS=windows GOARCH={{ ARCH }} go build -ldflags="{{ WIN_LDFLAGS }}" -o bin/neru-windows-{{ ARCH }}.exe ./cmd/neru
     @echo "✓ Build complete: bin/neru-windows-{{ ARCH }}.exe"
 
 # Build a macOS binary for the current host.
@@ -96,7 +115,8 @@ release-ci-windows ARCH VERSION_OVERRIDE:
     @echo "Commit: {{ GIT_COMMIT }}"
     @echo "Date: {{ BUILD_DATE }}"
     mkdir -p bin
-    CGO_ENABLED=0 GOOS=windows GOARCH={{ ARCH }} go build -ldflags="-s -w -X github.com/y3owk1n/neru/internal/cli.Version={{ VERSION_OVERRIDE }} -X github.com/y3owk1n/neru/internal/cli.GitCommit={{ GIT_COMMIT }} -X github.com/y3owk1n/neru/internal/cli.BuildDate={{ BUILD_DATE }}" -trimpath -o bin/neru-windows-{{ ARCH }}.exe ./cmd/neru
+    just generate-winres {{ ARCH }}
+    CGO_ENABLED=0 GOOS=windows GOARCH={{ ARCH }} go build -ldflags="-H windowsgui -s -w -X github.com/y3owk1n/neru/internal/cli.Version={{ VERSION_OVERRIDE }} -X github.com/y3owk1n/neru/internal/cli.GitCommit={{ GIT_COMMIT }} -X github.com/y3owk1n/neru/internal/cli.BuildDate={{ BUILD_DATE }}" -trimpath -o bin/neru-windows-{{ ARCH }}.exe ./cmd/neru
     @echo "✓ Release artifact for windows/{{ ARCH }} built successfully"
 
 # Bundle the application
@@ -192,6 +212,7 @@ clean:
     rm -rf bin/
     rm -rf build/
     rm -rf *.app
+    rm -f cmd/neru/rsrc_windows_*.syso
     @echo "✓ Clean complete"
 
 # Format code
@@ -297,6 +318,7 @@ fetch-protocols:
     curl -fsSL "https://gitlab.freedesktop.org/wlroots/wlr-protocols/-/raw/master/unstable/wlr-virtual-pointer-unstable-v1.xml" -o {{ PROTOCOL_DIR }}/wlr-virtual-pointer-unstable-v1.xml
     curl -fsSL "https://gitlab.freedesktop.org/wayland/wayland-protocols/-/raw/master/unstable/xdg-output/xdg-output-unstable-v1.xml" -o {{ PROTOCOL_DIR }}/xdg-output-unstable-v1.xml
     curl -fsSL "https://gitlab.freedesktop.org/wayland/wayland-protocols/-/raw/master/stable/xdg-shell/xdg-shell.xml" -o {{ PROTOCOL_DIR }}/xdg-shell.xml
+    curl -fsSL "https://gitlab.freedesktop.org/wayland/wayland-protocols/-/raw/master/unstable/relative-pointer/relative-pointer-unstable-v1.xml" -o {{ PROTOCOL_DIR }}/relative-pointer-unstable-v1.xml
     @echo "✓ Protocol XMLs downloaded to {{ PROTOCOL_DIR }}/"
 
 # Generate wayland-scanner files from XMLs
@@ -323,6 +345,10 @@ generate-protocols:
     # virtual-keyboard (unstable)
     wayland-scanner client-header < {{ PROTOCOL_DIR }}/virtual-keyboard-unstable-v1.xml > {{ WLR_PROTOCOL_DIR }}/virtual-keyboard.h
     wayland-scanner private-code < {{ PROTOCOL_DIR }}/virtual-keyboard-unstable-v1.xml > {{ WLR_PROTOCOL_DIR }}/virtual-keyboard.c
+
+    # relative-pointer (unstable)
+    wayland-scanner client-header < {{ PROTOCOL_DIR }}/relative-pointer-unstable-v1.xml > {{ WLR_PROTOCOL_DIR }}/relative-pointer-unstable-v1.h
+    wayland-scanner private-code < {{ PROTOCOL_DIR }}/relative-pointer-unstable-v1.xml > {{ WLR_PROTOCOL_DIR }}/relative-pointer-unstable-v1.c
     @echo "✓ Protocol files generated in {{ WLR_PROTOCOL_DIR }}/"
 
 # Download and generate all Wayland protocols

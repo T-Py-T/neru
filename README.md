@@ -15,9 +15,9 @@ _Built for the person who already remapped Caps Lock._
 
 **Free and open-source.** No subscription. No trial. No catch.
 
-|      macOS       |      Linux       |       Windows        |
-| :--------------: | :--------------: | :------------------: |
-| Full featured ✅ | Basic support 🔵 | Not yet supported 🔲 |
+|      macOS       |      Linux       |        Windows         |
+| :--------------: | :--------------: | :--------------------: |
+| Full featured ✅ | Basic support 🔵 | Basic support 🔵       |
 
 **練る** _(neru)_ — "to refine through practice." The more you use it, the faster you get.
 
@@ -137,6 +137,8 @@ The community built a browser-based training game to help you get fast with recu
 
 👉 **[Play Neru Dojo](https://bernatgene.github.io/neru-dojo/)** — no install, works in any browser.
 
+https://github.com/user-attachments/assets/d99328a6-b5f9-402a-a01b-297da2ffb454
+
 ---
 
 ## How Neru compares
@@ -161,14 +163,14 @@ More modes, more engines, more platforms — and it's free. If you've been payin
 
 | Capability                | macOS | Linux | Windows |
 | :------------------------ | :---: | :---: | :-----: |
-| Recursive Grid            |  ✅   |  ✅   |   🔲    |
-| Grid                      |  ✅   |  ✅   |   🔲    |
-| Vim-Style Scroll          |  ✅   |  ✅   |   🔲    |
-| Hints (Accessibility API) |  ✅   |  🔲   |   🔲    |
+| Recursive Grid            |  ✅   |  ✅   |   ✅    |
+| Grid                      |  ✅   |  ✅   |   ✅    |
+| Vim-Style Scroll          |  ✅   |  ✅   |   ✅    |
+| Hints (Accessibility API) |  ✅   |  🔲   |   ✅    |
 | Hints (Vision OCR)        |  ✅   |  🔲   |   🔲    |
-| Direct Mouse Injection    |  ✅   |  ✅   |   🔲    |
-| Global Hotkeys            |  ✅   |  ✅   |   🔲    |
-| Native Overlays           |  ✅   |  ✅   |   🔲    |
+| Direct Mouse Injection    |  ✅   |  ✅   |   ✅    |
+| Global Hotkeys            |  ✅   |  ✅   |   ✅    |
+| Native Overlays           |  ✅   |  ✅   |   ✅    |
 
 → [Roadmap](docs/ROADMAP.md) · [Cross-platform details](docs/CROSS_PLATFORM.md)
 
@@ -209,6 +211,18 @@ just test && just lint
 Neru is built and maintained by one person, entirely in spare time. If it's earned a place in your workflow, a sponsorship goes a long way:
 
 👉 [GitHub Sponsors](https://github.com/sponsors/y3owk1n)
+
+---
+
+## Just need window management?
+
+mimi grew out of this project — it's the window and space management pieces extracted into a standalone tool, for when neru is more than you need.
+
+```bash
+brew install --cask y3owk1n/tap/mimi
+```
+
+→ [github.com/y3owk1n/mimi](https://github.com/y3owk1n/mimi)
 
 ---
 

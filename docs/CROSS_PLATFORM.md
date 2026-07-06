@@ -56,10 +56,11 @@ The guiding principles are:
 
 Before changing code, read these files first:
 
-- [internal/core/infra/platform/profile.go](file:///Users/kylewong/Dev/neru/internal/core/infra/platform/profile.go)
-- [internal/core/ports/system.go](file:///Users/kylewong/Dev/neru/internal/core/ports/system.go)
-- [internal/core/ports/capabilities.go](file:///Users/kylewong/Dev/neru/internal/core/ports/capabilities.go)
-- [internal/core/ports/capability_presets.go](file:///Users/kylewong/Dev/neru/internal/core/ports/capability_presets.go)
+- [internal/core/infra/platform/profile.go](../internal/core/infra/platform/profile.go)
+- [internal/core/ports/system.go](../internal/core/ports/system.go)
+- [internal/core/ports/capabilities.go](../internal/core/ports/capabilities.go)
+- [internal/core/ports/capability_presets.go](../internal/core/ports/capability_presets.go)
+- [internal/core/ports/font.go](../internal/core/ports/font.go) — FontResolver port (fontconfig on Linux, NSFont on macOS)
 - [ARCHITECTURE.md](./ARCHITECTURE.md)
 - [CONVENTIONS.md](./go/CONVENTIONS.md)
 
@@ -78,7 +79,7 @@ If you are new to the codebase, this is the recommended startup path.
 
 ### Any platform
 
-1. Read [profile.go](file:///Users/kylewong/Dev/neru/internal/core/infra/platform/profile.go)
+1. Read [profile.go](../internal/core/infra/platform/profile.go)
 2. Read the relevant port in `internal/core/ports/`
 3. Find the implementation slot you expect to touch
 4. Run:
@@ -148,12 +149,9 @@ Use these suffixes:
 - `*_other.go`: non-target fallback for dispatch-style packages
 
 App-level platform dispatch also follows this pattern. For example,
-[layout_change_darwin.go](file:///Users/kylewong/Dev/neru/internal/app/layout_change_darwin.go)
-re-registers Carbon hotkeys when the keyboard layout changes at runtime, while
-[layout_change_linux.go](file:///Users/kylewong/Dev/neru/internal/app/layout_change_linux.go)
-and
-[layout_change_windows.go](file:///Users/kylewong/Dev/neru/internal/app/layout_change_windows.go)
-are no-ops.
+per-hotkey CGEventTaps are re-registered on layout change (via
+`NeruSetKeymapLayoutChangeCallback2`) because `NeruKeyNameToCode` maps
+key names to layout-aware keycodes.
 
 Do not create new ad hoc platform filenames if an existing slot already exists.
 
@@ -178,8 +176,10 @@ These are the main contributor commands:
 
 Notes:
 
-- `just build-linux` and `just build-windows` are currently best viewed as
-  foundations smoke tests while those platforms are still mostly scaffolding.
+- `just build-linux` is currently best viewed as a
+  foundations smoke test while that platform is still mostly scaffolding.
+- `just build-windows` produces a binary with grid, recursive grid,
+  scroll, global hotkeys, mouse injection, IPC, and initial UIA accessibility.
 - `just release-ci-linux <version>` and `just release-ci-windows <version>` to release a version tagged binary in ci.
 - macOS remains the only fully native product path today.
 
@@ -201,9 +201,9 @@ Use this table as the default routing guide.
 
 Examples:
 
-- X11 hotkeys belong in [manager_linux_x11.go](/Users/kylewong/Dev/neru/internal/core/infra/hotkeys/manager_linux_x11.go)
-- Wayland keyboard capture belongs in [eventtap_linux_wayland.go](/Users/kylewong/Dev/neru/internal/core/infra/eventtap/eventtap_linux_wayland.go)
-- shared Linux system fallbacks belong in [system_linux_common.go](/Users/kylewong/Dev/neru/internal/core/infra/platform/linux/system_linux_common.go)
+- X11 hotkeys belong in [manager_linux_x11.go](../internal/core/infra/hotkeys/manager_linux_x11.go)
+- Wayland keyboard capture belongs in [eventtap_linux_wayland.go](../internal/core/infra/eventtap/eventtap_linux_wayland.go)
+- shared Linux system fallbacks belong in [system_linux_common.go](../internal/core/infra/platform/linux/system_linux_common.go)
 
 ---
 
@@ -255,10 +255,14 @@ two axes separate:
   both `linux` + Wayland at compile time), so the suffix never encodes a single
   DE on its own.
 - **Runtime axis** — which compositor is live. Expressed by the `LinuxBackend`
-  family in [linux_backend.go](/Users/kylewong/Dev/neru/internal/core/infra/platform/linux_backend.go)
+  family in [linux_backend.go](../internal/core/infra/platform/linux_backend.go)
   (`BackendWaylandWlroots`, `BackendWaylandKDE`, `BackendWaylandGNOME`,
   `BackendWaylandOther`), detected from `XDG_CURRENT_DESKTOP` and routed by the
   factory + dispatch seams (e.g. `system_linux_wayland_input.go`).
+
+Per-DE behavior, protocol measurements, and known issues live in
+[LINUX_DESKTOPS.md](./LINUX_DESKTOPS.md). Host setup (deps, build, deploy) lives
+in [LINUX_SETUP.md](./LINUX_SETUP.md).
 
 Organize implementation by the axis that actually varies, which is usually the
 **mechanism**, not the DE, because DEs share mechanisms:
@@ -287,12 +291,27 @@ existing mechanism file.
 
 ## Windows Model
 
-Windows is currently treated as one backend family.
+Windows is currently treated as one backend family with basic support.
 
 For now, prefer:
 
 - `*_windows.go` for the implementation slot
 - pure Go Win32 / COM bindings where practical
+
+Supported capabilities:
+
+- **grid, recursive grid, scroll** modes — layered GDI overlay, keyboard navigation
+- **direct mouse injection** — via `SendInput` / `SetCursorPos`
+- **global hotkeys** — via `RegisterHotKey`
+- **keyboard event capture** — via `WH_KEYBOARD_LL` hook
+- **accessibility** — UI Automation (UIA) COM-based integration (initial coverage)
+- **named-pipe IPC** — daemon CLI commands over `\\.\pipe\neru`
+
+Stubbed (not yet implemented):
+
+- notifications (Windows toast notifications)
+- app watcher (Win32 foreground-window notifications)
+- dark mode detection (personalization APIs)
 
 Do not introduce additional Windows backend naming until there is a real reason.
 
@@ -302,7 +321,7 @@ Do not introduce additional Windows backend naming until there is a real reason.
 
 Do not decide CGO usage by OS alone.
 
-Use [profile.go](/Users/kylewong/Dev/neru/internal/core/infra/platform/profile.go)
+Use [profile.go](../internal/core/infra/platform/profile.go)
 as the source of truth for the current backend plan.
 
 Current intent:
@@ -320,8 +339,8 @@ Good default instincts:
 
 If you introduce a backend that changes the build story, update:
 
-- [profile.go](/Users/kylewong/Dev/neru/internal/core/infra/platform/profile.go)
-- [justfile](/Users/kylewong/Dev/neru/justfile)
+- [profile.go](../internal/core/infra/platform/profile.go)
+- [justfile](../justfile)
 - this document
 
 When in doubt, make the build assumption explicit in your PR description and in
@@ -342,9 +361,9 @@ Use these rules:
 
 Relevant files:
 
-- [internal/config/config.go](file:///Users/kylewong/Dev/neru/internal/config/config.go)
-- [internal/core/domain/action/modifiers.go](file:///Users/kylewong/Dev/neru/internal/core/domain/action/modifiers.go)
-- [internal/app/hotkeys.go](file:///Users/kylewong/Dev/neru/internal/app/hotkeys.go)
+- [internal/config/config.go](../internal/config/config.go)
+- [internal/core/domain/action/modifiers.go](../internal/core/domain/action/modifiers.go)
+- [internal/app/hotkeys.go](../internal/app/hotkeys.go)
 
 ---
 
@@ -356,7 +375,7 @@ Use this flow.
 
 If multiple services or app layers will need the capability:
 
-1. Add it to [internal/core/ports/system.go](file:///Users/kylewong/Dev/neru/internal/core/ports/system.go)
+1. Add it to [internal/core/ports/system.go](../internal/core/ports/system.go)
 2. Implement it in the darwin adapter
 3. Add Linux common fallback behavior in `system_linux_common.go`
 4. Add Windows fallback behavior in `system.go` under the Windows platform package
@@ -401,9 +420,9 @@ Capability reporting is part of the contributor contract, not just a user nicety
 
 When you implement or partially implement a feature, review:
 
-- [internal/core/ports/capabilities.go](file:///Users/kylewong/Dev/neru/internal/core/ports/capabilities.go)
-- [internal/core/ports/capability_presets.go](file:///Users/kylewong/Dev/neru/internal/core/ports/capability_presets.go)
-- [internal/app/ipc_info.go](file:///Users/kylewong/Dev/neru/internal/app/ipc_info.go)
+- [internal/core/ports/capabilities.go](../internal/core/ports/capabilities.go)
+- [internal/core/ports/capability_presets.go](../internal/core/ports/capability_presets.go)
+- [internal/app/ipc_info.go](../internal/app/ipc_info.go)
 
 `neru doctor` should help contributors and users understand what is actually
 available on the current platform.
@@ -444,9 +463,11 @@ When you land platform work, update docs in the same PR.
 
 Usually that means checking these files:
 
-- [README.md](/Users/kylewong/Dev/neru/README.md)
+- [README.md](../README.md)
 - [ARCHITECTURE.md](./ARCHITECTURE.md)
 - [DEVELOPMENT.md](./DEVELOPMENT.md)
+- [LINUX_SETUP.md](./LINUX_SETUP.md) — build, deps, deploy (keep DE-agnostic)
+- [LINUX_DESKTOPS.md](./LINUX_DESKTOPS.md) — per-DE decisions and known issues
 - [CONVENTIONS.md](./go/CONVENTIONS.md)
 
 Update them when:

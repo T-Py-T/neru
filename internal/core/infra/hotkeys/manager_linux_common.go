@@ -38,7 +38,7 @@ func NewManager(logger *zap.Logger) *Manager {
 		logger = zap.NewNop()
 	}
 
-	m := &Manager{
+	mgr := &Manager{
 		callbacks: make(map[HotkeyID]Callback),
 		keys:      make(map[HotkeyID]string),
 		logger:    logger.Named("hotkeys"),
@@ -46,11 +46,11 @@ func NewManager(logger *zap.Logger) *Manager {
 		backend:   platformBackend(),
 	}
 
-	if isWaylandBackend(m.backend) {
-		m.waylandHotkeys = eventtap.NewGlobalHotkeyListener(logger)
+	if isWaylandBackend(mgr.backend) {
+		mgr.waylandHotkeys = eventtap.NewGlobalHotkeyListener(logger)
 	}
 
-	return m
+	return mgr
 }
 
 func isWaylandBackend(backend platform.LinuxBackend) bool {
@@ -58,6 +58,8 @@ func isWaylandBackend(backend platform.LinuxBackend) bool {
 	case platform.BackendWaylandWlroots, platform.BackendWaylandKDE,
 		platform.BackendWaylandGNOME, platform.BackendWaylandOther:
 		return true
+	case platform.BackendUnknown, platform.BackendX11:
+		return false
 	default:
 		return false
 	}
@@ -162,7 +164,8 @@ func (m *Manager) ensureWaylandStarted() {
 		return
 	}
 
-	if err := m.waylandHotkeys.Start(); err != nil {
+	err := m.waylandHotkeys.Start()
+	if err != nil {
 		m.logger.Warn(
 			"Wayland global hotkeys unavailable; grant read access to /dev/input "+
 				"(add your user to the `input` group) or bind `neru <mode>` in your compositor instead",

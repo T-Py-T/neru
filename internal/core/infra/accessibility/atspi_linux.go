@@ -20,7 +20,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/config"
-	"github.com/y3owk1n/neru/internal/core/infra/platform/linux"
 )
 
 const (
@@ -37,21 +36,21 @@ const (
 	// ATSPI_COORD_TYPE_SCREEN: extents relative to the screen origin.
 	atspiCoordScreen = uint32(0)
 
-	// ATSPI_COORD_TYPE_WINDOW: extents relative to the window origin. GNOME's
-	// AT-SPI returns (0,0) for screen-relative x/y (the intra-window offset is
-	// lost), so on GNOME we request window-relative extents and add the window
-	// origin ourselves. KDE returns usable window-relative values for the
-	// screen coord type already, so it keeps using screen.
-	atspiCoordWindow = uint32(1)
-
 	// AT-SPI state bit indices (atspi-constants.h). All < 32, so they live in
 	// the first uint32 of the state bitfield array.
 	atspiStateActive  = 1
 	atspiStateShowing = 25
 
+	// AT-SPI packs state into an array of uint32 words (one bit per state).
+	atspiStateBitsPerWord = 32
+
 	// Walk bounds to keep D-Bus traffic sane on deep trees.
 	atspiMaxDepth = 40
 	atspiMaxNodes = 2000
+
+	// Capacity hint for the clickable-node slice: most windows fit well under
+	// this and the slice grows if a dense tree exceeds it.
+	atspiClickableNodesCap = 128
 )
 
 // accRef is the AT-SPI (bus-name, object-path) reference returned by
@@ -69,6 +68,14 @@ type atspiExtents struct {
 	H int32
 }
 
+// AX role names that appear in more than one place in the role maps below.
+const (
+	axRoleButton    = "AXButton"
+	axRoleMenuItem  = "AXMenuItem"
+	axRoleTextField = "AXTextField"
+	axRoleRow       = "AXRow"
+)
+
 // atspiToAXRole maps AT-SPI role names (lowercase, as returned by
 // Accessible.GetRoleName) to the macOS-style "AX*" role names that Neru's config
 // and the cross-platform filter pipeline speak. Neru's clickable_roles config is
@@ -78,44 +85,44 @@ type atspiExtents struct {
 // equivalent are intentionally absent so containers (section, heading, label)
 // are skipped.
 var atspiToAXRole = map[string]string{
-	"push button":     "AXButton",
-	"button":          "AXButton",
-	"toggle button":   "AXButton",
+	"push button":     axRoleButton,
+	"button":          axRoleButton,
+	"toggle button":   axRoleButton,
 	"menu button":     "AXMenuButton",
 	"combo box":       "AXComboBox",
 	"check box":       "AXCheckBox",
-	"check menu item": "AXMenuItem",
+	"check menu item": axRoleMenuItem,
 	"radio button":    "AXRadioButton",
-	"radio menu item": "AXMenuItem",
+	"radio menu item": axRoleMenuItem,
 	"link":            "AXLink",
-	"entry":           "AXTextField",
-	"password text":   "AXTextField",
+	"entry":           axRoleTextField,
+	"password text":   axRoleTextField,
 	"slider":          "AXSlider",
 	"page tab":        "AXTabButton",
-	"menu item":       "AXMenuItem",
-	"list item":       "AXRow",
+	"menu item":       axRoleMenuItem,
+	"list item":       axRoleRow,
 	"table cell":      "AXCell",
-	"table row":       "AXRow",
+	"table row":       axRoleRow,
 }
 
 // defaultClickableAXRoles is used when the caller passes no explicit role
 // filter. It mirrors the AX names in the shipped default config.
 var defaultClickableAXRoles = map[string]struct{}{
-	"AXButton":      {},
+	axRoleButton:    {},
 	"AXMenuButton":  {},
 	"AXComboBox":    {},
 	"AXCheckBox":    {},
 	"AXRadioButton": {},
 	"AXLink":        {},
 	"AXPopUpButton": {},
-	"AXTextField":   {},
+	axRoleTextField: {},
 	"AXSlider":      {},
 	"AXTabButton":   {},
 	"AXSwitch":      {},
 	"AXTextArea":    {},
-	"AXMenuItem":    {},
+	axRoleMenuItem:  {},
 	"AXCell":        {},
-	"AXRow":         {},
+	axRoleRow:       {},
 }
 
 // ATSPIClient is the Linux AXClient. It walks the AT-SPI tree for hints and
@@ -140,7 +147,7 @@ func NewATSPIClient(logger *zap.Logger, configProvider config.Provider) *ATSPICl
 		logger = zap.NewNop()
 	}
 
-	c := &ATSPIClient{
+	client := &ATSPIClient{
 		InfraAXClient: NewInfraAXClient(logger, configProvider),
 		logger:        logger.Named("accessibility.atspi"),
 		kwin:          newKWinBridge(logger),
@@ -149,16 +156,111 @@ func NewATSPIClient(logger *zap.Logger, configProvider config.Provider) *ATSPICl
 	// Enable a11y now (in the background) so Qt/GTK apps build their trees
 	// well before the user triggers hints.
 	go func() {
-		if err := c.enableAccessibility(); err != nil {
-			c.logger.Warn("Failed to enable AT-SPI accessibility status", zap.Error(err))
+		err := client.enableAccessibility()
+		if err != nil {
+			client.logger.Warn("Failed to enable AT-SPI accessibility status", zap.Error(err))
 		}
 	}()
 
 	// Install the KWin geometry bridge so AT-SPI window-relative coordinates
 	// can be offset into screen coordinates.
-	go c.kwin.start()
+	go client.kwin.start()
 
-	return c
+	return client
+}
+
+// FrontmostWindow returns the active top-level window via AT-SPI.
+func (c *ATSPIClient) FrontmostWindow(_ context.Context) (AXWindow, error) {
+	conn, err := c.ensureA11yConn()
+	if err != nil {
+		return nil, err
+	}
+
+	frame, ok := c.findActiveFrame(conn)
+	if !ok {
+		c.logger.Debug("AT-SPI: no active frame found")
+
+		// No active frame: hand back an empty window so the adapter simply
+		// finds no clickable elements rather than erroring out.
+		return &atspiWindow{}, nil
+	}
+
+	c.logger.Debug("AT-SPI: selected active frame",
+		zap.String("bus", frame.Name),
+		zap.String("app", c.name(conn, accRef{Name: frame.Name, Path: atspiRootPath})),
+		zap.String("frameTitle", c.name(conn, frame)))
+
+	return &atspiWindow{ref: frame, valid: true}, nil
+}
+
+// FrontmostAndPopoverWindows returns the active window (popovers are part of
+// the same AT-SPI tree, so the single-window walk already covers them).
+func (c *ATSPIClient) FrontmostAndPopoverWindows(ctx context.Context) ([]AXWindow, error) {
+	win, err := c.FrontmostWindow(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	w, ok := win.(*atspiWindow)
+	if !ok || !w.valid {
+		return nil, nil
+	}
+
+	return []AXWindow{win}, nil
+}
+
+// AllWindows is not used by hints; return empty rather than erroring.
+func (c *ATSPIClient) AllWindows(_ context.Context) ([]AXWindow, error) {
+	return nil, nil
+}
+
+// ClickableNodes walks the given window for clickable elements.
+func (c *ATSPIClient) ClickableNodes(
+	ctx context.Context,
+	root AXElement,
+	roles []string,
+	_ int,
+) ([]AXNode, error) {
+	win, ok := root.(*atspiWindow)
+	if !ok || !win.valid {
+		return nil, nil
+	}
+
+	conn, err := c.ensureA11yConn()
+	if err != nil {
+		return nil, err
+	}
+
+	start := time.Now()
+
+	// Validate the cached KWin origin against the frame actually being walked
+	// (by size): a stale origin from a previous window would offset every hint
+	// to the wrong screen position. When the frame extents are unavailable the
+	// origin cannot be validated, so no offset is applied at all — unoffset
+	// hints beat hints offset to a previous window or monitor.
+	var (
+		offX, offY int
+		haveOrigin bool
+	)
+
+	frameRect, frameOK := c.extents(conn, win.ref)
+	if frameOK {
+		offX, offY, haveOrigin = c.kwin.originFor(frameRect.Dx(), frameRect.Dy())
+	}
+
+	out := make([]AXNode, 0, atspiClickableNodesCap)
+	visited := 0
+	c.walk(ctx, conn, win.ref, rolesSet(roles), 0, &out, &visited, offX, offY)
+
+	c.logger.Debug("AT-SPI clickable walk complete",
+		zap.Int("count", len(out)),
+		zap.Int("visited", visited),
+		zap.Int("offsetX", offX),
+		zap.Int("offsetY", offY),
+		zap.Bool("haveOrigin", haveOrigin),
+		zap.Duration("elapsed", time.Since(start)))
+
+	return out, nil
 }
 
 // enableAccessibility flips org.a11y.Status so toolkits expose their trees.
@@ -201,6 +303,7 @@ func (c *ATSPIClient) ensureA11yConn() (*dbus.Conn, error) {
 	}
 
 	var addr string
+
 	getAddrErr := session.Object(a11yBusDest, a11yBusPath).
 		Call("org.a11y.Bus.GetAddress", 0).Store(&addr)
 	if getAddrErr != nil {
@@ -225,7 +328,9 @@ func (c *ATSPIClient) children(conn *dbus.Conn, ref accRef) []accRef {
 	obj := conn.Object(ref.Name, ref.Path)
 
 	var kids []accRef
-	if err := obj.Call(atspiAccessibleIfc+".GetChildren", 0).Store(&kids); err == nil {
+
+	err := obj.Call(atspiAccessibleIfc+".GetChildren", 0).Store(&kids)
+	if err == nil {
 		return kids
 	}
 
@@ -235,9 +340,11 @@ func (c *ATSPIClient) children(conn *dbus.Conn, ref accRef) []accRef {
 	}
 
 	count, _ := countVar.Value().(int32)
-	for i := int32(0); i < count; i++ {
+	for i := range count {
 		var child accRef
-		if err := obj.Call(atspiAccessibleIfc+".GetChildAtIndex", 0, i).Store(&child); err != nil {
+
+		err := obj.Call(atspiAccessibleIfc+".GetChildAtIndex", 0, i).Store(&child)
+		if err != nil {
 			continue
 		}
 
@@ -262,13 +369,13 @@ func (c *ATSPIClient) roleName(conn *dbus.Conn, ref accRef) string {
 
 // name returns the accessible Name property (used as the element title).
 func (c *ATSPIClient) name(conn *dbus.Conn, ref accRef) string {
-	v, err := conn.Object(ref.Name, ref.Path).
+	val, err := conn.Object(ref.Name, ref.Path).
 		GetProperty(atspiAccessibleIfc + ".Name")
 	if err != nil {
 		return ""
 	}
 
-	s, _ := v.Value().(string)
+	s, _ := val.Value().(string)
 
 	return s
 }
@@ -283,29 +390,29 @@ func (c *ATSPIClient) stateHas(conn *dbus.Conn, ref accRef, bit uint) bool {
 		return false
 	}
 
-	word := bit / 32
+	word := bit / atspiStateBitsPerWord
 	if int(word) >= len(states) {
 		return false
 	}
 
-	return states[word]&(1<<(bit%32)) != 0
+	return states[word]&(1<<(bit%atspiStateBitsPerWord)) != 0
 }
 
-// extents returns the rectangle of an accessible in the requested coord space.
-func (c *ATSPIClient) extents(conn *dbus.Conn, ref accRef, coord uint32) (image.Rectangle, bool) {
-	var e atspiExtents
+// extents returns the on-screen rectangle of an accessible.
+func (c *ATSPIClient) extents(conn *dbus.Conn, ref accRef) (image.Rectangle, bool) {
+	var ext atspiExtents
 
 	err := conn.Object(ref.Name, ref.Path).
-		Call(atspiComponentIfc+".GetExtents", 0, coord).Store(&e)
+		Call(atspiComponentIfc+".GetExtents", 0, atspiCoordScreen).Store(&ext)
 	if err != nil {
 		return image.Rectangle{}, false
 	}
 
-	if e.W <= 0 || e.H <= 0 {
+	if ext.W <= 0 || ext.H <= 0 {
 		return image.Rectangle{}, false
 	}
 
-	return image.Rect(int(e.X), int(e.Y), int(e.X+e.W), int(e.Y+e.H)), true
+	return image.Rect(int(ext.X), int(ext.Y), int(ext.X+ext.W), int(ext.Y+ext.H)), true
 }
 
 // isVirtualKeyboardApp reports whether an AT-SPI application is an on-screen
@@ -339,20 +446,15 @@ func isDesktopShellApp(name string) bool {
 // isNonTargetSurfaceApp reports whether an AT-SPI application is a system
 // surface that is never a valid hint target and must never be picked as the
 // focused window — even as a last resort. The XWayland video bridge
-// ("xwaylandvideobridge") and the portal consent dialogs briefly steal the
+// ("xwaylandvideobridge") and the KDE portal consent dialog briefly steal the
 // ACTIVE state the moment we inject a cursor move via libei, which on
 // re-activation makes findActiveFrame select an empty surface and tears the
-// hints overlay down. The GNOME RemoteDesktop consent dialog
-// ("xdg-desktop-portal-gnome") is modal and grabs focus during the libei
-// warm-up, so without this it would be picked as the active window and hints
-// would land on its Cancel/Share buttons instead of the real app. This mirrors
-// the KWin geometry bridge blocklist in kwin_geometry_linux.go.
+// hints overlay down. This mirrors the KWin geometry bridge blocklist in
+// kwin_geometry_linux.go so both code paths ignore the same noise.
 func isNonTargetSurfaceApp(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "xwaylandvideobridge",
-		"org.freedesktop.impl.portal.desktop.kde",
-		"xdg-desktop-portal-gnome",
-		"xdg-desktop-portal":
+		"org.freedesktop.impl.portal.desktop.kde":
 		return true
 	default:
 		return false
@@ -459,7 +561,6 @@ func (c *ATSPIClient) walk(
 	visited *int,
 	offX int,
 	offY int,
-	coord uint32,
 ) {
 	if depth > atspiMaxDepth || len(*out) >= atspiMaxNodes {
 		return
@@ -478,10 +579,9 @@ func (c *ATSPIClient) walk(
 
 	if mappable {
 		if _, ok := roles[axRole]; ok && c.stateHas(conn, ref, atspiStateShowing) {
-			if rect, valid := c.extents(conn, ref, coord); valid {
+			if rect, valid := c.extents(conn, ref); valid {
 				// AT-SPI reports window-relative coords on Wayland; offset by the
-				// focused window's screen origin (KWin bridge on KDE, Shell
-				// extension on GNOME).
+				// focused window's screen origin from the KWin bridge.
 				rect = rect.Add(image.Pt(offX, offY))
 				*out = append(*out, &atspiNode{
 					id:    string(ref.Path) + "@" + ref.Name,
@@ -494,7 +594,7 @@ func (c *ATSPIClient) walk(
 	}
 
 	for _, child := range c.children(conn, ref) {
-		c.walk(ctx, conn, child, roles, depth+1, out, visited, offX, offY, coord)
+		c.walk(ctx, conn, child, roles, depth+1, out, visited, offX, offY)
 	}
 }
 
@@ -519,111 +619,6 @@ func rolesSet(roles []string) map[string]struct{} {
 	}
 
 	return set
-}
-
-// FrontmostWindow returns the active top-level window via AT-SPI.
-func (c *ATSPIClient) FrontmostWindow(_ context.Context) (AXWindow, error) {
-	conn, err := c.ensureA11yConn()
-	if err != nil {
-		return nil, err
-	}
-
-	frame, ok := c.findActiveFrame(conn)
-	if !ok {
-		c.logger.Debug("AT-SPI: no active frame found")
-
-		// No active frame: hand back an empty window so the adapter simply
-		// finds no clickable elements rather than erroring out.
-		return &atspiWindow{}, nil
-	}
-
-	c.logger.Debug("AT-SPI: selected active frame",
-		zap.String("bus", frame.Name),
-		zap.String("app", c.name(conn, accRef{Name: frame.Name, Path: atspiRootPath})),
-		zap.String("frameTitle", c.name(conn, frame)))
-
-	return &atspiWindow{ref: frame, valid: true}, nil
-}
-
-// FrontmostAndPopoverWindows returns the active window (popovers are part of
-// the same AT-SPI tree, so the single-window walk already covers them).
-func (c *ATSPIClient) FrontmostAndPopoverWindows(ctx context.Context) ([]AXWindow, error) {
-	win, err := c.FrontmostWindow(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	w, ok := win.(*atspiWindow)
-	if !ok || !w.valid {
-		return nil, nil
-	}
-
-	return []AXWindow{win}, nil
-}
-
-// AllWindows is not used by hints; return empty rather than erroring.
-func (c *ATSPIClient) AllWindows(_ context.Context) ([]AXWindow, error) {
-	return nil, nil
-}
-
-// ClickableNodes walks the given window for clickable elements.
-func (c *ATSPIClient) ClickableNodes(
-	ctx context.Context,
-	root AXElement,
-	roles []string,
-	_ int,
-) ([]AXNode, error) {
-	win, ok := root.(*atspiWindow)
-	if !ok || !win.valid {
-		return nil, nil
-	}
-
-	conn, err := c.ensureA11yConn()
-	if err != nil {
-		return nil, err
-	}
-
-	start := time.Now()
-
-	offX, offY, fromGNOME := c.activeWindowOrigin()
-
-	// GNOME's AT-SPI zeroes screen-relative x/y, so request window-relative
-	// extents there and add the window origin. KDE keeps screen coords.
-	coord := atspiCoordScreen
-	if fromGNOME {
-		coord = atspiCoordWindow
-	}
-
-	out := make([]AXNode, 0, 128)
-	visited := 0
-	c.walk(ctx, conn, win.ref, rolesSet(roles), 0, &out, &visited, offX, offY, coord)
-
-	c.logger.Debug("AT-SPI clickable walk complete",
-		zap.Int("count", len(out)),
-		zap.Int("visited", visited),
-		zap.Int("offsetX", offX),
-		zap.Int("offsetY", offY),
-		zap.Bool("fromGNOME", fromGNOME),
-		zap.Duration("elapsed", time.Since(start)))
-
-	return out, nil
-}
-
-// activeWindowOrigin resolves the focused window's screen origin used to offset
-// AT-SPI window-relative coordinates into screen space. On GNOME this comes from
-// the Neru Shell extension (Mutter has no KWin scripting); on KDE from the KWin
-// geometry bridge. The GNOME source is tried first and only answers when the
-// extension owns org.neru.ShellOverlay, so KDE/wlroots fall through to KWin. The
-// bool reports specifically whether GNOME supplied the origin, which also
-// selects the AT-SPI coord type (GNOME needs window-relative extents).
-func (c *ATSPIClient) activeWindowOrigin() (int, int, bool) {
-	if rect, ok := linux.GNOMEShellActiveWindowRect(); ok {
-		return rect.Min.X, rect.Min.Y, true
-	}
-
-	x, y, _ := c.kwin.origin()
-
-	return x, y, false
 }
 
 // atspiWindow implements AXWindow for an AT-SPI frame.

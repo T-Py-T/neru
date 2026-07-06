@@ -74,6 +74,7 @@ type Handler struct {
 	grid          *components.GridComponent
 	scroll        *components.ScrollComponent
 	recursiveGrid *components.RecursiveGridComponent
+	monitorSelect *monitorSelectSession
 
 	// Mode implementations
 	modes map[domain.Mode]Mode
@@ -230,6 +231,7 @@ func NewHandler(
 		domain.ModeGrid:          NewGridMode(handler),
 		domain.ModeScroll:        NewScrollMode(handler),
 		domain.ModeRecursiveGrid: NewRecursiveGridMode(handler),
+		domain.ModeMonitorSelect: NewMonitorSelectMode(handler),
 	}
 
 	return handler
@@ -280,6 +282,7 @@ func (h *Handler) RefreshHintsForScreenChange(
 	filterRoles := h.hints.Context.FilterRoles()
 	filterTextContains := h.hints.Context.FilterTextContains()
 	strategyOverride := h.hints.Context.StrategyOverride()
+	labelDirectionOverride := h.hints.Context.LabelDirectionOverride()
 
 	// Generate hints with filters preserved; SetHints below performs the
 	// single redraw after active-screen filtering.
@@ -289,6 +292,7 @@ func (h *Handler) RefreshHintsForScreenChange(
 		filterTextContains,
 		"",
 		strategyOverride,
+		labelDirectionOverride,
 	)
 	if showHintsErr != nil {
 		h.logger.Error("Failed to refresh hints after screen change", zap.Error(showHintsErr))
@@ -471,7 +475,10 @@ func (h *Handler) RefreshHintsForThemeChange() bool {
 		)
 	}
 
-	drawHintsErr := h.renderer.DrawHints(overlayHints)
+	drawHintsErr := h.overlayManager.DrawHintsWithStyle(
+		overlayHints,
+		h.currentHintStyleLocked(),
+	)
 	if drawHintsErr != nil {
 		h.logger.Error("Failed to refresh hints after theme change", zap.Error(drawHintsErr))
 
@@ -610,6 +617,12 @@ func (h *Handler) ResetCurrentMode() {
 				h.logger.Error("Failed to move cursor after recursive-grid reset", zap.Error(err))
 			}
 		}
+	case domain.ModeMonitorSelect:
+		if h.monitorSelect != nil {
+			h.monitorSelect.input = ""
+			h.monitorSelect.selectedIndex = 0
+			h.redrawMonitorSelectLocked()
+		}
 	case domain.ModeIdle, domain.ModeHints, domain.ModeScroll:
 		// no-op
 	}
@@ -665,6 +678,11 @@ func (h *Handler) BackspaceCurrentMode() {
 					zap.Error(err),
 				)
 			}
+		}
+	case domain.ModeMonitorSelect:
+		if h.monitorSelect != nil {
+			h.monitorSelect.Backspace()
+			h.redrawMonitorSelectLocked()
 		}
 	case domain.ModeIdle, domain.ModeScroll:
 		// no-op
@@ -750,6 +768,7 @@ func (h *Handler) CycleHint(ctx context.Context, backward bool) error {
 		filterTextContains := h.hints.Context.FilterTextContains()
 		startWithSearch := h.hints.Context.StartWithSearch()
 		strategyOverride := h.hints.Context.StrategyOverride()
+		labelDirectionOverride := h.hints.Context.LabelDirectionOverride()
 
 		h.executeActionAtPoint(pendingAction, center, true, func() {
 			h.activateHintModeInternal(
@@ -759,6 +778,7 @@ func (h *Handler) CycleHint(ctx context.Context, backward bool) error {
 				filterTextContains,
 				&startWithSearch,
 				&strategyOverride,
+				&labelDirectionOverride,
 			)
 
 			// Restore state so subsequent cycles continue to execute the action
@@ -771,6 +791,7 @@ func (h *Handler) CycleHint(ctx context.Context, backward bool) error {
 				h.hints.Context.SetFilterTextContains(filterTextContains)
 				h.hints.Context.SetStartWithSearch(startWithSearch)
 				h.hints.Context.SetStrategyOverride(strategyOverride)
+				h.hints.Context.SetLabelDirectionOverride(labelDirectionOverride)
 			}
 		})
 	}

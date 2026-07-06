@@ -119,7 +119,6 @@ func (o *wlrootsOverlay) ClearRect(rect image.Rectangle) {
 			C.double(rect.Dx()),
 			C.double(rect.Dy()),
 		)
-		C.neru_wayland_overlay_flush(o.raw)
 	}
 }
 
@@ -271,6 +270,12 @@ func (o *wlrootsOverlay) DrawBadge(
 
 	o.drawRect(rect, colors.background, colors.border, max(style.borderWidth, 1))
 	o.drawTextCentered(text, rect, style.fontFamily, fontSize, colors.text)
+}
+
+func (o *wlrootsOverlay) Flush() {
+	if o == nil || o.raw == nil {
+		return
+	}
 	C.neru_wayland_overlay_flush(o.raw)
 }
 
@@ -356,7 +361,13 @@ func (o *wlrootsOverlay) keyboardPoller() {
 			o.displayMu.Lock()
 		}
 
-		C.neru_wayland_overlay_poll(o.raw) //nolint:nlreturn
+		if C.neru_wayland_overlay_poll(o.raw) < 0 { //nolint:nlreturn
+			if o.displayMu != nil {
+				o.displayMu.Unlock()
+			}
+
+			return
+		}
 
 		for {
 			key := C.neru_wayland_overlay_get_key(o.raw) //nolint:nlreturn

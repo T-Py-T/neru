@@ -31,6 +31,20 @@ const (
 	kwinScriptingDest  = "org.kde.KWin"
 	kwinScriptingPath  = "/Scripting"
 	kwinScriptingIface = "org.kde.kwin.Scripting"
+
+	// UpdateActiveWindow payload is "x,y,w,h,resourceClass": up to 5 fields,
+	// with the geometry minimum being the first 4 (resourceClass is optional).
+	kwinGeometryPayloadParts = 5
+	kwinGeometryMinParts     = 4
+
+	// KWin geometry script is only readable/writable by the owner.
+	kwinScriptFileMode = 0o600
+
+	// kwinOriginSizeTolerance is the max per-dimension difference (px) allowed
+	// between the cached KWin client geometry and the AT-SPI frame extents
+	// before the cached origin is considered stale. Qt apps match exactly;
+	// GTK client-side decorations can differ by a titlebar's worth of pixels.
+	kwinOriginSizeTolerance = 32
 )
 
 // kwinGeometryScript is loaded into KWin. It reports the focused window's
@@ -99,43 +113,72 @@ func newKWinBridge(logger *zap.Logger) *kwinBridge {
 // payload is "x,y,w,h,resourceClass" (single string to avoid KWin number
 // marshaling quirks).
 func (b *kwinBridge) UpdateActiveWindow(payload string) *dbus.Error {
-	parts := strings.SplitN(payload, ",", 5)
-	if len(parts) < 4 {
+	parts := strings.SplitN(payload, ",", kwinGeometryPayloadParts)
+	if len(parts) < kwinGeometryMinParts {
 		return nil
 	}
 
-	x, errX := strconv.Atoi(strings.TrimSpace(parts[0]))
-	y, errY := strconv.Atoi(strings.TrimSpace(parts[1]))
-	w, errW := strconv.Atoi(strings.TrimSpace(parts[2]))
-	h, errH := strconv.Atoi(strings.TrimSpace(parts[3]))
+	originX, errX := strconv.Atoi(strings.TrimSpace(parts[0]))
+	originY, errY := strconv.Atoi(strings.TrimSpace(parts[1]))
+	width, errW := strconv.Atoi(strings.TrimSpace(parts[2]))
+	height, errH := strconv.Atoi(strings.TrimSpace(parts[3]))
 
 	if errX != nil || errY != nil || errW != nil || errH != nil {
-		return nil
+		return nil //nolint:nilerr // best-effort: malformed payloads are ignored, not surfaced to KWin.
 	}
 
 	cls := ""
-	if len(parts) == 5 {
+	if len(parts) == kwinGeometryPayloadParts {
 		cls = parts[4]
 	}
 
 	b.mu.Lock()
-	b.x, b.y, b.w, b.h, b.cls, b.valid = x, y, w, h, cls, true
+	b.x, b.y, b.w, b.h, b.cls, b.valid = originX, originY, width, height, cls, true
 	b.mu.Unlock()
 
 	b.logger.Debug("KWin active window geometry",
-		zap.Int("x", x), zap.Int("y", y),
-		zap.Int("w", w), zap.Int("h", h),
+		zap.Int("x", originX), zap.Int("y", originY),
+		zap.Int("w", width), zap.Int("h", height),
 		zap.String("cls", cls))
 
 	return nil
 }
 
-// origin returns the cached focused-window screen origin.
-func (b *kwinBridge) origin() (int, int, bool) {
+// originFor returns the cached origin only when the cached client size matches
+// the given AT-SPI frame size within kwinOriginSizeTolerance. The cache is fed
+// by KWin focus events; if KWin missed a transition (or deliberately ignored a
+// transient surface that became the active AT-SPI frame) the cached origin
+// belongs to a different window, and offsetting by it would land every hint at
+// the previous window's screen position. A size mismatch is the cheapest
+// reliable staleness signal, so callers then fall back to unoffset
+// (window-relative) coordinates.
+func (b *kwinBridge) originFor(frameW, frameH int) (int, int, bool) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	return b.x, b.y, b.valid
+	if !b.valid {
+		return 0, 0, false
+	}
+
+	if absInt(b.w-frameW) > kwinOriginSizeTolerance ||
+		absInt(b.h-frameH) > kwinOriginSizeTolerance {
+		b.logger.Debug("KWin origin rejected: cached size does not match AT-SPI frame",
+			zap.Int("cachedW", b.w), zap.Int("cachedH", b.h),
+			zap.Int("frameW", frameW), zap.Int("frameH", frameH),
+			zap.String("cachedClass", b.cls))
+
+		return 0, 0, false
+	}
+
+	return b.x, b.y, true
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+
+	return v
 }
 
 // start exports the D-Bus receiver and installs the KWin script. It is
@@ -149,7 +192,8 @@ func (b *kwinBridge) start() {
 		return
 	}
 
-	if exportErr := conn.Export(b, dbus.ObjectPath(kwinBridgePath), kwinBridgeIface); exportErr != nil {
+	exportErr := conn.Export(b, dbus.ObjectPath(kwinBridgePath), kwinBridgeIface)
+	if exportErr != nil {
 		b.logger.Warn("KWin bridge: export failed", zap.Error(exportErr))
 
 		return
@@ -163,7 +207,8 @@ func (b *kwinBridge) start() {
 		// instance relinquishes the name.
 	}
 
-	if installErr := b.installScript(conn); installErr != nil {
+	installErr := b.installScript(conn)
+	if installErr != nil {
 		b.logger.Warn("KWin bridge: script install failed", zap.Error(installErr))
 
 		return
@@ -180,7 +225,9 @@ func (b *kwinBridge) installScript(conn *dbus.Conn) error {
 	}
 
 	path := filepath.Join(dir, "neru-kwin-geometry.js")
-	if writeErr := os.WriteFile(path, []byte(kwinGeometryScript), 0o600); writeErr != nil {
+
+	writeErr := os.WriteFile(path, []byte(kwinGeometryScript), kwinScriptFileMode)
+	if writeErr != nil {
 		return writeErr
 	}
 
@@ -190,11 +237,14 @@ func (b *kwinBridge) installScript(conn *dbus.Conn) error {
 	_ = obj.Call(kwinScriptingIface+".unloadScript", 0, path).Err
 
 	var id int32
-	if loadErr := obj.Call(kwinScriptingIface+".loadScript", 0, path).Store(&id); loadErr != nil {
+
+	loadErr := obj.Call(kwinScriptingIface+".loadScript", 0, path).Store(&id)
+	if loadErr != nil {
 		return fmt.Errorf("loadScript: %w", loadErr)
 	}
 
-	if startErr := obj.Call(kwinScriptingIface+".start", 0).Err; startErr != nil {
+	startErr := obj.Call(kwinScriptingIface+".start", 0).Err
+	if startErr != nil {
 		return fmt.Errorf("start: %w", startErr)
 	}
 

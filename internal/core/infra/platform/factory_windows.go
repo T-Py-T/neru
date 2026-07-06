@@ -12,14 +12,20 @@ func NewSystemPort() (ports.SystemPort, error) {
 	return windows.NewSystemAdapter(), nil
 }
 
-// ShowConfigOnboardingAlert is a stub on Windows.
-func ShowConfigOnboardingAlert(_ string) int {
-	return ConfigOnboardingDefaults
+// NewFontResolver returns a Windows-backed FontResolver that maps generic
+// aliases to native Windows font families.
+func NewFontResolver() ports.FontResolver {
+	return windows.NewFontResolver()
 }
 
-// ShowConfigValidationErrorAlert is a stub on Windows.
-func ShowConfigValidationErrorAlert(_, _ string) int {
-	return ConfigValidationOK
+// ShowConfigOnboardingAlert displays a native Windows dialog for new users without a config file.
+func ShowConfigOnboardingAlert(configPath string) int {
+	return windows.ShowConfigOnboardingAlert(configPath)
+}
+
+// ShowConfigValidationErrorAlert displays a native Windows dialog for config validation errors.
+func ShowConfigValidationErrorAlert(errorMessage, configPath string) int {
+	return windows.ShowConfigValidationErrorAlert(errorMessage, configPath)
 }
 
 // CheckAccessibilityPermissions is always true on Windows for startup gating.
