@@ -138,10 +138,27 @@ func (b *kwinBridge) origin() (int, int, bool) {
 	return b.x, b.y, b.valid
 }
 
+// kwinBridgeShouldRun reports whether the KWin geometry bridge applies to the
+// current session. The bridge drives org.kde.KWin, which only exists under KDE
+// Plasma. On other compositors (COSMIC, GNOME, wlroots) the script load fails
+// with a cosmetic "loadScript: The name is not activatable" warning and burns
+// a D-Bus activation round-trip at startup, so skip it entirely there.
+// Mirrors the KDE detection in platform.detectLinuxBackendFromEnv.
+func kwinBridgeShouldRun() bool {
+	desktop := strings.ToUpper(os.Getenv("XDG_CURRENT_DESKTOP"))
+	return strings.Contains(desktop, "KDE")
+}
+
 // start exports the D-Bus receiver and installs the KWin script. It is
 // best-effort: failures are logged and hints simply fall back to unoffset
 // (window-relative) coordinates.
 func (b *kwinBridge) start() {
+	if !kwinBridgeShouldRun() {
+		b.logger.Debug("KWin bridge: skipping, not a KDE session")
+
+		return
+	}
+
 	conn, err := dbus.SessionBus()
 	if err != nil {
 		b.logger.Warn("KWin bridge: no session bus", zap.Error(err))
