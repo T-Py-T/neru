@@ -1,0 +1,116 @@
+#ifndef OVERLAY_WAYLAND_H
+#define OVERLAY_WAYLAND_H
+
+#include "common_defs.h"
+
+#include <cairo/cairo.h>
+#include <stddef.h>
+#include <wayland-client.h>
+#include <xkbcommon/xkbcommon.h>
+
+#define NERU_KEY_RING_CAP 32
+#define NERU_NUM_BUFFERS 3
+
+typedef struct {
+	uint32_t registry_name;  // wl_registry global id, for matching on output removal
+	int x, y, width, height;
+	int scale;  // legacy integer wl_output.scale (fallback when no fractional-scale)
+	// fractional_scale_120 is the compositor's preferred scale as a numerator over
+	// 120 (e.g. 180 == 1.5x), from wp_fractional_scale_v1. 0 means not received; the
+	// integer `scale` path is used until it arrives.
+	int fractional_scale_120;
+	struct wl_output *wl_output;
+	struct zxdg_output_v1 *xdg_output;
+	struct wp_viewport *viewport;                     // scales the over-rendered buffer to logical size
+	struct wp_fractional_scale_v1 *fractional_scale;  // per-surface preferred-scale source
+
+	struct wl_surface *wl_surface;
+	struct zwlr_layer_surface_v1 *layer_surface;
+
+	// Current buffer (pointers updated by select_buffer, avoids changing all C functions)
+	struct wl_buffer *buffer;
+	cairo_surface_t *cairo_surface;
+	cairo_t *cr;
+	void *shm_data;
+	size_t shm_size;
+
+	// Double-buffered buffer pool
+	struct wl_buffer *buffers[NERU_NUM_BUFFERS];
+	cairo_surface_t *cairo_surfaces[NERU_NUM_BUFFERS];
+	cairo_t *crs[NERU_NUM_BUFFERS];
+	void *shm_datas[NERU_NUM_BUFFERS];
+	size_t shm_sizes[NERU_NUM_BUFFERS];
+	int busy[NERU_NUM_BUFFERS];
+	int num_buffers;
+	int current_buffer;
+} NeruWaylandOverlayScreen;
+
+typedef struct {
+	char keys[NERU_KEY_RING_CAP][256];
+	int head;
+	int tail;
+	int count;
+} NeruWaylandKeyRing;
+
+typedef struct {
+	struct wl_display *display;
+	struct wl_registry *registry;
+	struct wl_compositor *compositor;
+	struct wl_shm *shm;
+	struct zxdg_output_manager_v1 *xdg_output_mgr;
+	struct zwlr_layer_shell_v1 *layer_shell;
+	struct wp_viewporter *viewporter;                       // NULL when compositor lacks wp_viewporter
+	struct wp_fractional_scale_manager_v1 *fractional_mgr;  // NULL when compositor lacks fractional-scale
+	struct wl_seat *wl_seat;
+	struct wl_keyboard *wl_keyboard;
+
+	struct xkb_context *xkb_ctx;
+	struct xkb_state *xkb_state;
+
+	NeruWaylandOverlayScreen screens[NERU_MAX_OUTPUTS];
+	int nr_screens;
+
+	// Set once neru_wayland_overlay_new has wired xdg_output for the initial
+	// outputs; afterwards a hotplug-added wl_output wires its own xdg_output
+	// inline in the registry handler rather than the bulk setup loop.
+	int outputs_configured;
+
+	int configured;
+	int keyboard_interactivity_set;
+
+	int event_fd;
+	int running;
+
+	NeruWaylandKeyRing key_ring;
+} NeruWaylandOverlay;
+
+NeruWaylandOverlay *neru_wayland_overlay_new(void);
+void neru_wayland_overlay_destroy(NeruWaylandOverlay *overlay);
+void neru_wayland_overlay_setup_buffers(NeruWaylandOverlay *overlay);
+void neru_wayland_overlay_show(NeruWaylandOverlay *overlay);
+void neru_wayland_overlay_hide(NeruWaylandOverlay *overlay);
+void neru_wayland_overlay_set_keyboard_capture(NeruWaylandOverlay *overlay, int enabled);
+void neru_wayland_overlay_clear(NeruWaylandOverlay *overlay);
+void neru_wayland_overlay_clear_rect(NeruWaylandOverlay *overlay, double x, double y, double width, double height);
+void neru_wayland_overlay_flush(NeruWaylandOverlay *overlay);
+void neru_wayland_overlay_sync(NeruWaylandOverlay *overlay);
+void neru_wayland_overlay_select_buffer(NeruWaylandOverlay *overlay, int index);
+int neru_wayland_overlay_available_buffer(NeruWaylandOverlay *overlay);
+void neru_wayland_overlay_dispatch_pending(NeruWaylandOverlay *overlay);
+void neru_wayland_overlay_rect(
+    NeruWaylandOverlay *overlay, double x, double y, double width, double height, unsigned int fill,
+    unsigned int stroke, double stroke_width);
+void neru_wayland_overlay_rounded_rect(
+    NeruWaylandOverlay *overlay, double x, double y, double width, double height, double radius, unsigned int fill,
+    unsigned int stroke, double stroke_width);
+void neru_wayland_overlay_hint_badge(
+    NeruWaylandOverlay *overlay, double x, double y, double width, double height, double radius, int edge,
+    double a_left, double a_right, double tip_x, double tip_y, unsigned int fill, unsigned int stroke,
+    double stroke_width);
+void neru_wayland_overlay_text(
+    NeruWaylandOverlay *overlay, const char *text, const char *font_family, double x, double y, double font_size,
+    unsigned int color, int bold);
+int neru_wayland_overlay_poll(NeruWaylandOverlay *overlay);
+const char *neru_wayland_overlay_get_key(NeruWaylandOverlay *overlay);
+
+#endif /* OVERLAY_WAYLAND_H */

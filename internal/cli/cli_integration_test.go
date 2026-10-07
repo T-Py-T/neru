@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/y3owk1n/neru/internal/core/infra/ipc"
-	"github.com/y3owk1n/neru/internal/core/infra/logger"
+	"github.com/y3owk1n/neru/internal/adapter/ipc"
+	"github.com/y3owk1n/neru/internal/adapter/logger"
 )
 
 const (
@@ -63,10 +63,6 @@ func newMockAppState() *mockAppState {
 
 // TestCLIIntegration tests IPC communication with real infrastructure.
 func TestCLIIntegration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
 	logger := logger.Get()
 	appState := newMockAppState()
 

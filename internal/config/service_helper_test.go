@@ -1,4 +1,3 @@
-//nolint:testpackage // Tests private service helper methods.
 package config
 
 import (
@@ -42,9 +41,9 @@ func TestFindNormalizedMapKey_Bindings(t *testing.T) {
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := findNormalizedMapKey(bindings, testCase.rawKey)
+			got := FindNormalizedMapKey(bindings, testCase.rawKey)
 			if got != testCase.expected {
-				t.Errorf("findNormalizedMapKey(%q) = %q, want %q",
+				t.Errorf("FindNormalizedMapKey(%q) = %q, want %q",
 					testCase.rawKey, got, testCase.expected)
 			}
 		})
@@ -98,9 +97,9 @@ func TestFindNormalizedMapKey_SOSA(t *testing.T) {
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := findNormalizedMapKey(_map, testCase.rawKey)
+			got := FindNormalizedMapKey(_map, testCase.rawKey)
 			if got != testCase.expected {
-				t.Errorf("findNormalizedMapKey(%q) = %q, want %q",
+				t.Errorf("FindNormalizedMapKey(%q) = %q, want %q",
 					testCase.rawKey, got, testCase.expected)
 			}
 		})

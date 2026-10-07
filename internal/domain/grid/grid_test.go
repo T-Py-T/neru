@@ -1,0 +1,407 @@
+package grid_test
+
+import (
+	"image"
+	"strings"
+	"testing"
+
+	"github.com/y3owk1n/neru/internal/adapter/logger"
+	"github.com/y3owk1n/neru/internal/domain"
+	"github.com/y3owk1n/neru/internal/domain/grid"
+)
+
+const testCharacters = "ABC"
+
+func TestGrid_CellByCoordinate(t *testing.T) {
+	logger := logger.Get()
+	grid := grid.NewGrid("ABC", image.Rect(0, 0, 300, 300), logger)
+
+	cells := grid.AllCells()
+	if len(cells) == 0 {
+		t.Fatal("Expected cells to be generated")
+	}
+
+	validCoordinate := cells[0].Coordinate()
+
+	tests := []struct {
+		name  string
+		coord string
+		want  bool // exists
+	}{
+		{"valid " + validCoordinate, validCoordinate, true},
+		{"invalid ZZZ", "ZZZ", false},
+		{"lowercase coordinate", strings.ToLower(validCoordinate), true},
+		{"empty coordinate", "", false},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			cell := grid.CellByCoordinate(testCase.coord)
+			if (cell != nil) != testCase.want {
+				t.Errorf(
+					"CellByCoordinate(%q) exists = %v, want %v",
+					testCase.coord,
+					cell != nil,
+					testCase.want,
+				)
+			}
+		})
+	}
+}
+
+func TestGrid_InvalidBounds(t *testing.T) {
+	logger := logger.Get()
+
+	// Test with zero width
+	gridInstance := grid.NewGrid("ABC", image.Rect(0, 0, 0, 100), logger)
+	if len(gridInstance.Cells()) != 0 {
+		t.Error("Expected empty cells for zero width")
+	}
+
+	// Test with zero height
+	gridInstance = grid.NewGrid("ABC", image.Rect(0, 0, 100, 0), logger)
+	if len(gridInstance.Cells()) != 0 {
+		t.Error("Expected empty cells for zero height")
+	}
+
+	// Test with negative dimensions (image.Rect normalizes this to positive dimensions)
+	// So this actually creates a valid grid. Let's test with truly invalid bounds
+	gridInstance = grid.NewGrid("ABC", image.Rect(100, 100, 100, 100), logger) // Zero width/height
+	if len(gridInstance.Cells()) != 0 {
+		t.Errorf(
+			"Expected empty cells for zero dimensions, got %d cells",
+			len(gridInstance.Cells()),
+		)
+	}
+}
+
+func TestGrid_EmptyCharacters(t *testing.T) {
+	logger := logger.Get()
+	bounds := image.Rect(0, 0, 300, 300)
+	fallback := strings.ToUpper(grid.DefaultCharacters)
+
+	// Empty characters should default to the fallback alphabet
+	gridInstance := grid.NewGrid("", bounds, logger)
+	if gridInstance.Characters() != fallback {
+		t.Errorf(
+			"Empty characters should default to alphabet, got %q",
+			gridInstance.Characters(),
+		)
+	}
+
+	// Single character should also default
+	gridInstance = grid.NewGrid("A", bounds, logger)
+	if gridInstance.Characters() != fallback {
+		t.Errorf(
+			"Single character should default to alphabet, got %q",
+			gridInstance.Characters(),
+		)
+	}
+}
+
+// TestGrid_RepeatedCharactersLabelOnce pins what a coordinate set that lists a
+// character twice builds: the grid the distinct characters build. A repeat used
+// to widen the alphabet the labeling pass counted on, which drew coordinates
+// twice over and left every cell past the first one carrying them unreachable —
+// `characters = "aab"` put 16 different cells under `AAAA`.
+func TestGrid_RepeatedCharactersLabelOnce(t *testing.T) {
+	log := logger.Get()
+	bounds := image.Rect(0, 0, 1000, 800)
+
+	repeated := grid.NewGrid("aab", bounds, log)
+	distinct := grid.NewGrid("ab", bounds, log)
+
+	if repeated.Characters() != distinct.Characters() {
+		t.Errorf(
+			"Characters() = %q, want %q — the repeat is not a character",
+			repeated.Characters(), distinct.Characters(),
+		)
+	}
+
+	if len(repeated.Cells()) != len(distinct.Cells()) {
+		t.Errorf(
+			"a grid built from %q has %d cells, one built from %q has %d",
+			"aab", len(repeated.Cells()), "ab", len(distinct.Cells()),
+		)
+	}
+}
+
+// TestGrid_RepeatsCanLeaveTooFewCharacters covers the floor the dedupe lands on:
+// a set that is only repeats has one distinct character, which cannot label a
+// grid at all, so it falls back like any other set too short to label with.
+func TestGrid_RepeatsCanLeaveTooFewCharacters(t *testing.T) {
+	gridInstance := grid.NewGrid("aA", image.Rect(0, 0, 300, 300), logger.Get())
+
+	if want := strings.ToUpper(grid.DefaultCharacters); gridInstance.Characters() != want {
+		t.Errorf("Characters() = %q, want the fallback %q", gridInstance.Characters(), want)
+	}
+}
+
+func TestGrid_WithCustomLabels(t *testing.T) {
+	logger := logger.Get()
+	bounds := image.Rect(0, 0, 300, 300)
+
+	gridInstance := grid.NewGridWithLabels(testCharacters, "123", "XYZ", bounds, logger)
+
+	if gridInstance.Characters() != testCharacters {
+		t.Errorf("Characters() = %q, want %q", gridInstance.Characters(), testCharacters)
+	}
+
+	validChars := gridInstance.ValidCharacters()
+
+	expectedChars := "ABC123XYZ"
+	for _, r := range expectedChars {
+		if !strings.ContainsRune(validChars, r) {
+			t.Errorf("ValidCharacters() missing %c, got %q", r, validChars)
+		}
+	}
+
+	cells := gridInstance.Cells()
+	if len(cells) == 0 {
+		t.Fatal("No cells generated")
+	}
+
+	foundLabels := make(map[string]bool)
+	for _, cell := range cells {
+		if foundLabels[cell.Coordinate()] {
+			t.Errorf("Duplicate coordinate found: %s", cell.Coordinate())
+		}
+
+		foundLabels[cell.Coordinate()] = true
+	}
+
+	// Should have unique coordinates for all cells
+	if len(foundLabels) != len(cells) {
+		t.Errorf("Expected %d unique coordinates, got %d", len(cells), len(foundLabels))
+	}
+}
+
+func TestGrid_CustomLabelsWithSymbols(t *testing.T) {
+	logger := logger.Get()
+	bounds := image.Rect(0, 0, 500, 500)
+
+	characters := "AOEUIDHTNSPYFGKXBM"
+	rowLabels := "',.PYFGCRL/AOEUIDHTNS-;QJKXBMWVZ="
+	colLabels := "AOEUIDHTNS"
+
+	gridInstance := grid.NewGridWithLabels(characters, rowLabels, colLabels, bounds, logger)
+
+	validChars := gridInstance.ValidCharacters()
+
+	expectedSymbols := "',./-;=QJKXBMWVZPYFGCRL"
+	for _, r := range expectedSymbols {
+		if !strings.ContainsRune(validChars, r) {
+			t.Errorf("ValidCharacters() missing symbol %c, got %q", r, validChars)
+		}
+	}
+
+	cells := gridInstance.Cells()
+
+	coordMap := make(map[string]bool)
+	for _, cell := range cells {
+		coord := cell.Coordinate()
+		if coordMap[coord] {
+			t.Errorf("Duplicate coordinate: %s", coord)
+		}
+
+		coordMap[coord] = true
+
+		// Verify coordinate uses valid characters
+		for _, r := range coord {
+			if !strings.ContainsRune(validChars, r) {
+				t.Errorf("Coordinate %s contains invalid character %c", coord, r)
+			}
+		}
+	}
+}
+
+func TestGrid_BackwardCompatibility(t *testing.T) {
+	logger := logger.Get()
+	bounds := image.Rect(0, 0, 300, 300)
+
+	// Test that old NewGrid still works (empty row/col labels)
+	gridInstance := grid.NewGrid(testCharacters, bounds, logger)
+
+	if gridInstance.Characters() != testCharacters {
+		t.Errorf("Characters() = %q, want %q", gridInstance.Characters(), testCharacters)
+	}
+
+	// ValidCharacters should be same as Characters when no custom labels
+	if gridInstance.ValidCharacters() != gridInstance.Characters() {
+		t.Errorf(
+			"ValidCharacters() = %q, want %q",
+			gridInstance.ValidCharacters(),
+			gridInstance.Characters(),
+		)
+	}
+
+	// Should have unique coordinates
+	cells := gridInstance.Cells()
+
+	coordMap := make(map[string]bool)
+	for _, cell := range cells {
+		if coordMap[cell.Coordinate()] {
+			t.Errorf("Duplicate coordinate: %s", cell.Coordinate())
+		}
+
+		coordMap[cell.Coordinate()] = true
+	}
+}
+
+// TestGrid_MaxLabelLengthCapsCoarseSelection pins the issue #1536 workflow:
+// the main region is selected in at most two keypresses, then the existing
+// subgrid supplies the local refinement key. The two grids deliberately share
+// every cache input except the label limit, so this also catches a cache key
+// that would return the old geometry after a config change.
+func TestGrid_MaxLabelLengthCapsCoarseSelection(t *testing.T) {
+	bounds := image.Rect(0, 0, 1920, 1080)
+	log := logger.Get()
+
+	automatic := grid.NewGrid(grid.DefaultCharacters, bounds, log)
+	if got := len(automatic.Cells()[0].Coordinate()); got <= grid.LabelLength2 {
+		t.Fatalf("automatic label length = %d, want more than 2 for this fixture", got)
+	}
+
+	limited := grid.NewGridWithOptions(grid.Options{
+		Characters:     grid.DefaultCharacters,
+		MaxLabelLength: grid.LabelLength2,
+	}, bounds, log)
+
+	for _, cell := range limited.Cells() {
+		if got := len(cell.Coordinate()); got != grid.LabelLength2 {
+			t.Fatalf("coordinate %q has length %d, want 2", cell.Coordinate(), got)
+		}
+
+		aspect := float64(cell.Bounds().Dx()) / float64(cell.Bounds().Dy())
+		if aspect < 0.9 || aspect > 1.1 {
+			t.Fatalf("cell %q aspect ratio = %.2f, want near-square", cell.Coordinate(), aspect)
+		}
+	}
+
+	if covered := assertCellsAbut(t, limited.Cells()); covered != bounds.Dx()*bounds.Dy() {
+		t.Fatalf(
+			"two-key cells cover %d pixels, want the full %d",
+			covered,
+			bounds.Dx()*bounds.Dy(),
+		)
+	}
+
+	bottomRight := image.Point{X: bounds.Max.X - 1, Y: bounds.Max.Y - 1}
+	if cell := limited.CellForPoint(bottomRight); cell == nil {
+		t.Fatalf("two-key grid does not cover bottom-right point %v", bottomRight)
+	}
+
+	assertGridPrefixesFormRectangles(t, limited.Cells())
+
+	var selected *grid.Cell
+
+	manager := grid.NewManager(
+		limited,
+		domain.GridDimensions{Rows: 3, Cols: 3},
+		"asdfghjkl",
+		nil,
+		func(cell *grid.Cell) { selected = cell },
+		log,
+	)
+
+	for _, key := range limited.Cells()[0].Coordinate() {
+		if _, complete := manager.HandleInput(string(key)); complete {
+			t.Fatal("coarse selection completed before local refinement")
+		}
+	}
+
+	if selected == nil {
+		t.Fatal("two-key coordinate did not open the local refinement subgrid")
+	}
+
+	if _, complete := manager.HandleInput("a"); !complete {
+		t.Fatal("subgrid key did not complete the refined selection")
+	}
+}
+
+// assertGridPrefixesFormRectangles keeps the first key spatially meaningful:
+// every cell sharing it forms one solid coarse region rather than scattered
+// cells that merely happen to have square final geometry.
+func assertGridPrefixesFormRectangles(t *testing.T, cells []*grid.Cell) {
+	t.Helper()
+
+	type region struct {
+		bounds image.Rectangle
+		area   int
+	}
+
+	regions := make(map[byte]region)
+	for _, cell := range cells {
+		prefix := cell.Coordinate()[0]
+
+		current, exists := regions[prefix]
+		if !exists {
+			current.bounds = cell.Bounds()
+		} else {
+			current.bounds = current.bounds.Union(cell.Bounds())
+		}
+
+		current.area += cell.Bounds().Dx() * cell.Bounds().Dy()
+		regions[prefix] = current
+	}
+
+	for prefix, region := range regions {
+		if want := region.bounds.Dx() * region.bounds.Dy(); region.area != want {
+			t.Errorf(
+				"prefix %q covers %d pixels inside a %d-pixel bounding box; want one rectangle",
+				prefix,
+				region.area,
+				want,
+			)
+		}
+	}
+}
+
+func TestGrid_HasCoordinatePrefix(t *testing.T) {
+	logger := logger.Get()
+	bounds := image.Rect(0, 0, 300, 300)
+
+	grid1 := grid.NewGrid(testCharacters, bounds, logger)
+
+	cells := grid1.Cells()
+	if len(cells) == 0 {
+		t.Fatal("Grid should have cells")
+	}
+
+	sampleCoord := cells[0].Coordinate()
+	if len(sampleCoord) < 2 {
+		t.Fatalf("Expected coordinate length >= 2, got %d", len(sampleCoord))
+	}
+
+	for i := 1; i <= len(sampleCoord); i++ {
+		prefix := sampleCoord[:i]
+		if !grid1.HasCoordinatePrefix(prefix) {
+			t.Errorf(
+				"HasCoordinatePrefix(%q) should be true for coordinate %q",
+				prefix,
+				sampleCoord,
+			)
+		}
+	}
+
+	if grid1.HasCoordinatePrefix("INVALID") {
+		t.Error("HasCoordinatePrefix should return false for invalid prefix")
+	}
+
+	grid2 := grid.NewGrid(testCharacters, bounds, logger)
+
+	for i := 1; i <= len(sampleCoord); i++ {
+		prefix := sampleCoord[:i]
+		if !grid2.HasCoordinatePrefix(prefix) {
+			t.Errorf(
+				"HasCoordinatePrefix(%q) should be true on cached grid for coordinate %q",
+				prefix,
+				sampleCoord,
+			)
+		}
+	}
+
+	if grid2.HasCoordinatePrefix("INVALID") {
+		t.Error("HasCoordinatePrefix should return false for invalid prefix on cached grid")
+	}
+}

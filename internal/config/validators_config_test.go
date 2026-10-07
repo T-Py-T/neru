@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"math"
 	"testing"
 
 	"github.com/y3owk1n/neru/internal/config"
@@ -26,6 +27,21 @@ func TestConfigValidateHotkeys_Valid(t *testing.T) {
 	}
 }
 
+// "run" carries its own steps as quoted arguments, so a binding that uses it
+// has to validate like any other command rather than being rejected as
+// unknown.
+func TestConfigValidateHotkeys_RunSequence(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Hints.Hotkeys["Enter"] = config.StringOrStringArray{
+		"run 'action left_click' 'action sleep 0.2' 'action restore_cursor_pos'",
+	}
+
+	err := cfg.ValidateHotkeys()
+	if err != nil {
+		t.Fatalf("ValidateHotkeys() unexpected error: %v", err)
+	}
+}
+
 func TestConfigValidateHotkeys_AppOverridePrefixConflict(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Hints.Hotkeys["gg"] = config.StringOrStringArray{config.CmdLeftClick}
@@ -41,6 +57,24 @@ func TestConfigValidateHotkeys_AppOverridePrefixConflict(t *testing.T) {
 	err := cfg.ValidateHotkeys()
 	if err == nil {
 		t.Fatal("ValidateHotkeys() expected merged app override prefix conflict, got nil")
+	}
+}
+
+func TestConfigValidateHotkeys_BisectAppOverridePrefixConflict(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Bisect.AppConfigs = []config.AppConfig{
+		{
+			BundleID: TestBundleIDSafari,
+			Hotkeys: map[string]config.StringOrStringArray{
+				// Shadowed by the inherited single-key "y" binding.
+				"yu": {config.CmdLeftClick},
+			},
+		},
+	}
+
+	err := cfg.ValidateHotkeys()
+	if err == nil {
+		t.Fatal("ValidateHotkeys() expected merged bisect app override prefix conflict, got nil")
 	}
 }
 
@@ -159,63 +193,49 @@ func TestConfigValidateHints_DuplicateHintChars(t *testing.T) {
 
 	cfg.Hints.HintCharacters = "ab"
 
-	err := cfg.ValidateHints()
+	err := cfg.ValidateHints(nil)
 	if err != nil {
 		t.Fatalf("ValidateHints() unexpected error for unique chars: %v", err)
 	}
 
 	cfg.Hints.HintCharacters = "aab"
 
-	err = cfg.ValidateHints()
+	err = cfg.ValidateHints(nil)
 	if err == nil {
 		t.Fatal("ValidateHints() expected error for duplicate hint_characters")
 	}
 
 	cfg.Hints.HintCharacters = "aba"
 
-	err = cfg.ValidateHints()
+	err = cfg.ValidateHints(nil)
 	if err == nil {
 		t.Fatal("ValidateHints() expected error for duplicate hint_characters (non-adjacent)")
 	}
 
 	cfg.Hints.HintCharacters = "aA"
 
-	err = cfg.ValidateHints()
+	err = cfg.ValidateHints(nil)
 	if err == nil {
 		t.Fatal("ValidateHints() expected error for case-insensitive duplicate hint_characters")
 	}
 }
 
-func TestConfigValidateHints_AsciiHintChars(t *testing.T) {
-	cfg := config.DefaultConfig()
-
-	cfg.Hints.HintCharacters = "ab"
-
-	err := cfg.ValidateHints()
-	if err != nil {
-		t.Fatalf("ValidateHints() unexpected error: %v", err)
-	}
-
-	cfg.Hints.HintCharacters = "aé"
-
-	err = cfg.ValidateHints()
-	if err == nil {
-		t.Fatal("ValidateHints() expected error for non-ASCII hint_characters")
-	}
-}
-
+// TestConfigValidateVirtualPointer pins the refusals. The default char is a
+// multi-byte rune, so validBase already proves the validator counts one rune
+// as one character, not by its bytes.
 func TestConfigValidateVirtualPointer(t *testing.T) {
-	cfg := config.DefaultConfig()
+	for _, char := range []string{"", "ab"} {
+		cfg := validBase(t)
+		cfg.VirtualPointer.UI.Char = char
 
-	err := cfg.ValidateVirtualPointer()
-	if err != nil {
-		t.Fatalf("ValidateVirtualPointer() unexpected error: %v", err)
+		assertRejected(t, cfg.ValidateVirtualPointer(), "virtual_pointer.ui.char", char)
 	}
 
-	cfg.VirtualPointer.UI.Size = 0
-
-	err = cfg.ValidateVirtualPointer()
-	if err == nil {
-		t.Fatal("ValidateVirtualPointer() expected error for size=0")
-	}
+	runIntBounds(t, []intBound{{
+		name:     "virtual_pointer.ui.font_size",
+		set:      func(c *config.Config, v int) { c.VirtualPointer.UI.FontSize = v },
+		validate: (*config.Config).ValidateVirtualPointer,
+		minValid: 0,
+		maxValid: math.MaxInt32,
+	}})
 }

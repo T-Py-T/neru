@@ -1,9 +1,5 @@
 //go:build windows
 
-// internal/cli/doctor_client_windows.go
-// Client-side neru doctor checks when the Windows daemon is not running.
-// Does not query overlay, hotkeys, or IPC-backed components.
-
 package cli
 
 import (
@@ -12,10 +8,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/y3owk1n/neru/internal/core/infra/platform"
-	"github.com/y3owk1n/neru/internal/core/ports"
+	"github.com/y3owk1n/neru/internal/adapter/platform"
+	"github.com/y3owk1n/neru/internal/ports"
 )
 
+// Client-side neru doctor checks when the Windows daemon is not running.
+// Does not query overlay, hotkeys, or IPC-backed components.
 func printClientDoctorWithoutDaemon(cmd *cobra.Command) error {
 	cmd.Println()
 	cmd.Println("Daemon not running. Showing client-side platform checks.")
@@ -32,28 +30,13 @@ func printClientDoctorWithoutDaemon(cmd *cobra.Command) error {
 
 	cmd.Println("Platform capabilities:")
 	printCapabilityLine(cmd, "platform", caps.Platform, "")
-	printCapabilityLine(cmd, "process", string(caps.Process.Status), caps.Process.Detail)
-	printCapabilityLine(cmd, "screen", string(caps.Screen.Status), caps.Screen.Detail)
-	printCapabilityLine(cmd, "cursor", string(caps.Cursor.Status), caps.Cursor.Detail)
-	printCapabilityLine(
-		cmd,
-		"accessibility",
-		string(caps.Accessibility.Status),
-		caps.Accessibility.Detail,
-	)
-	printCapabilityLine(cmd, "overlay", string(caps.Overlay.Status), caps.Overlay.Detail)
-	printCapabilityLine(
-		cmd,
-		"global_hotkeys",
-		string(caps.GlobalHotkeys.Status),
-		caps.GlobalHotkeys.Detail,
-	)
-	printCapabilityLine(
-		cmd,
-		"keyboard_event_tap",
-		string(caps.KeyboardEventTap.Status),
-		caps.KeyboardEventTap.Detail,
-	)
+
+	// Iterating the registry keeps this listing complete by construction; it
+	// previously spelled out a subset and silently dropped notifications,
+	// app_watcher, and dark_mode_detection.
+	for _, entry := range caps.Entries() {
+		printCapabilityLine(cmd, string(entry.Key), string(entry.Status), entry.Detail)
+	}
 
 	cmd.Println()
 	cmd.Println("Live probes:")
@@ -97,12 +80,14 @@ func probeScreen(ctx context.Context, cmd *cobra.Command, adapter ports.SystemPo
 		bounds.Min.Y,
 	)
 
-	names, err := adapter.ScreenNames(ctx)
+	screens, err := adapter.Screens(ctx)
 	if err != nil {
 		cmd.Printf("  %-22s error: %v\n", "screen_names:", err)
 
 		return
 	}
+
+	names := ports.ScreenNames(screens)
 
 	cmd.Printf("  %-22s %d monitor(s): %s\n", "screen_names:", len(names), fmt.Sprint(names))
 }

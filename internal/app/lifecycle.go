@@ -12,13 +12,12 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/y3owk1n/neru/internal/config"
-	"github.com/y3owk1n/neru/internal/core/domain"
-	"github.com/y3owk1n/neru/internal/core/infra/electron"
-	"github.com/y3owk1n/neru/internal/core/infra/ipc"
-	"github.com/y3owk1n/neru/internal/core/infra/logger"
-	"github.com/y3owk1n/neru/internal/core/infra/platform"
-	"github.com/y3owk1n/neru/internal/core/infra/systray"
+	"github.com/y3owk1n/neru/internal/adapter/ipc"
+	"github.com/y3owk1n/neru/internal/adapter/logger"
+	"github.com/y3owk1n/neru/internal/adapter/platform"
+	"github.com/y3owk1n/neru/internal/app/keybinding"
+	"github.com/y3owk1n/neru/internal/derrors"
+	"github.com/y3owk1n/neru/internal/domain"
 )
 
 const (
@@ -26,8 +25,6 @@ const (
 	SystrayQuitTimeout = 10 * time.Second
 	// StopTimeout is the timeout for IPC server stop during cleanup.
 	StopTimeout = 5 * time.Second
-	// GCTickerInterval is the interval for garbage collection.
-	GCTickerInterval = 5 * time.Minute
 
 	// HighMemoryThreshold is the heap allocation threshold for triggering GC (100MB).
 	HighMemoryThreshold = 100 * 1024 * 1024 // 100MB
@@ -61,22 +58,57 @@ func (a *App) Run() error {
 		zap.String("log_level", cfg.Logging.LogLevel),
 		zap.Bool("file_logging", !cfg.Logging.DisableFileLogging))
 
+	// Immediately after the identity line and before anything can fail: a build
+	// outside the parity boundary says so once, here, rather than one stubbed
+	// keystroke at a time.
+	announceBuildBoundary(a.logger, platform.CurrentOS(), cgoEnabled)
+
 	err := a.ipcServer.Start(a.ctx)
 	if err != nil {
+		// Logged as well as returned, because main prints the returned error
+		// only to stderr, and stderr never reaches the log file.
 		a.logger.Error("Failed to start IPC server", zap.Error(err))
 
-		return err
+		return derrors.Wrap(err, derrors.CodeIPCFailed, "failed to start IPC server")
 	}
 
-	a.logger.Info("IPC server started")
+	a.logger.Debug("IPC server started")
+
+	// These three are ordered, not merely sequential, and the order is starting
+	// the watcher last: an activation it delivers reaches both of the things
+	// above it, and neither absorbs one until it has run. Registering after the
+	// watcher started meant a dropped activation, which nothing retries — ADR
+	// 0005 has the consequence, #1348 was the bug, and
+	// TestSimulation_TheAppHearsFocusChangesFromTheMomentItWatchesForThem pins
+	// it. Registering the hotkeys after it would hand the same activation a
+	// binder holding nothing, and the refresh here would then re-register the
+	// global table over the per-app one it had just installed
+	// (keybinding/binder.go).
+	//
+	// Only the registrations belong ahead of this; nothing that can block does.
+	// The observers below reach a session bus on Linux, and putting a bus round
+	// trip in front of the watcher and the hotkeys would delay the daemon
+	// accepting its first chord to hurry up something nothing is waiting on.
+	a.registerAppWatcherCallbacks()
+
+	a.hotkeys.RefreshFor("")
+	a.logger.Debug("Hotkeys initialized")
 
 	a.appWatcher.Start()
-	a.logger.Info("App watcher started")
+	a.logger.Debug("App watcher started")
 
-	a.refreshHotkeysForAppOrCurrent("")
-	a.logger.Info("Hotkeys initialized")
+	// Watch for theme changes (Dark Mode / Light Mode) so theme-aware label
+	// colors follow without a restart.
+	a.setupThemeObserver()
 
-	a.setupAppWatcherCallbacks()
+	// Gate Mission Control detection at all levels using config. It stays after
+	// the hotkeys are live because what it arms can run an action sequence, and
+	// it reads the configuration now rather than the snapshot taken at the top
+	// of Run: the IPC server is already accepting a reload by this point, and
+	// nothing applies this setting again afterwards.
+	a.appWatcher.SetMCDetection(a.configSnapshot().Hints.DetectMissionControl)
+
+	a.setupSleepObserver()
 
 	if cfg.Grid.EnableGC {
 		ctx, cancel := context.WithCancel(a.ctx)
@@ -179,7 +211,7 @@ func (a *App) adaptiveGC() bool {
 
 		return true
 	} else {
-		a.logger.Debug("Skipping GC - memory usage normal",
+		a.logger.Debug("Skipping GC, memory usage normal",
 			zap.Uint64("heap_alloc_mb", heapAllocMB),
 			zap.Bool("aggressive_mode", false))
 
@@ -187,24 +219,26 @@ func (a *App) adaptiveGC() bool {
 	}
 }
 
-// setupAppWatcherCallbacks configures callbacks for application watcher events.
-func (a *App) setupAppWatcherCallbacks() {
+// registerAppWatcherCallbacks registers the handlers for application watcher
+// events. It only registers — everything here has to be in place before the
+// watcher starts, so nothing that can block belongs in it (see Run).
+func (a *App) registerAppWatcherCallbacks() {
 	a.appWatcher.OnActivate(func(_, bundleID string) {
 		a.handleAppActivation(bundleID)
 	})
 
 	// Watch for display parameter changes (monitor unplug/plug, resolution changes)
 	a.appWatcher.OnScreenParametersChanged(func() {
-		a.handleScreenParametersChange()
+		a.HandleScreenParametersChange()
 	})
 
 	// Watch for Mission Control activated events
 	a.appWatcher.OnMissionControlActivated(func() {
 		cfg := a.configSnapshot()
 		if len(cfg.Hints.OnMissionControlActivated) > 0 && cfg.Hints.DetectMissionControl {
-			a.logger.Info("Mission Control activated: executing actions",
+			a.logger.Debug("Running Mission Control activated actions",
 				zap.Int("action_count", len(cfg.Hints.OnMissionControlActivated)))
-			a.dispatchHotkeyActionsAsync(
+			a.hotkeys.RunActions(
 				"mission_control_activated",
 				cfg.Hints.OnMissionControlActivated,
 			)
@@ -215,32 +249,33 @@ func (a *App) setupAppWatcherCallbacks() {
 	a.appWatcher.OnMissionControlDeactivated(func() {
 		cfg := a.configSnapshot()
 		if len(cfg.Hints.OnMissionControlDeactivated) > 0 && cfg.Hints.DetectMissionControl {
-			a.logger.Info("Mission Control deactivated: executing actions",
+			a.logger.Debug("Running Mission Control deactivated actions",
 				zap.Int("action_count", len(cfg.Hints.OnMissionControlDeactivated)))
-			a.dispatchHotkeyActionsAsync(
+			a.hotkeys.RunActions(
 				"mission_control_deactivated",
 				cfg.Hints.OnMissionControlDeactivated,
 			)
 		}
 	})
-
-	// Watch for macOS theme changes (Dark Mode / Light Mode) to update
-	// theme-aware label colors without requiring restart.
-	a.setupThemeObserver()
-
-	// Gate Mission Control detection at all levels using config
-	a.appWatcher.SetMCDetection(a.configSnapshot().Hints.DetectMissionControl)
 }
 
-// handleScreenParametersChange responds to display configuration changes by updating overlays.
-func (a *App) handleScreenParametersChange() {
+// HandleScreenParametersChange is the app's entry point for a display
+// configuration change — a monitor plugged in or unplugged, a resolution
+// change, a laptop waking to a different arrangement: the platform screen
+// observers call it, and the simulation harness drives it the same way.
+//
+// It responds by putting whichever mode is on screen back onto the display as
+// it now is, and it is re-entrant by design: an event arriving while one is
+// being handled is coalesced into a single retry rather than processed
+// concurrently.
+func (a *App) HandleScreenParametersChange() {
 	if !a.appState.TrySetScreenChangeProcessing() {
 		return
 	}
 
 	defer func() {
 		if r := recover(); r != nil {
-			a.logger.Error("panic during screen change processing", zap.Any("recovered", r))
+			a.logger.Error("Panic during screen change processing", zap.Any("recovered", r))
 			// Force-clear both flags so future screen-change events are not
 			// permanently blocked.
 			a.appState.ResetScreenChangeProcessing()
@@ -261,231 +296,86 @@ func (a *App) handleScreenParametersChange() {
 }
 
 // processScreenChange performs the actual screen-change handling logic.
+//
+// Which mode is on screen, whether its feature is switched on, and what putting
+// it back onto the new display means all belong to the package that owns modes:
+// this hands the change over and then answers for the overlay it owns. One call
+// under one lock hold replaces the unlocked mode snapshot this used to take and
+// the three near-identical per-mode functions it fed.
+//
+// The resize afterwards is a fallback for a mode that rebuilt nothing — scroll,
+// the monitor picker, a mode switched off in configuration. It is deliberately
+// skipped when the handler reports the overlay needs nothing, because resizing
+// the overlay is what brings it up: doing it with nothing open would show an
+// overlay the user never asked for on every dock, undock and wake.
 func (a *App) processScreenChange() {
-	// Snapshot the mode once so every decision in this pass uses a consistent value.
-	// Without the snapshot, a concurrent mode transition could cause the idle check,
-	// the grid handler, and the hint handler to each see a different mode.
-	// Each handler's Refresh* method re-checks the mode under h.mu to guard
-	// against a concurrent ExitMode between the snapshot and the actual work.
-	currentMode := a.appState.CurrentMode()
-
-	// Only log and adjust overlays if we are in an active mode.
-	// In Idle mode, we just want to update the needs-refresh flags (handled by sub-handlers)
-	// but avoid showing the overlay window which happens in ResizeToActiveScreen.
-	isIdle := currentMode == domain.ModeIdle
-	if !isIdle {
-		a.logger.Debug("Screen parameters changed; adjusting overlays")
-	}
-
 	ctx := a.ctx
 
-	cfg := a.configSnapshot()
-
-	gridResized := a.handleGridScreenChange(cfg, currentMode)
-	hintResized := a.handleHintScreenChange(ctx, cfg, currentMode)
-	recursiveGridResized := a.handleRecursiveGridScreenChange(cfg, currentMode)
-
-	// Final resize only if no handler already resized the overlay AND we are not idle.
-	// Resizing the overlay when idle would cause it to become visible, which we want to avoid.
-	if !gridResized && !hintResized && !recursiveGridResized && !isIdle {
-		if a.overlayManager != nil {
-			a.overlayManager.ResizeToActiveScreen()
-		}
-	}
-}
-
-// handleGridScreenChange handles grid overlay updates when screen parameters change.
-// Returns true if the overlay was resized.
-func (a *App) handleGridScreenChange(cfg *config.Config, currentMode domain.Mode) bool {
-	if !cfg.Grid.Enabled || a.gridComponent.Overlay == nil {
-		return false
+	overlayNeedsResize := a.modes.RefreshActiveModeForScreenChange(ctx)
+	if !overlayNeedsResize || a.overlayPort == nil {
+		return
 	}
 
-	if currentMode != domain.ModeGrid {
-		a.appState.SetGridOverlayNeedsRefresh(true)
-
-		return false
+	refreshErr := a.overlayPort.Refresh(ctx)
+	if refreshErr != nil && !derrors.IsNotSupported(refreshErr) {
+		a.logger.Warn("Failed to resize the overlay after a screen change",
+			zap.Error(refreshErr))
 	}
-
-	// Grid mode is active - resize the existing overlay window to match new screen bounds
-	if a.overlayManager == nil {
-		a.logger.Warn("overlay manager unavailable; skipping grid refresh")
-
-		return false
-	}
-
-	a.overlayManager.ResizeToActiveScreen()
-
-	// Delegate to the modes handler which holds the grid manager state and
-	// can regenerate the grid with new screen bounds under the mutex.
-	// RefreshGridForScreenChange re-checks the mode under h.mu to guard
-	// against a concurrent mode exit (TOCTOU).
-	if !a.modes.RefreshGridForScreenChange() {
-		// Mode was exited concurrently or draw failed — don't show the overlay.
-		a.logger.Debug(
-			"Grid screen-change refresh skipped (mode exited or draw failed); skipping show",
-		)
-
-		return true
-	}
-
-	a.overlayManager.Show()
-	a.logger.Debug("Grid overlay resized and regenerated for new screen bounds")
-
-	return true
-}
-
-// handleHintScreenChange handles hint overlay updates when screen parameters change.
-// Returns true if the overlay was resized.
-func (a *App) handleHintScreenChange(
-	ctx context.Context,
-	cfg *config.Config,
-	currentMode domain.Mode,
-) bool {
-	if !cfg.Hints.Enabled || a.hintsComponent.Overlay == nil {
-		return false
-	}
-
-	if currentMode != domain.ModeHints {
-		a.appState.SetHintOverlayNeedsRefresh(true)
-
-		return false
-	}
-
-	if a.overlayManager != nil {
-		a.overlayManager.ResizeToActiveScreen()
-	}
-
-	// RefreshHintsForScreenChange re-checks the mode under h.mu to guard
-	// against a concurrent mode exit (TOCTOU).
-	if !a.modes.RefreshHintsForScreenChange(ctx, a.hintService) {
-		a.logger.Debug("Hint mode exited during screen change; skipping show")
-
-		return true
-	}
-
-	a.logger.Debug("Hint overlay resized and regenerated for new screen bounds")
-
-	return true
-}
-
-// handleRecursiveGridScreenChange handles recursive-grid overlay updates when screen parameters change.
-// Returns true if the overlay was resized.
-func (a *App) handleRecursiveGridScreenChange(cfg *config.Config, currentMode domain.Mode) bool {
-	if !cfg.RecursiveGrid.Enabled || a.recursiveGridComponent == nil ||
-		a.recursiveGridComponent.Overlay == nil {
-		return false
-	}
-
-	if currentMode != domain.ModeRecursiveGrid {
-		a.appState.SetRecursiveGridOverlayNeedsRefresh(true)
-
-		return false
-	}
-
-	if a.overlayManager == nil {
-		a.logger.Warn("overlay manager unavailable; skipping recursive-grid refresh")
-
-		return false
-	}
-
-	a.overlayManager.ResizeToActiveScreen()
-
-	// Delegate to the modes handler which holds the recursive-grid manager
-	// state and can reinitialize it with new screen bounds under the mutex.
-	// RefreshRecursiveGridForScreenChange re-checks the mode under h.mu to
-	// guard against a concurrent mode exit (TOCTOU between the snapshot in
-	// processScreenChange and the actual work here).
-	if !a.modes.RefreshRecursiveGridForScreenChange() {
-		// Mode was exited concurrently — don't show the overlay.
-		a.logger.Debug("Recursive-grid mode exited during screen change; skipping show")
-
-		return true
-	}
-
-	a.overlayManager.Show()
-	a.logger.Debug("Recursive-grid overlay resized and regenerated for new screen bounds")
-
-	return true
 }
 
 // handleAppActivation responds to application activation events.
 func (a *App) handleAppActivation(bundleID string) {
 	cfg := a.configSnapshot()
 
+	// Tell the mode handler which application is focused now, so the keymap can
+	// be settled against it. This is a lock-free write and must stay one: the
+	// watcher calls this inline and, on macOS, on the main queue (ADR 0005).
+	a.modes.PublishFocusedApp(bundleID)
+
+	// The keymap settles from that publication on the next read, but the event
+	// tap has to be told before the next key arrives rather than because one
+	// did: its blacklist decides whether a chord the newly focused application
+	// binds reaches Neru at all. So this one is pushed — on a goroutine, since
+	// the handler takes h.mu and this callback runs on the main queue on macOS
+	// (ADR 0005). It reads the cell published just above, so racing activations
+	// converge on the last one announced.
+	go a.modes.RefreshPassthroughForFocusedAppChange()
+
 	if a.appState.CurrentMode() == domain.ModeIdle {
-		go a.refreshHotkeysForAppOrCurrent(bundleID)
+		go a.hotkeys.RefreshFor(bundleID)
 	} else {
 		// Defer hotkey refresh to avoid re-entry during active modes
 		a.appState.SetHotkeyRefreshPending(true)
 	}
 
 	if cfg.Hints.Enabled {
-		if cfg.Hints.AdditionalAXSupport.Enable {
-			a.handleAdditionalAccessibility(bundleID, cfg)
-		}
+		a.handleAdditionalAccessibility(bundleID)
 	}
 }
 
-// handleAdditionalAccessibility configures accessibility support for Electron/Chromium/Firefox applications.
-func (a *App) handleAdditionalAccessibility(bundleID string, cfg *config.Config) {
-	config := cfg.Hints.AdditionalAXSupport
-
-	isElectron := electron.ShouldEnableElectronSupport(bundleID, config.AdditionalElectronBundles)
-	isChromium := electron.ShouldEnableChromiumSupport(bundleID, config.AdditionalChromiumBundles)
-	isFirefox := electron.ShouldEnableFirefoxSupport(bundleID, config.AdditionalFirefoxBundles)
-
-	if !isElectron && !isChromium && !isFirefox {
-		return
-	}
-
+// handleAdditionalAccessibility waits for the app's accessibility tree to become
+// ready (needed by Electron/Chromium/Firefox apps which initialize asynchronously).
+func (a *App) handleAdditionalAccessibility(bundleID string) {
 	go func() {
-		// Apps may need time to initialize their accessibility tree after launch.
-		// We retry a few times to ensure the accessibility attributes are successfully set.
-		// Use exponential backoff to minimize latency for fast-booting apps while
-		// still accommodating slow-booting ones.
-		const (
-			maxRetries    = 5
-			initialDelay  = 100 * time.Millisecond
-			backoffFactor = 2
-		)
-
-		delay := initialDelay
+		const maxRetries = 5
 		for range maxRetries {
-			allSuccess := true
+			ready, err := a.accessibility.PrimeApplication(a.ctx, bundleID)
+			if err != nil {
+				a.logger.Debug("Accessibility priming failed", zap.Error(err))
 
-			if isElectron {
-				if !electron.EnsureElectronAccessibility(bundleID, a.logger) {
-					allSuccess = false
-				}
-			}
-
-			if isChromium {
-				if !electron.EnsureChromiumAccessibility(bundleID, a.logger) {
-					allSuccess = false
-				}
-			}
-
-			if isFirefox {
-				if !electron.EnsureFirefoxAccessibility(bundleID, a.logger) {
-					allSuccess = false
-				}
-			}
-
-			if allSuccess {
 				return
 			}
 
-			// Wait before retrying
-			time.Sleep(delay)
-			delay *= backoffFactor
+			if ready {
+				return
+			}
 		}
 	}()
 }
 
 // printStartupInfo displays startup information including registered hotkeys.
 func (a *App) printStartupInfo() {
-	a.logger.Info("✓ Neru is running")
+	a.logger.Info("Neru is running")
 
 	cfg := a.configSnapshot()
 
@@ -495,7 +385,7 @@ func (a *App) printStartupInfo() {
 			continue
 		}
 
-		if actionsReferenceDisabledMode(actions, cfg) {
+		if keybinding.ActionsReferenceDisabledMode(actions, cfg) {
 			continue
 		}
 
@@ -518,12 +408,12 @@ func (a *App) waitForShutdown() error {
 	case <-a.stopChan:
 		// Programmatic stop requested (e.g. systray quit on Darwin).
 		// The systray event loop has already exited, so calling
-		// systray.Quit() again would dispatch to a dead run loop and
+		// platformQuit() again would dispatch to a dead run loop and
 		// hang until the timeout fires.
 		programmatic = true
 	}
 
-	a.logger.Info("Received shutdown signal, starting graceful shutdown...")
+	a.logger.Info("Received shutdown signal, starting graceful shutdown")
 
 	if programmatic {
 		signal.Stop(sigChan)
@@ -532,12 +422,14 @@ func (a *App) waitForShutdown() error {
 		return nil
 	}
 
-	a.logger.Info("\n⚠️  Shutting down gracefully... (press Ctrl+C again to force quit)")
+	a.logger.Info("Shutting down gracefully, press Ctrl+C again to force quit")
 
 	done := make(chan struct{})
 
 	go func() {
-		systray.Quit()
+		// platformQuit is the build-tagged dispatch (wiring_platform_*.go);
+		// calling infra's systray.Quit directly from here bypassed it.
+		platformQuit()
 		close(done)
 	}()
 
@@ -554,11 +446,9 @@ func (a *App) waitForShutdown() error {
 		return nil
 	case <-sigChan:
 		a.logger.Warn("Received second signal, forcing shutdown")
-		a.logger.Info("⚠️  Force quitting...")
 		os.Exit(1)
 	case <-timer.C:
 		a.logger.Error("Shutdown timeout exceeded, forcing shutdown")
-		a.logger.Info("⚠️  Shutdown timeout, force quitting...")
 		os.Exit(1)
 	}
 
@@ -584,7 +474,6 @@ func (a *App) Quit() {
 // first invocation performs the actual teardown.
 func (a *App) Cleanup() {
 	a.cleanupOnce.Do(func() {
-		a.logger.Debug("Cleaning up")
 		// Cancel root context to signal shutdown to all operations
 		if a.cancel != nil {
 			a.cancel()
@@ -595,9 +484,14 @@ func (a *App) Cleanup() {
 		}
 
 		a.ExitMode()
+
+		if a.modes != nil {
+			a.modes.ShowSystemCursor()
+		}
 		// Stop theme observer: nil the handler first so any in-flight KVO callback
 		// (between the async dispatch and actual observer removal) is a no-op.
 		a.stopThemeObserver()
+		a.stopSleepObserver()
 		// Stop IPC server first to prevent new requests.
 		// Use a fresh context instead of a.ctx since the root context was
 		// canceled above; a canceled context would cause Stop() to fail
@@ -619,24 +513,45 @@ func (a *App) Cleanup() {
 		a.unregisterLayoutChangeHandler()
 
 		if a.hotkeyManager != nil {
-			a.hotkeyRegistrationMu.Lock()
-			a.stopAllHotkeyRepeats()
-			a.hotkeyManager.UnregisterAll()
-			a.appState.SetHotkeysRegistered(false)
-			a.hotkeyRegistrationMu.Unlock()
+			a.hotkeys.Unregister()
 		}
 
-		if a.overlayManager != nil {
-			a.overlayManager.Destroy()
-		}
-		// Cleanup screen share state subscription
+		// Unsubscribe from screen-share state before the overlay is released,
+		// for the same reason the layout-change closure goes first: a callback
+		// registered against a destroyed overlay is a call nothing should
+		// still be making. It narrows the window rather than closing it —
+		// AppState publishes on a goroutine per subscriber, so one already
+		// launched is unaffected by unsubscribing — and what closes it is the
+		// darwin manager serializing SetSharingType against its own teardown.
 		if a.screenShareSubscriptionID != 0 {
 			a.appState.OffScreenShareStateChanged(a.screenShareSubscriptionID)
 			a.screenShareSubscriptionID = 0
 		}
 
+		// The event tap goes before the overlay, and the order is load-bearing
+		// (#1515): tearing the tap down drains its key dispatcher, and that
+		// drain delivers whatever key was still queued into the mode handler,
+		// which draws. Released the other way round, a key arriving in the
+		// window between the two calls is handled after the overlay is gone.
+		// The overlay adapter refuses to draw once it has been destroyed, so
+		// this is no longer the only thing standing between a drained key and
+		// a freed native window — but it is what keeps the drain finishing
+		// while there is still a surface to finish onto.
 		if a.eventTap != nil {
 			a.eventTap.Destroy()
+		}
+
+		if a.overlayPort != nil {
+			a.overlayPort.Destroy()
+		}
+
+		// Close the accessibility client to release platform resources
+		// (e.g. AT-SPI D-Bus connection and a11y status on Linux).
+		if a.axClient != nil {
+			closeErr := a.axClient.Close()
+			if closeErr != nil {
+				a.logger.Error("Failed to close accessibility client", zap.Error(closeErr))
+			}
 		}
 		// Sync and close logger
 		loggerSyncErr := logger.Sync()
@@ -648,7 +563,6 @@ func (a *App) Cleanup() {
 
 		loggerCloseErr := logger.Close()
 		if loggerCloseErr != nil {
-			// Can't log this since logger is being closed
 			fmt.Fprintf(os.Stderr, "Warning: failed to close logger: %v\n", loggerCloseErr)
 		}
 	})

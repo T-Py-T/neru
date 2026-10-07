@@ -4,8 +4,6 @@ import (
 	"errors"
 
 	"github.com/spf13/cobra"
-
-	"github.com/y3owk1n/neru/internal/config"
 )
 
 // errConfigValidationFailed is returned when config validation fails.
@@ -20,7 +18,8 @@ var configValidateCmd = &cobra.Command{
 Checks for syntax errors, invalid values, and configuration conflicts.
 Useful for verifying config changes before reloading.
 By default, searches for config in standard locations for your platform
-(e.g. %APPDATA%/neru/config.toml on Windows, or $XDG_CONFIG_HOME/neru/config.toml on Unix).
+(e.g. %APPDATA%/neru/config.toml then ~/.config/neru/config.toml on Windows,
+or $XDG_CONFIG_HOME/neru/config.toml on Unix).
 Use the global --config flag to validate a specific file.`,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return runConfigValidate(cmd)
@@ -32,7 +31,7 @@ func init() {
 }
 
 func runConfigValidate(cmd *cobra.Command) error {
-	svc := config.NewService(config.DefaultConfig(), "", nil, nil)
+	svc := clientConfigLoader()
 
 	path := configPath
 	if path == "" {
@@ -58,9 +57,34 @@ func runConfigValidate(cmd *cobra.Command) error {
 		return &silentError{err: errConfigValidationFailed}
 	}
 
-	cmd.Println("Configuration is valid")
+	printValidationWarnings(cmd, loadResult.Warnings)
+
 	cmd.Println("")
 	cmd.Println("Config file: " + loadResult.ConfigPath)
 
 	return nil
+}
+
+// printValidationWarnings says what loaded and will not do what it says.
+//
+// This is the whole reason a warning is worth telling apart from a refusal: it
+// does not stop the configuration loading, so without a line here it would
+// exist only in the daemon's log, invisible to the command people run to check
+// their configuration.
+func printValidationWarnings(cmd *cobra.Command, warnings []string) {
+	if len(warnings) == 0 {
+		cmd.Println("Configuration is valid")
+
+		return
+	}
+
+	cmd.Println("Configuration is valid, with warnings:")
+	cmd.Println("")
+
+	for _, warning := range warnings {
+		cmd.Println("  " + warning)
+	}
+
+	cmd.Println("")
+	cmd.Println("These parts of the configuration load and will not take effect.")
 }

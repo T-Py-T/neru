@@ -24,6 +24,7 @@ linters:
         - cyclop # duplicate of gocyclo
         - dupl # Too strict
         - exhaustruct # Not relevant
+        - exhaustruct_v5 # Added by golangci-lint 2.13, not relevant as exhaustruct
         - gochecknoglobals
         - gochecknoinits
         - gocognit # Too strict
@@ -37,25 +38,32 @@ linters:
         - wrapcheck # Too strict
         - wsl # Deprecated
         - interfacebloat # Complex application with legitimate large interfaces
+        - nlreturn # De-facto rejected: it had accumulated 195 nolints before being disabled
+        - testpackage # In-package tests are used deliberately; it had accumulated 66 nolints
 
     settings:
         depguard:
             rules:
                 # Enforce the cross-platform architecture rule:
-                # Only files inside internal/core/infra/platform/darwin (which are
+                # Only files inside internal/adapter/platform/darwin (which are
                 # all build-tagged //go:build darwin) may import that package.
                 # All other code must go through ports.SystemPort or a
                 # platform-dispatch file (e.g. platform_darwin.go / platform_stub.go).
                 darwin-platform-import:
                     deny:
-                        - pkg: "github.com/y3owk1n/neru/internal/core/infra/platform/darwin"
+                        - pkg: "github.com/y3owk1n/neru/internal/adapter/platform/darwin"
                           desc: >
                               Do not import platform/darwin directly. Use ports.SystemPort
                               or create a build-tagged platform_darwin.go / platform_stub.go
-                              pair in your package. See docs/ARCHITECTURE.md.
+                              pair in your package. See docs/contributing/architecture.md.
                     files:
-                        # Allow all files inside the darwin package (including tests)
-                        - "!**/platform/darwin/**"
+                        # Allow every file in a directory named darwin. Such a
+                        # package is darwin-only by construction, and
+                        # TestPlatformPackagesTagEveryFile fails if any file in
+                        # it lacks the build tag that makes that true. Matching
+                        # the directory rather than listing packages means a new
+                        # darwin backend needs no edit here.
+                        - "!**/darwin/**"
                         # Allow build-tagged dispatch files in any package
                         - "!**/*_darwin.go"
                         # Allow integration test files that explicitly link CGO
@@ -115,5 +123,7 @@ linters:
                   disabled: false
 
 issues:
-    max-issues-per-linter: 0
-    max-same-issues: 0
+    # Bounded so a first lint run on a nonconforming branch is a readable
+    # report, not an unbounded wall. CI re-runs until clean either way.
+    max-issues-per-linter: 50
+    max-same-issues: 10

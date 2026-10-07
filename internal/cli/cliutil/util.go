@@ -9,8 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	derrors "github.com/y3owk1n/neru/internal/core/errors"
-	"github.com/y3owk1n/neru/internal/core/infra/ipc"
+	"github.com/y3owk1n/neru/internal/adapter/ipc"
+	"github.com/y3owk1n/neru/internal/derrors"
 )
 
 // ErrUnhealthy is returned by PrintHealth when one or more components are unhealthy.
@@ -26,11 +26,6 @@ func NewIPCCommunicator(timeoutSec int) *IPCCommunicator {
 	return &IPCCommunicator{
 		timeoutSec: timeoutSec,
 	}
-}
-
-// SetTimeout updates the timeout for IPC operations.
-func (c *IPCCommunicator) SetTimeout(timeoutSec int) {
-	c.timeoutSec = timeoutSec
 }
 
 // SendCommand sends a command to the running Neru daemon.
@@ -95,6 +90,27 @@ func NewOutputFormatter() *OutputFormatter {
 	return &OutputFormatter{}
 }
 
+// PrintJSON prints a command's payload as indented JSON, for callers that are
+// scripts rather than people.
+//
+// It prints the payload alone rather than the IPC envelope around it: a script
+// asking for the state wants the state, and a failed command reports through
+// the exit status and stderr as every other command does.
+func (f *OutputFormatter) PrintJSON(cmd *cobra.Command, data any) error {
+	encoded, encodeErr := json.MarshalIndent(data, "", "  ")
+	if encodeErr != nil {
+		return derrors.Wrap(
+			encodeErr,
+			derrors.CodeSerializationFailed,
+			"failed to marshal command output",
+		)
+	}
+
+	cmd.Println(string(encoded))
+
+	return nil
+}
+
 // PrintStatus prints status information in a formatted way.
 func (f *OutputFormatter) PrintStatus(cmd *cobra.Command, data any) error {
 	cmd.Println("Neru Status:")
@@ -124,6 +140,7 @@ func (f *OutputFormatter) PrintStatus(cmd *cobra.Command, data any) error {
 		}
 
 		printProfile(cmd, statusData["profile"])
+		printToggles(cmd, statusData)
 	} else {
 		// Fallback to JSON output
 		jsonData, jsonDataErr := json.MarshalIndent(data, "  ", "  ")
@@ -178,7 +195,10 @@ func (f *OutputFormatter) PrintHealth(cmd *cobra.Command, success bool, data any
 	}
 
 	printProfile(cmd, healthData["profile"])
+	printOverlayBackend(cmd, healthData["capabilities"])
 	printDarkMode(cmd, healthData["capabilities"])
+	printNotifications(cmd, healthData["capabilities"])
+	printFocusedApp(cmd, healthData["capabilities"])
 
 	cmd.Println()
 	// Print component checks
@@ -292,6 +312,108 @@ func printDarkMode(cmd *cobra.Command, rawCapabilities any) {
 	cmd.Println("  Dark Mode: " + detail)
 }
 
+// printOverlayBackend renders an "Overlay backend:" line from overlay_detail,
+// which the daemon fills from the overlay itself. The profile's Overlay line
+// above it is the static plan; this one is what is drawing right now, which
+// on Windows is the difference between Direct2D and the GDI fallback.
+func printOverlayBackend(cmd *cobra.Command, rawCapabilities any) {
+	capabilities, ok := rawCapabilities.(map[string]any)
+	if !ok {
+		return
+	}
+
+	detail := stringValue(capabilities["overlay_detail"])
+	if detail == "" {
+		return
+	}
+
+	cmd.Println("  Overlay backend: " + detail)
+}
+
+// printNotifications renders a "Notifications:" metadata line when the daemon
+// populated notifications_detail, which it does exactly when notifications are
+// unavailable — so the line appears only when there is something to do about
+// it. On Linux that reason is probed live and names the daemon to install; on
+// the other platforms it names what is unbuilt.
+func printNotifications(cmd *cobra.Command, rawCapabilities any) {
+	capabilities, ok := rawCapabilities.(map[string]any)
+	if !ok {
+		return
+	}
+
+	detail := stringValue(capabilities["notifications_detail"])
+	if detail == "" {
+		return
+	}
+
+	cmd.Println("  Notifications: " + detail)
+}
+
+// printFocusedApp renders a "Focused app:" metadata line when the daemon
+// populated process_detail, which it does exactly when focused-app inspection
+// did not answer.
+//
+// The status beside it is "stub" whether the subsystem is missing or the
+// desktop simply has nothing focused, because the capability is live-probed and
+// has to report what a caller observes right now. This line is what tells those
+// two apart — without it, clicking the wallpaper on X11 reads as a broken
+// display server.
+func printFocusedApp(cmd *cobra.Command, rawCapabilities any) {
+	capabilities, ok := rawCapabilities.(map[string]any)
+	if !ok {
+		return
+	}
+
+	detail := stringValue(capabilities["process_detail"])
+	if detail == "" {
+		return
+	}
+
+	cmd.Println("  Focused app: " + detail)
+}
+
+// Status payload keys for the runtime toggles, named as the daemon reports
+// them.
+const (
+	keyScrollInverted        = "scroll_inverted"
+	keyHiddenForScreenShare  = "hidden_for_screen_share"
+	keyCursorFollowSelection = "cursor_follow_selection"
+)
+
+// printToggles prints the runtime toggles that a toggle-* command can change.
+//
+// A toggle that carries no state is skipped rather than printed as off:
+// cursor-follow-selection only exists while a mode is running, and reading it
+// as "off" would suggest a state the daemon is not in.
+func printToggles(cmd *cobra.Command, statusData map[string]any) {
+	toggles := []struct {
+		label string
+		key   string
+	}{
+		{"Scroll inverted", keyScrollInverted},
+		{"Screen share hidden", keyHiddenForScreenShare},
+		{"Cursor follows selection", keyCursorFollowSelection},
+	}
+
+	for _, toggle := range toggles {
+		value, ok := statusData[toggle.key].(bool)
+		if !ok {
+			continue
+		}
+
+		cmd.Println("  " + toggle.label + ": " + yesNo(value))
+	}
+}
+
+// yesNo renders a toggle state for a human reader.
+func yesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+
+	return "no"
+}
+
 func printProfile(cmd *cobra.Command, rawProfile any) {
 	profile, ok := rawProfile.(map[string]any)
 	if !ok || len(profile) == 0 {
@@ -352,22 +474,4 @@ func profileLabel(name string) string {
 	default:
 		return strings.ToUpper(name[:1]) + strings.ReplaceAll(name[1:], "_", " ")
 	}
-}
-
-// ErrorHandler provides consistent error handling for CLI commands.
-type ErrorHandler struct{}
-
-// NewErrorHandler creates a new error handler.
-func NewErrorHandler() *ErrorHandler {
-	return &ErrorHandler{}
-}
-
-// HandleIPCError wraps IPC errors with consistent formatting.
-func (e *ErrorHandler) HandleIPCError(err error, context string) error {
-	return derrors.Wrap(err, derrors.CodeIPCFailed, context)
-}
-
-// HandleSerializationError wraps serialization errors.
-func (e *ErrorHandler) HandleSerializationError(err error, context string) error {
-	return derrors.Wrap(err, derrors.CodeSerializationFailed, context)
 }

@@ -3,17 +3,20 @@ package grid
 import (
 	"image"
 
-	domainGrid "github.com/y3owk1n/neru/internal/core/domain/grid"
+	domainGrid "github.com/y3owk1n/neru/internal/domain/grid"
 )
 
 // baseContext provides common functionality for mode component contexts.
 // It contains shared state fields used across different mode contexts.
 type baseContext struct {
 	pendingAction         *string
+	pendingModifier       *string
+	onExit                []string
 	repeat                bool
 	cursorFollowSelection bool
 	selectedPoint         image.Point
 	hasSelection          bool
+	captureScope          string
 }
 
 // SetPendingAction sets the action to execute when mode selection is complete.
@@ -24,6 +27,27 @@ func (c *baseContext) SetPendingAction(action *string) {
 // PendingAction returns the pending action to execute.
 func (c *baseContext) PendingAction() *string {
 	return c.pendingAction
+}
+
+// SetOnExit sets the action steps to run when the pending action is fulfilled
+// and the mode exits back to idle through the action path.
+func (c *baseContext) SetOnExit(onExit []string) {
+	c.onExit = onExit
+}
+
+// OnExit returns the action steps to run once the pending action is fulfilled.
+func (c *baseContext) OnExit() []string {
+	return c.onExit
+}
+
+// SetPendingModifier sets the modifier keys to apply when the pending action fires.
+func (c *baseContext) SetPendingModifier(modifier *string) {
+	c.pendingModifier = modifier
+}
+
+// PendingModifier returns the modifier keys to apply when the pending action fires.
+func (c *baseContext) PendingModifier() *string {
+	return c.pendingModifier
 }
 
 // SetRepeat sets whether the mode should re-activate after performing the action.
@@ -73,9 +97,23 @@ func (c *baseContext) SelectionPoint() (image.Point, bool) {
 // Reset resets the base context to its initial state.
 func (c *baseContext) Reset() {
 	c.pendingAction = nil
+	c.pendingModifier = nil
+	c.onExit = nil
 	c.repeat = false
 	c.cursorFollowSelection = false
+	c.captureScope = ""
 	c.ClearSelectionPoint()
+}
+
+// SetCaptureScope records which region the session covers, screen or window,
+// so a repeat and a screen change start from the same kind of region.
+func (c *baseContext) SetCaptureScope(scope string) {
+	c.captureScope = scope
+}
+
+// CaptureScope returns which region the session covers.
+func (c *baseContext) CaptureScope() string {
+	return c.captureScope
 }
 
 // Context holds the state and context for grid mode operations.

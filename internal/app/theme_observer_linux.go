@@ -3,11 +3,14 @@
 package app
 
 import (
+	"context"
 	"sync"
 	"time"
 
 	"github.com/godbus/dbus/v5"
 	"go.uber.org/zap"
+
+	"github.com/y3owk1n/neru/internal/adapter/platform/linux"
 )
 
 const (
@@ -20,30 +23,62 @@ const (
 
 	pollFallbackInterval = 5 * time.Second
 	minSignalBodyLength  = 3
-)
 
-// Package-level resources for theme observer cleanup. Stored here (rather than
-// on App) so that non-Linux builds never reference the D-Bus types or fields.
-var (
-	themeStopChan  chan struct{}
-	themeDBusClose func() error
-	themeWG        sync.WaitGroup
+	// themeBusDialTimeout caps the session-bus dial this makes. The dial itself
+	// cannot be canceled, so without a cap a bus that accepts a connection and
+	// then stops answering holds daemon startup — this runs on the goroutine
+	// that starts it — rather than merely costing theme changes. Giving up is
+	// cheap: polling picks the theme up anyway, a few seconds later.
+	themeBusDialTimeout = 2 * time.Second
 )
 
 // setupThemeObserver subscribes to xdg-desktop-portal SettingChanged
 // D-Bus signals and refreshes theme-aware styles when the color scheme
 // changes. Falls back to polling if D-Bus is unavailable.
+//
+// A session bus that never answers counts as unavailable rather than as a
+// reason to wait: the dial is bounded (linux.ConnectSessionBus), and a dial
+// that outlasts its budget takes the same polling fallback as a dial that
+// failed outright — the daemon is still starting up on this goroutine, and
+// polling notices a theme change a few seconds later either way.
+//
+// All teardown state is captured per App instance in the stop closure —
+// package-level state here would be shared across App instances, and a
+// process that creates more than one (tests do) would close another
+// instance's channel and leak its goroutine.
 func (a *App) setupThemeObserver() {
-	themeStopChan = make(chan struct{})
+	stopChan := make(chan struct{})
+	waitGroup := &sync.WaitGroup{}
 
-	conn, err := dbus.ConnectSessionBus()
+	// Assigned once the D-Bus signal path is established; the stop closure
+	// reads it at call time, so the early polling fallbacks leave it nil.
+	var dbusClose func() error
+
+	a.observerMu.Lock()
+
+	a.themeObserverStop = func() {
+		close(stopChan)
+
+		if dbusClose != nil {
+			_ = dbusClose()
+		}
+
+		waitGroup.Wait()
+	}
+
+	a.observerMu.Unlock()
+
+	dialCtx, cancelDial := context.WithTimeout(a.ctx, themeBusDialTimeout)
+	defer cancelDial()
+
+	conn, err := linux.ConnectSessionBus(dialCtx)
 	if err != nil {
 		a.logger.Warn("D-Bus unavailable, falling back to polling for theme changes",
 			zap.Error(err))
 
-		themeWG.Add(1)
+		isDark := a.systemPort != nil && a.systemPort.IsDarkMode()
 
-		go a.pollThemeChanges(a.systemPort != nil && a.systemPort.IsDarkMode())
+		waitGroup.Go(func() { a.pollThemeChanges(stopChan, isDark) })
 
 		return
 	}
@@ -58,21 +93,21 @@ func (a *App) setupThemeObserver() {
 
 		_ = conn.Close()
 
-		themeWG.Add(1)
+		isDark := a.systemPort != nil && a.systemPort.IsDarkMode()
 
-		go a.pollThemeChanges(a.systemPort != nil && a.systemPort.IsDarkMode())
+		waitGroup.Go(func() { a.pollThemeChanges(stopChan, isDark) })
 
 		return
 	}
 
 	signalCh := make(chan *dbus.Signal, portalSignalBuffer)
 	conn.Signal(signalCh)
-	themeDBusClose = conn.Close
+	dbusClose = conn.Close
 
-	themeWG.Go(func() {
+	waitGroup.Go(func() {
 		for {
 			select {
-			case <-themeStopChan:
+			case <-stopChan:
 				return
 			case signal, ok := <-signalCh:
 				if !ok {
@@ -100,37 +135,22 @@ func (a *App) setupThemeObserver() {
 					continue
 				}
 
-				a.handleThemeChange(colorScheme == colorSchemeDark)
+				a.HandleThemeChange(colorScheme == colorSchemeDark)
 			}
 		}
 	})
 }
 
-// stopThemeObserver shuts down the D-Bus connection and signal goroutine
-// by closing the D-Bus connection and signaling the stop channel, which
-// also terminates the polling fallback if it is running.
-func (a *App) stopThemeObserver() {
-	close(themeStopChan)
-
-	if themeDBusClose != nil {
-		_ = themeDBusClose()
-	}
-
-	themeWG.Wait()
-}
-
 // pollThemeChanges periodically checks IsDarkMode and calls
-// handleThemeChange when the value transitions. Acts as a fallback
+// HandleThemeChange when the value transitions. Acts as a fallback
 // when the D-Bus portal signal path is unavailable.
-func (a *App) pollThemeChanges(lastIsDark bool) {
-	defer themeWG.Done()
-
+func (a *App) pollThemeChanges(stopChan <-chan struct{}, lastIsDark bool) {
 	ticker := time.NewTicker(pollFallbackInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-themeStopChan:
+		case <-stopChan:
 			return
 		case <-ticker.C:
 			if a.systemPort == nil {
@@ -139,10 +159,8 @@ func (a *App) pollThemeChanges(lastIsDark bool) {
 
 			currentIsDark := a.systemPort.IsDarkMode()
 			if currentIsDark != lastIsDark {
-				a.logger.Info("System theme detected change",
-					zap.Bool("is_dark", currentIsDark))
 				lastIsDark = currentIsDark
-				a.handleThemeChange(currentIsDark)
+				a.HandleThemeChange(currentIsDark)
 			}
 		}
 	}

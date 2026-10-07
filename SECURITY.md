@@ -58,15 +58,15 @@ Neru does **not**:
 - Send telemetry, analytics, or crash reports.
 - Contact update servers or phone home.
 
-All communication is strictly local — the CLI and daemon talk over a **Unix domain socket** created with owner-only permissions (`0600`) in the system temporary directory.
+All communication is strictly local — the CLI and daemon talk over a **Unix domain socket** on macOS and Linux, and a **named pipe** on Windows.
 
 ### IPC
 
-The CLI communicates with the running daemon via a local Unix socket using a JSON-based message protocol. The socket is not exposed over the network. Only the local user can connect to it.
+The CLI communicates with the running daemon over that endpoint using a JSON-based message protocol. It is never exposed over the network, and it is scoped to the user running the daemon: the socket is mode `0600` inside a `0700` directory that user owns, the named pipe carries that user's SID in its name and a security descriptor naming that SID alone, and on macOS and Linux the daemon additionally reads the connecting process's uid from the kernel and serves only its own. See [Architecture](docs/contributing/architecture.md#runtime-shape) for the exact locations.
 
 ### CGo / Objective-C Bridge
 
-Neru uses CGo to call macOS Objective-C APIs for accessibility, overlays, hotkeys, and event taps. The bridge code lives in `internal/core/infra/bridge/` and is the primary attack surface for memory-safety issues. If you find a vulnerability in this layer (buffer overflow, use-after-free, etc.), please report it.
+Neru uses CGo to call macOS Objective-C APIs for accessibility, overlays, hotkeys, and event taps. The bridge code lives in `internal/adapter/platform/darwin/` and is the primary attack surface for memory-safety issues. If you find a vulnerability in this layer (buffer overflow, use-after-free, etc.), please report it.
 
 ### Dependencies
 

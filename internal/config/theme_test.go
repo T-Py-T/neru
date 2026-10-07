@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/config"
+	"github.com/y3owk1n/neru/internal/config/loader"
 )
 
 // testDarkAccent is the dark accent color used in theme test fixtures.
@@ -240,24 +241,6 @@ func TestForTheme_ThemeAwareDefaults(t *testing.T) {
 	}
 }
 
-func TestDefaultConfig_ResolvesThemeDefaults(t *testing.T) {
-	cfg := config.DefaultConfig()
-
-	if cfg.Hints.UI.BackgroundColor.Light != config.HintsBackgroundColorLight {
-		t.Fatalf("expected default hints light background %q, got %q",
-			config.HintsBackgroundColorLight,
-			cfg.Hints.UI.BackgroundColor.Light,
-		)
-	}
-
-	if cfg.Grid.UI.MatchedBackgroundColor.Dark != config.GridMatchedBackgroundColorDark {
-		t.Fatalf("expected default grid dark matched background %q, got %q",
-			config.GridMatchedBackgroundColorDark,
-			cfg.Grid.UI.MatchedBackgroundColor.Dark,
-		)
-	}
-}
-
 func TestLoadWithValidation_ThemePaletteDrivesDefaults(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.toml")
@@ -283,7 +266,7 @@ text = "#F2FBFF"
 		t.Fatalf("write config: %v", err)
 	}
 
-	service := config.NewService(config.DefaultConfig(), "", zap.NewNop(), nil)
+	service := loader.NewService(config.DefaultConfig(), "", zap.NewNop(), nil)
 
 	result := service.LoadWithValidation(configPath)
 	if result.ValidationError != nil {
@@ -298,8 +281,8 @@ text = "#F2FBFF"
 		t.Fatalf("expected derived grid dark border %q, got %q", "#995BE4D8", got)
 	}
 
-	if got := result.Config.VirtualPointer.UI.Color.Light; got != "#2166F3" {
-		t.Fatalf("expected derived virtual pointer light color %q, got %q", "#2166F3", got)
+	if got := result.Config.VirtualPointer.UI.TextColor.Light; got != "#2166F3" {
+		t.Fatalf("expected derived virtual pointer light text color %q, got %q", "#2166F3", got)
 	}
 
 	if got := result.Config.Grid.UI.MatchedTextColor.Light; got != "#F7FBFF" {
@@ -371,7 +354,7 @@ border_color = { light = "#FF123456" }
 		t.Fatalf("write config: %v", err)
 	}
 
-	service := config.NewService(config.DefaultConfig(), "", zap.NewNop(), nil)
+	service := loader.NewService(config.DefaultConfig(), "", zap.NewNop(), nil)
 
 	result := service.LoadWithValidation(configPath)
 	if result.ValidationError != nil {

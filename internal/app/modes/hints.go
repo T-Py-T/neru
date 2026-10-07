@@ -7,14 +7,12 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/y3owk1n/neru/internal/app/components/hints"
-	"github.com/y3owk1n/neru/internal/config"
-	"github.com/y3owk1n/neru/internal/core/domain"
-	"github.com/y3owk1n/neru/internal/core/domain/action"
-	domainHint "github.com/y3owk1n/neru/internal/core/domain/hint"
-	derrors "github.com/y3owk1n/neru/internal/core/errors"
-	"github.com/y3owk1n/neru/internal/core/infra/platform"
-	"github.com/y3owk1n/neru/internal/ui/overlay"
+	"github.com/y3owk1n/neru/internal/derrors"
+	"github.com/y3owk1n/neru/internal/domain"
+	"github.com/y3owk1n/neru/internal/domain/action"
+	domainHint "github.com/y3owk1n/neru/internal/domain/hint"
+	"github.com/y3owk1n/neru/internal/domain/modecmd"
+	"github.com/y3owk1n/neru/internal/ports"
 )
 
 // debugElapsed logs the duration since start with the given message.
@@ -22,75 +20,10 @@ func debugElapsed(logger *zap.Logger, start time.Time, msg string, fields ...zap
 	logger.Debug(msg, append(fields, zap.Duration("elapsed", time.Since(start)))...)
 }
 
-// currentHintStyleLocked resolves theme-aware hint overlay colors from the live
-// config, matching search-input and mode-indicator draw paths. Caller must
-// hold h.mu.
-func (h *Handler) currentHintStyleLocked() hints.StyleMode {
-	style := hints.BuildStyle(h.config.Hints, h.themeProvider)
-	if h.hints != nil {
-		h.hints.Style = style
-	}
-
-	return style
-}
-
-// ModeActivationOptions configures a mode activation request.
-type ModeActivationOptions struct {
-	Action                *string
-	Repeat                *bool
-	CursorFollowSelection *bool
-	FilterRoles           []string
-	FilterTextContains    []string
-	Search                *bool
-	Strategy              *string
-	LabelDirection        *string
-	Toggle                *bool
-}
-
 const (
 	// HintTimeout is the timeout for hint operations.
 	HintTimeout = 5 * time.Second
 )
-
-// ActivateMode activates a mode with a given action (for hints mode).
-func (h *Handler) ActivateMode(mode domain.Mode) {
-	h.ActivateModeWithOptions(mode, ModeActivationOptions{})
-}
-
-// ActivateModeWithAction activates a mode with an optional action parameter.
-func (h *Handler) ActivateModeWithAction(mode domain.Mode, action *string) {
-	h.ActivateModeWithOptions(mode, ModeActivationOptions{Action: action})
-}
-
-// ActivateModeWithOptions activates a mode with an optional action and repeat flag.
-// When repeat is true the mode re-activates after performing the pending action.
-func (h *Handler) ActivateModeWithOptions(mode domain.Mode, opts ModeActivationOptions) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	// Toggle: if the mode is already active and --toggle was specified,
-	// exit to idle instead of re-activating
-	if opts.Toggle != nil && *opts.Toggle && h.appState.CurrentMode() == mode {
-		h.exitModeLocked()
-
-		return
-	}
-
-	if mode == domain.ModeIdle {
-		h.exitModeLocked()
-
-		return
-	}
-
-	modeImpl, exists := h.modes[mode]
-	if !exists {
-		h.logger.Warn("Unknown mode", zap.String("mode", domain.ModeString(mode)))
-
-		return
-	}
-
-	modeImpl.Activate(opts)
-}
 
 // filterHintsForScreen returns only the hints whose element center falls within
 // screenBounds, and deduplicates by position so that downstream code (overlay
@@ -127,45 +60,19 @@ func filterHintsForScreen(
 }
 
 // activateHintModeWithAction activates hint mode with optional action parameter.
-func (h *Handler) activateHintModeWithAction(
-	action *string,
-	repeat *bool,
-	cursorFollowSelection *bool,
-	filterRoles []string,
-	filterTextContains []string,
-	search *bool,
-	strategy *string,
-	labelDirection *string,
-) {
-	h.activateHintModeInternal(
-		action,
-		cursorFollowSelection,
-		filterRoles,
-		filterTextContains,
-		search,
-		strategy,
-		labelDirection,
-	)
+func (h *handlerState) activateHintModeWithAction(activation modecmd.Activation) {
+	h.activateHintModeInternal(activation)
 
-	// Store repeat flag after activation so the context is already initialized.
-	if repeat != nil && *repeat && h.hints != nil && h.hints.Context != nil {
+	// Repeat is stored after activation, by which point the context exists.
+	if activation.Repeat != nil && *activation.Repeat && h.hints != nil && h.hints.Context != nil {
 		h.hints.Context.SetRepeat(true)
 	}
 }
 
-// activateHintModeInternal activates hint mode with optional action.
-// It handles mode validation, overlay positioning, element collection, hint generation,
-// and UI setup for hint-based navigation.
-
-func (h *Handler) activateHintModeInternal(
-	actionStr *string,
-	cursorFollowSelection *bool,
-	filterRoles []string,
-	filterTextContains []string,
-	search *bool,
-	strategyOverride *string,
-	labelDirectionOverride *string,
-) {
+// activateHintModeInternal activates hint mode with an optional action.
+// It handles mode validation, overlay positioning, element collection, hint
+// generation, and UI setup for hint-based navigation.
+func (h *handlerState) activateHintModeInternal(activation modecmd.Activation) {
 	// Detect refresh before validation so we can clean up on failure
 	isRefresh := h.appState.CurrentMode() == domain.ModeHints
 
@@ -175,8 +82,8 @@ func (h *Handler) activateHintModeInternal(
 	}
 
 	// On refresh, properly escape the active IME and clear search state first.
-	// This prevents the IME from becoming orphaned/unfocused during screen/space
-	// transitions where the OS moves focus to the frontmost app.
+	// Otherwise the IME is left orphaned during screen or space transitions,
+	// where the OS moves focus to the frontmost app.
 	if isRefresh && h.hints != nil && h.hints.Context != nil && h.hints.Context.SearchActive() {
 		h.cancelHintSearch()
 	}
@@ -190,12 +97,7 @@ func (h *Handler) activateHintModeInternal(
 		"",
 	)
 	if !activated {
-		// If validation fails during a refresh (e.g., secure input activated,
-		// focused app became excluded), exit cleanly instead of leaving stale
-		// hints on the overlay.
-		if isRefresh {
-			h.exitModeLocked()
-		}
+		h.abandonHintActivation(isRefresh)
 
 		return
 	}
@@ -203,29 +105,31 @@ func (h *Handler) activateHintModeInternal(
 	actionString := domain.ActionString(actionEnum)
 
 	if isRefresh {
-		// During refresh, only clear overlay and stop polling but do NOT change mode
-		// or disable event tap. Mode and event tap are already in the correct state,
-		// so SetModeHints() can be skipped on the success path.
-		// This prevents leaving the app in idle mode with event tap disabled if hint
-		// generation fails.
-		h.overlayManager.Clear()
+		// Keep the mode, event tap, and overlay in place for an in-place refresh, so
+		// the existing labels stay visible until the fresh scan draws the new set over
+		// them. Only indicator polling stops. Skipping SetModeHints on the success path
+		// avoids leaving the app idle with the event tap disabled if hint generation
+		// fails.
 		h.stopIndicatorPolling()
 	} else {
-		h.exitModeLocked()
+		// Coming from another mode, the keyboard is handed over rather than
+		// given back: exit now, release at return if nothing is entered. Hints
+		// has more ways to give up than any other mode — every
+		// abandonHintActivation below, plus the permission dialog that suspends
+		// the activation — and the deferred release covers all of them.
+		defer h.exitModeForTransition()()
 	}
 
 	if actionString == domain.UnknownAction {
 		h.logger.Warn("Unknown action string, ignoring")
 
-		if isRefresh {
-			h.exitModeLocked()
-		}
+		h.abandonHintActivation(isRefresh)
 
 		return
 	}
 
 	// Always resize overlay to the active screen (where mouse is) before collecting elements.
-	// This ensures proper positioning when switching between multiple displays.
+	// Otherwise the overlay lands on the display the mouse just left.
 	var activeScreenBounds image.Rectangle
 
 	if h.system != nil {
@@ -237,68 +141,18 @@ func (h *Handler) activateHintModeInternal(
 		}
 	}
 
-	h.screenBounds = activeScreenBounds
-	// Clear any previous overlay content (e.g., scroll highlights) before drawing hints.
-	// This prevents scroll highlights from persisting when switching from scroll mode to hints mode.
-	h.overlayManager.Clear()
-	h.appState.SetHintOverlayNeedsRefresh(false)
+	h.setScreenBounds(activeScreenBounds)
+	// On a fresh activation, take whatever frame is on screen off it (e.g.
+	// scroll highlights) before drawing hints. Entering from another mode has
+	// already done this through exitMode above; entering from idle has not,
+	// and that is the case this covers. A refresh keeps its frame so the
+	// existing labels persist until the redraw draws the new set over them.
+	if !isRefresh {
+		h.clearOverlayFrame()
+	}
 
 	if h.hints != nil && h.hints.Context != nil {
-		if isRefresh {
-			// On refresh preserve existing context flags for any field not
-			// explicitly provided. This prevents configured action strings
-			// (e.g. space change → MC callback → "hints" with no args) from
-			// overwriting the user's custom --action flag.
-			if actionStr != nil {
-				h.hints.Context.SetPendingAction(actionStr)
-			}
-
-			if cursorFollowSelection != nil {
-				h.hints.Context.SetCursorFollowSelection(*cursorFollowSelection)
-			}
-
-			if filterRoles != nil {
-				h.hints.Context.SetFilterRoles(filterRoles)
-			}
-
-			if filterTextContains != nil {
-				h.hints.Context.SetFilterTextContains(filterTextContains)
-			}
-
-			if search != nil {
-				h.hints.Context.SetStartWithSearch(*search)
-			}
-
-			if strategyOverride != nil {
-				h.hints.Context.SetStrategyOverride(*strategyOverride)
-			}
-
-			if labelDirectionOverride != nil {
-				h.hints.Context.SetLabelDirectionOverride(*labelDirectionOverride)
-			}
-		} else {
-			h.hints.Context.SetPendingAction(actionStr)
-			h.hints.Context.SetRepeat(false)
-			h.hints.Context.SetCursorFollowSelection(resolveCursorFollowSelection(
-				domain.ModeHints,
-				cursorFollowSelection,
-			))
-			h.hints.Context.SetFilterRoles(filterRoles)
-			h.hints.Context.SetFilterTextContains(filterTextContains)
-			h.hints.Context.SetStartWithSearch(search != nil && *search)
-
-			if strategyOverride != nil {
-				h.hints.Context.SetStrategyOverride(*strategyOverride)
-			} else {
-				h.hints.Context.SetStrategyOverride("")
-			}
-
-			if labelDirectionOverride != nil {
-				h.hints.Context.SetLabelDirectionOverride(*labelDirectionOverride)
-			} else {
-				h.hints.Context.SetLabelDirectionOverride("")
-			}
-		}
+		applyHintFlags(h.hints.Context, activation, isRefresh)
 	}
 
 	// Fetch bundle ID for hint generation. Validation already passed (secure input check,
@@ -321,44 +175,41 @@ func (h *Handler) activateHintModeInternal(
 
 	activationStart := time.Now()
 
-	strategyVal := ""
-	if h.hints != nil && h.hints.Context != nil {
-		strategyVal = h.hints.Context.StrategyOverride()
-	} else if strategyOverride != nil {
-		strategyVal = *strategyOverride
-	}
+	overrides := h.resolveHintOverrides(activation)
 
 	strategy := h.config.Hints.StrategyForApp(bundleID)
-	if strategyVal != "" {
-		strategy = strategyVal
+	if overrides.strategy != "" {
+		strategy = overrides.strategy
 	}
 
-	labelDirectionVal := ""
-	if h.hints != nil && h.hints.Context != nil {
-		labelDirectionVal = h.hints.Context.LabelDirectionOverride()
-	} else if labelDirectionOverride != nil {
-		labelDirectionVal = *labelDirectionOverride
-	}
+	if h.needsScreenCapturePermission(strategy) {
+		// The permission request blocks on a modal dialog and h.mu must not be
+		// held across it (see the SystemPort contract). The activation is
+		// suspended here and re-entered through the outer locked surface once
+		// the user decides.
+		h.requestScreenCapturePermissionAndResume(activation)
 
-	var permissionOk bool
-
-	activeScreenBounds, bundleID, strategy, permissionOk = h.ensureScreenCapturePermissionsLocked(
-		activeScreenBounds,
-		bundleID,
-		strategy,
-		strategyVal,
-	)
-	if !permissionOk {
 		return
+	}
+
+	if h.hints != nil && h.hints.Context != nil {
+		captureScope := h.config.Hints.CaptureScopeForApp(bundleID)
+		if overrides.captureScope != "" {
+			captureScope = overrides.captureScope
+		}
+
+		h.hints.Context.SetActiveScan(strategy, captureScope)
 	}
 
 	domainHints, domainHintsErr := h.hintService.GenerateHints(
 		ctx,
-		filterRoles,
-		filterTextContains,
+		activation.FilterRoles,
+		activation.FilterTextContains,
 		bundleID,
-		strategyVal,
-		labelDirectionVal,
+		overrides.strategy,
+		overrides.captureScope,
+		overrides.labelDirection,
+		overrides.splitWord,
 	)
 	if domainHintsErr != nil {
 		h.logger.Error(
@@ -367,21 +218,15 @@ func (h *Handler) activateHintModeInternal(
 			zap.String("action", actionString),
 		)
 
-		if isRefresh {
-			h.exitModeLocked()
-		}
+		h.abandonHintActivation(isRefresh)
 
 		return
 	}
 
-	debugElapsed(h.logger, activationStart, "GenerateHints completed",
+	debugElapsed(h.logger, activationStart, "Hints generated",
 		zap.Int("total_hints", len(domainHints)))
 
 	filteredHints := filterHintsForScreen(domainHints, activeScreenBounds)
-
-	debugElapsed(h.logger, activationStart, "FilterHintsForScreen completed",
-		zap.Int("after_filter", len(filteredHints)),
-		zap.Int("before_filter", len(domainHints)))
 
 	h.logger.Debug("Filtered hints by screen",
 		zap.Int("total_hints", len(domainHints)),
@@ -393,9 +238,7 @@ func (h *Handler) activateHintModeInternal(
 	if len(domainHints) == 0 {
 		h.logger.Warn("No hints generated for action", zap.String("action", actionString))
 
-		if isRefresh {
-			h.exitModeLocked()
-		}
+		h.abandonHintActivation(isRefresh)
 
 		return
 	}
@@ -407,49 +250,17 @@ func (h *Handler) activateHintModeInternal(
 	// Note: Manager is created once and reused across activations (holds mutable state).
 	// Router is recreated each activation (stateless, needs fresh exit keys from config).
 	if h.hints.Context.Manager() == nil {
-		manager := domainHint.NewManager(h.logger, &h.mu)
-		// Set callback to update overlay when hints are filtered
-		manager.SetUpdateCallback(func(filteredHints []*domainHint.Interface) {
-			// Caller must hold h.mu. Synchronous call sites (SetHints, Reset,
-			// HandleInput) already hold it. The async debouncedUpdate timer
-			// acquires it via the external mutex set below.
-			if h.hints.Overlay == nil {
-				return
-			}
-
-			screenBounds := h.screenBounds
-
-			// Convert domain hints to overlay hints for rendering
-			overlayHints := make([]*hints.Hint, len(filteredHints))
-			for index, hint := range filteredHints {
-				// Convert screen-absolute coordinates to overlay-local coordinates
-				localPos := image.Point{
-					X: hint.Position().X - screenBounds.Min.X,
-					Y: hint.Position().Y - screenBounds.Min.Y,
-				}
-				overlayHints[index] = hints.NewHint(
-					hint.Label(),
-					localPos,
-					hint.Element().Bounds().Size(),
-					hint.MatchedPrefix(),
-				)
-			}
-
-			drawHintsErr := h.overlayManager.DrawHintsWithStyle(
-				overlayHints,
-				h.currentHintStyleLocked(),
-			)
-			if drawHintsErr != nil {
-				h.logger.Error("Failed to update hints overlay", zap.Error(drawHintsErr))
-			}
-		})
+		manager := domainHint.NewManager(h.logger, &h.outer.mu)
+		manager.SetUpdateCallback(h.drawHints)
 		h.hints.Context.SetManager(manager)
 	}
 
 	// Only set mode and enable event tap on initial activation;
-	// during refresh these are already in the correct state.
+	// during refresh these are already in the correct state. The overlay is
+	// not switched here: hints hands over a Frame, and switching the overlay
+	// belongs to the one place that realizes it.
 	if !isRefresh {
-		h.setModeLocked(domain.ModeHints, overlay.ModeHints)
+		h.enterMode(domain.ModeHints)
 	} else {
 		// During a refresh (e.g., after Cmd+Tab passthrough) the focused app
 		// may have changed. Re-sync the modifier passthrough blacklist so
@@ -460,32 +271,40 @@ func (h *Handler) activateHintModeInternal(
 
 	h.hints.Context.SetRouter(domainHint.NewRouter(h.hints.Context.Manager(), h.logger))
 
-	debugElapsed(h.logger, activationStart, "Manager.SetHints completed")
+	// Every activation puts the hints Frame on screen again, fresh or
+	// in-place: the refresh path runs after a passthrough or a space change,
+	// where the overlay has to be re-shown on the display the user is now on.
+	//
+	// This sits immediately before SetHints on purpose. Clearing the flag says
+	// "the next draw performs the window sequence", so it may only be cleared
+	// where the hint manager's pending debounced updates are invalidated in the
+	// same locked section — SetHints below bumps the update generation, and on
+	// the teardown path Manager.Clear does. Clearing it any earlier would let a
+	// debounce timer that fired in between show and switch an overlay this
+	// activation may still abandon.
+	h.hintsFrameOnScreen = false
 
 	setHintsErr := h.hints.Context.SetHints(hintCollection)
 	if setHintsErr != nil {
 		h.logger.Error("Failed to set hints in manager", zap.Error(setHintsErr))
-		h.exitModeLocked()
+		h.exitMode()
 
 		return
 	}
-
-	h.overlayManager.ResizeToActiveScreen()
-	h.overlayManager.Show()
 
 	fields := []zap.Field{
 		zap.Duration("elapsed", time.Since(activationStart)),
 		zap.Int("hint_count", len(domainHints)),
 		zap.String("strategy", strategy),
 	}
-	if actionStr != nil {
-		fields = append(fields, zap.String("action", *actionStr))
+	if activation.Action != nil {
+		fields = append(fields, zap.String("action", *activation.Action))
 	}
 
 	h.logger.Info("Hints mode activated", fields...)
 
-	if search != nil && *search {
-		err := h.startHintSearchLocked()
+	if activation.Search != nil && *activation.Search {
+		err := h.startHintSearch()
 		if err != nil {
 			h.logger.Error("Failed to start hint search on activation", zap.Error(err))
 		}
@@ -494,78 +313,80 @@ func (h *Handler) activateHintModeInternal(
 	h.startIndicatorPolling(domain.ModeHints)
 }
 
-// ensureScreenCapturePermissionsLocked checks and requests screen capture permissions.
-// It releases h.mu during the modal prompt to avoid blocking other threads.
-// Returns the updated activeScreenBounds, bundleID, strategy, and whether it is safe to proceed.
-func (h *Handler) ensureScreenCapturePermissionsLocked(
-	activeScreenBounds image.Rectangle,
-	bundleID string,
-	strategy string,
-	strategyVal string,
-) (image.Rectangle, string, string, bool) {
-	if strategy != config.StrategyVision {
-		return activeScreenBounds, bundleID, strategy, true
+// needsScreenCapturePermission reports whether a screen-capture strategy is
+// blocked on the screen-recording permission. Vision and contour both read the
+// window's pixels, so both pay the gate. Axtree never touches the screen.
+func (h *handlerState) needsScreenCapturePermission(strategy string) bool {
+	if strategy != domain.StrategyVision && strategy != domain.StrategyContour {
+		return false
 	}
 
-	if platform.CheckScreenCapturePermissions() {
-		return activeScreenBounds, bundleID, strategy, true
-	}
+	return h.system != nil && !h.system.CheckScreenCapturePermission(h.ctx)
+}
 
+// requestScreenCapturePermissionAndResume shows the blocking permission dialog
+// on its own goroutine and re-enters the handler through the outer locked
+// surface once the user decides. The mode-session token captured here lets the
+// resume detect any state change that happened while the dialog was open and
+// drop the stale consent.
+func (h *handlerState) requestScreenCapturePermissionAndResume(
+	activation modecmd.Activation,
+) {
 	session := h.modeSession
-	h.mu.Unlock()
+	system := h.system
+	ctx := h.ctx
+	outer := h.outer
 
-	choice := platform.ShowScreenCapturePermissionAlert()
+	go func() {
+		consent := system.RequestScreenCapturePermission(ctx)
+		outer.resumeHintActivationAfterPermission(consent, session, activation)
+	}()
+}
 
+// resumeHintActivationAfterPermission re-enters the handler once the
+// screen-capture permission dialog is answered. A granted consent re-runs the
+// activation from the top, which re-reads the screen bounds, focused app and
+// strategy that may have changed while the dialog was open; a consent whose
+// mode session moved on is dropped.
+func (h *Handler) resumeHintActivationAfterPermission(
+	consent ports.ScreenCaptureConsent,
+	session uint64,
+	activation modecmd.Activation,
+) {
 	h.mu.Lock()
+	defer h.mu.Unlock()
 
-	// Check if state changed while we were unlocked.
 	if h.ctx.Err() != nil || h.modeSession != session {
 		h.logger.Debug(
-			"Aborting hint mode activation: state changed or context canceled while waiting for permission dialog",
+			"Dropping screen-capture consent: state changed while the permission dialog was open",
 		)
 
-		return activeScreenBounds, bundleID, strategy, false
+		return
 	}
 
-	if choice == platform.ScreenCapturePermissionStartupQuit {
+	switch consent {
+	case ports.ScreenCaptureQuit:
 		h.shutdown()
+	case ports.ScreenCaptureCanceled:
+		// Canceled is the platform's answer for "the user said no" *and* for a
+		// permission gate that could not be reached at all — a stopped
+		// xdg-desktop-portal on KDE, say — because the consent vocabulary has no
+		// third word for it. Leaving the mode without a line would make the two
+		// indistinguishable from a hint activation that silently did nothing.
+		h.logger.Warn("Screen capture was not permitted, leaving hints mode")
+		h.exitMode()
+	case ports.ScreenCaptureGranted:
+		// A Granted consent implies the check now passes (the SystemPort
+		// contract). If it does not, re-running the activation would show the
+		// dialog again in an unbounded loop, so drop the consent instead.
+		if h.system != nil && !h.system.CheckScreenCapturePermission(h.ctx) {
+			h.logger.Warn(
+				"Screen-capture consent granted but the permission check still fails; not retrying",
+			)
 
-		return activeScreenBounds, bundleID, strategy, false
-	}
-
-	if choice == platform.ScreenCapturePermissionStartupCancel {
-		h.exitModeLocked()
-
-		return activeScreenBounds, bundleID, strategy, false
-	}
-
-	// Re-read screen bounds under the lock in case they changed while the modal was open.
-	if h.system != nil {
-		b, err := h.system.ScreenBounds(h.ctx)
-		if err == nil {
-			activeScreenBounds = b
-			h.screenBounds = activeScreenBounds
+			return
 		}
+
+		h.activateHintModeInternal(activation)
 	}
-
-	// Re-fetch bundle ID under the lock since the focused app might have changed while the modal was open.
-	bundleCtx, bundleCancel := context.WithTimeout(h.ctx, 1*time.Second)
-	newBundleID, bundleIDErr := h.actionService.FocusedAppBundleID(bundleCtx)
-
-	bundleCancel()
-
-	if bundleIDErr == nil {
-		bundleID = newBundleID
-	} else {
-		h.logger.Debug("Failed to re-fetch focused app bundle ID for hint generation",
-			zap.Error(bundleIDErr))
-	}
-
-	// Re-evaluate strategy in case the focused app changed.
-	strategy = h.config.Hints.StrategyForApp(bundleID)
-	if strategyVal != "" {
-		strategy = strategyVal
-	}
-
-	return activeScreenBounds, bundleID, strategy, true
 }

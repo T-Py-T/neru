@@ -9,32 +9,28 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/app/components"
-	"github.com/y3owk1n/neru/internal/app/components/grid"
-	"github.com/y3owk1n/neru/internal/app/components/hints"
-	"github.com/y3owk1n/neru/internal/app/components/recursivegrid"
+	"github.com/y3owk1n/neru/internal/app/heldmotion"
 	"github.com/y3owk1n/neru/internal/app/services"
 	"github.com/y3owk1n/neru/internal/app/services/modeindicator"
 	"github.com/y3owk1n/neru/internal/app/services/stickyindicator"
+	"github.com/y3owk1n/neru/internal/app/services/virtualpointer"
 	configpkg "github.com/y3owk1n/neru/internal/config"
-	"github.com/y3owk1n/neru/internal/core/domain"
-	"github.com/y3owk1n/neru/internal/core/domain/action"
-	domainHint "github.com/y3owk1n/neru/internal/core/domain/hint"
-	"github.com/y3owk1n/neru/internal/core/domain/state"
-	derrors "github.com/y3owk1n/neru/internal/core/errors"
-	"github.com/y3owk1n/neru/internal/core/ports"
-	"github.com/y3owk1n/neru/internal/ui"
-	"github.com/y3owk1n/neru/internal/ui/coordinates"
-	"github.com/y3owk1n/neru/internal/ui/overlay"
+	"github.com/y3owk1n/neru/internal/derrors"
+	"github.com/y3owk1n/neru/internal/domain"
+	"github.com/y3owk1n/neru/internal/domain/action"
+	"github.com/y3owk1n/neru/internal/domain/modecmd"
+	"github.com/y3owk1n/neru/internal/domain/state"
+	"github.com/y3owk1n/neru/internal/ports"
 )
 
 // Mode defines the interface that all navigation modes must implement.
 // This provides a consistent API contract for mode activation, key handling,
 // and cleanup operations.
 type Mode interface {
-	// Activate activates the mode with an optional pending action.
-	// When repeat is true the mode re-activates after performing the action
-	// instead of exiting.
-	Activate(opts ModeActivationOptions)
+	// Activate enters the mode with the flags the activation carries. Every
+	// flag the mode accepts is in there: nothing is copied out of it on the
+	// way in, so a mode reads the same value the grammar produced.
+	Activate(activation modecmd.Activation)
 
 	// HandleKey processes a key press within the mode's context.
 	HandleKey(key string)
@@ -42,26 +38,81 @@ type Mode interface {
 	// Exit performs mode-specific cleanup and deactivation.
 	Exit()
 
-	// ModeType returns the domain mode type this implementation represents.
-	ModeType() domain.Mode
+	// RefreshForMonitorMove puts the mode's Frame back on screen against
+	// targetBounds after the cursor has been warped to another display. The
+	// frame was taken off screen before the warp, so this is a transition onto
+	// the display the cursor landed on rather than a repaint of the one it
+	// left.
+	//
+	// The caller holds h.mu across the whole dispatch, so the mode it selected
+	// is still the active one here and an implementation must not re-check.
+	// Why it is core rather than an optional extension, and why the re-checks
+	// are gone, is ADR 0004.
+	RefreshForMonitorMove(ctx context.Context, targetBounds image.Rectangle)
 }
 
-// Handler encapsulates mode-specific logic and dependencies.
+// Handler is the locked outer shell of the mode handler: it owns the mutexes
+// and the exported entry points, each of which takes mu and delegates to the
+// embedded handlerState. Methods on Handler may lock; methods on state may not.
 type Handler struct {
-	// mu serializes access to Handler state between the event tap callback thread
+	handlerState
+
+	// mu serializes access to handler state between the event tap callback thread
 	// and timer goroutines (e.g., refreshHintsTimer). All public entry points
 	// (HandleKeyPress, ActivateMode, ExitMode) and timer callbacks must hold this lock.
 	mu sync.Mutex
 
-	config         *configpkg.Config
-	themeProvider  configpkg.ThemeProvider
-	system         ports.SystemPort
-	logger         *zap.Logger
-	appState       *state.AppState
-	cursorState    *state.CursorState
-	modifierState  *state.ModifierState
-	overlayManager overlay.ManagerInterface
-	renderer       *ui.OverlayRenderer
+	// moveMonitorMu serializes MoveMonitor invocations. Lock ordering is
+	// always moveMonitorMu -> h.mu: MoveMonitor holds this while clearing the
+	// frame and again while refreshActiveModeForMonitorMove dispatches the
+	// refresh, each of which takes h.mu for the length of its own call. Never
+	// acquire in the reverse order.
+	moveMonitorMu sync.Mutex
+}
+
+// state carries every field of the mode handler and every method that runs
+// with Handler.mu already held. It deliberately has no mutex: a state method
+// cannot lock, and it cannot reach the exported (locking) Handler surface, so
+// "caller must hold the lock" is enforced by the compiler instead of by the
+// old *Locked naming convention. Mode implementations receive a *state.
+//
+// The one escape hatch is outer, the back-reference to the owning Handler.
+// It exists solely so state methods can schedule deferred work (timers,
+// goroutines) whose callbacks must take the lock when they later fire. Never
+// call anything on outer synchronously from a state method — that is the
+// self-deadlock the split exists to prevent.
+type handlerState struct {
+	// outer is the owning Handler. Deferred callbacks only; see the type comment.
+	outer *Handler
+
+	config        *configpkg.Config
+	system        ports.SystemPort
+	logger        *zap.Logger
+	appState      *state.AppState
+	cursorState   *state.CursorState
+	modifierState *state.ModifierState
+	// overlayPort is the one way a mode reaches the screen: it hands over a
+	// Frame describing what should be on it and never sequences a transition
+	// itself. Since #1213 it is the only overlay reference this package has:
+	// the Linux keyboard grab goes through this same port rather than through
+	// the overlay package's singleton (indicator_polling.go).
+	//
+	// Its type is overlaySurface, not ports.OverlayPort: the calls the handler
+	// must never make are not on it, so making one is a compile error rather
+	// than a rule to remember (overlay.go).
+	overlayPort overlaySurface
+	// hintsFrameOnScreen records whether this activation has already put the
+	// hints Frame on screen. The hint manager's update callback fires on
+	// activation and again on every narrowing keystroke; only the first needs
+	// the overlay shown and switched, and paying for a window show per
+	// keystroke is the latency regression AGENTS.md forbids.
+	//
+	// It may only be cleared in a locked section that also invalidates the hint
+	// manager's pending update generation, or a debounce timer firing after the
+	// clear performs a window transition for an activation that is already
+	// gone. The two sites that clear it both satisfy that (`hints.go`,
+	// `hintdraw.go`).
+	hintsFrameOnScreen bool
 	// New Services
 	hintService            *services.HintService
 	gridService            *services.GridService
@@ -69,11 +120,13 @@ type Handler struct {
 	scrollService          *services.ScrollService
 	modeIndicatorService   *modeindicator.Service
 	stickyIndicatorService *stickyindicator.Service
+	virtualPointerService  *virtualpointer.Service
 
 	hints         *components.HintsComponent
 	grid          *components.GridComponent
 	scroll        *components.ScrollComponent
 	recursiveGrid *components.RecursiveGridComponent
+	bisect        *components.BisectComponent
 	monitorSelect *monitorSelectSession
 
 	// Mode implementations
@@ -82,20 +135,35 @@ type Handler struct {
 	// Screen bounds for coordinate conversion (grid and hints)
 	screenBounds image.Rectangle
 
-	enableEventTap             func()
-	disableEventTap            func()
-	setModifierPassthrough     func(enabled bool, blacklist []string)
-	setInterceptedModifierKeys func(keys []string)
-	setPassthroughCallback     func(cb func())
-	setStickyModifierToggle    func(enabled bool)
-	postModifierEvent          func(modifier string, isDown bool)
-	refreshHotkeys             func()
-	executeHotkeyAction        func(key, actionStr string) error
-	shutdown                   func()
-	refreshHintsTimer          *time.Timer
-	modeSession                uint64
-	hotkeyLastKey              string
-	hotkeyLastKeyTime          int64
+	// focusedApp is the cell the application watcher publishes the focused app
+	// into, and the keymap fields below are what the handler settles from it.
+	// Both belong to keymap.go, which is where the rules about them are
+	// written; the cell is lock-free on purpose and must stay that way.
+	focusedApp *focusedAppCell
+	// keymap is the mode's own bindings in force and globalHotkeys is the global
+	// [hotkeys] table it falls back to for a chord it does not bind, filtered to
+	// modifier chords. The two settle together and from the same inputs, so a
+	// keystroke that consults both still asks the platform nothing.
+	//
+	// keymapSettledFor is what they were settled for, and keymapSettled says they
+	// have been settled at all — two zero keymaps are a legitimate answer (a mode
+	// that binds nothing, with no global chords), so neither can double as "not
+	// settled yet".
+	keymap           configpkg.Keymap
+	globalHotkeys    configpkg.Keymap
+	keymapSettledFor keymapInputs
+	keymapSettled    bool
+
+	// eventTap is nil until the app's phase 8 calls SetEventTap; every use
+	// goes through the nil-guarded helpers in eventtap.go.
+	eventTap              ports.EventTapPort
+	refreshHotkeys        func()
+	executeActionSequence func(source string, steps []string)
+	shutdown              func()
+	refreshHintsTimer     *time.Timer
+	modeSession           uint64
+	hotkeyLastKey         string
+	hotkeyLastKeyTime     int64
 
 	textInput                  ports.TextInputPort
 	hintSearchTextInputActive  bool
@@ -109,18 +177,23 @@ type Handler struct {
 	usedInChordModifiers  action.Modifiers
 	suppressedModifiers   action.Modifiers
 	suppressedUntil       time.Time
+	modifierFreshPress    map[action.Modifiers]bool
 	debounceNotify        chan struct{} // test-only: signaled when a debounce callback completes
-
-	// moveMonitorMu serializes MoveMonitor invocations. Lock ordering is
-	// always moveMonitorMu -> h.mu (MoveMonitor holds this while calling
-	// refreshActiveModeOnNewScreen, which acquires h.mu via the
-	// Refresh*ForScreenChange helpers). Never acquire in the reverse order.
-	moveMonitorMu sync.Mutex
 
 	// Indicator polling (shared by all modes)
 	indicatorTicker *time.Ticker
 	indicatorStopCh chan struct{}
 	indicatorDoneCh chan struct{}
+
+	// systemCursorHidden tracks whether the hide_cursor action is holding the
+	// system cursor hidden. It is also what gates the standalone
+	// cursor-following virtual pointer that stands in for it; the in-frame
+	// pointers the grid modes draw are unrelated and no mode sets this.
+	systemCursorHidden bool
+
+	// lastCursorRehideTime records the last time RehideSystemCursor was called
+	// to avoid excessive re-hide calls in the polling loop.
+	lastCursorRehideTime time.Time
 
 	// Cycle hint state
 	cycleHintIndex int
@@ -134,40 +207,71 @@ type Handler struct {
 	// and a custom goroutine drives the repeat at heldRepeatInterval.
 	heldRepeatingKey    string
 	heldRepeatingCancel context.CancelFunc
+
+	// motion is this handler's namespace in the held-key glide controller;
+	// nil (or a nil-safe empty group) when the app runs without one.
+	motion *heldmotion.Group
+	// fedPress is set for the duration of a key fed over IPC, which has no
+	// release event and so must take the discrete path, never the glide.
+	fedPress bool
 }
 
-// NewHandler creates a new mode handler.
-func NewHandler(
-	ctx context.Context,
-	config *configpkg.Config,
-	logger *zap.Logger,
-	appState *state.AppState,
-	cursorState *state.CursorState,
-	overlayManager overlay.ManagerInterface,
-	renderer *ui.OverlayRenderer,
-	hintService *services.HintService,
-	gridService *services.GridService,
-	actionService *services.ActionService,
-	scrollService *services.ScrollService,
-	modeIndicatorService *modeindicator.Service,
-	stickyIndicatorService *stickyindicator.Service,
-	hintsComponent *components.HintsComponent,
-	grid *components.GridComponent,
-	scroll *components.ScrollComponent,
-	recursiveGridComponent *components.RecursiveGridComponent,
-	enableEventTap func(),
-	disableEventTap func(),
-	setModifierPassthrough func(enabled bool, blacklist []string),
-	setInterceptedModifierKeys func(keys []string),
-	setPassthroughCallback func(cb func()),
-	setStickyModifierToggle func(enabled bool),
-	postModifierEvent func(modifier string, isDown bool),
-	refreshHotkeys func(),
-	executeHotkeyAction func(key, actionStr string) error,
-	shutdown func(),
-	textInput ports.TextInputPort,
-	systemPort ports.SystemPort,
-) *Handler {
+// HandlerDeps collects everything NewHandler needs.
+//
+// It is a struct rather than a positional list because the list had reached
+// twenty-nine arguments, seven of which were closures that together formed an
+// open-coded ports.EventTapPort. Those seven are gone: the handler holds the
+// port itself, injected after construction via SetEventTap because the event
+// tap does not exist yet when the handler is built.
+type HandlerDeps struct {
+	Ctx context.Context //nolint:containedctx // root context, matches Handler.ctx
+
+	Config *configpkg.Config
+	Logger *zap.Logger
+
+	AppState    *state.AppState
+	CursorState *state.CursorState
+
+	// OverlayPort is what the modes draw through. It is narrowed to
+	// overlaySurface here rather than taken as ports.OverlayPort: a caller
+	// passes the full port and the handler keeps only the part it may call
+	// (overlay.go).
+	OverlayPort overlaySurface
+
+	HintService            *services.HintService
+	GridService            *services.GridService
+	ActionService          *services.ActionService
+	ScrollService          *services.ScrollService
+	ModeIndicatorService   *modeindicator.Service
+	StickyIndicatorService *stickyindicator.Service
+	VirtualPointerService  *virtualpointer.Service
+
+	HintsComponent         *components.HintsComponent
+	GridComponent          *components.GridComponent
+	ScrollComponent        *components.ScrollComponent
+	RecursiveGridComponent *components.RecursiveGridComponent
+	BisectComponent        *components.BisectComponent
+
+	// RefreshHotkeys re-registers hotkeys for the focused app.
+	RefreshHotkeys func()
+	// ExecuteActionSequence runs an ordered list of action steps. The daemon
+	// owns the sequencing rules (bail handling, error reporting), so a binding
+	// behaves the same whether it is dispatched from here or from anywhere
+	// else. source names the caller (a bind key, "on-exit") for logging.
+	ExecuteActionSequence func(source string, steps []string)
+	// Shutdown quits the daemon.
+	Shutdown func()
+
+	TextInput ports.TextInputPort
+	System    ports.SystemPort
+
+	// Motion is the handler's namespace in the held-key glide controller.
+	Motion *heldmotion.Group
+}
+
+// NewHandler creates a mode handler from deps.
+func NewHandler(deps HandlerDeps) *Handler {
+	logger := deps.Logger
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -180,752 +284,315 @@ func NewHandler(
 	// any other error is logged as a warning.
 	var screenBounds image.Rectangle
 
-	if systemPort != nil {
+	if deps.System != nil {
 		var boundsErr error
 
-		screenBounds, boundsErr = systemPort.ScreenBounds(context.Background())
+		screenBounds, boundsErr = deps.System.ScreenBounds(context.Background())
 		if boundsErr != nil && !derrors.IsNotSupported(boundsErr) {
 			logger.Warn("Failed to get initial screen bounds", zap.Error(boundsErr))
 		}
 	}
 
-	handler := &Handler{
-		ctx:                        ctx,
-		config:                     config,
-		logger:                     logger,
-		appState:                   appState,
-		cursorState:                cursorState,
-		modifierState:              state.NewModifierState(),
-		overlayManager:             overlayManager,
-		renderer:                   renderer,
-		hintService:                hintService,
-		gridService:                gridService,
-		actionService:              actionService,
-		scrollService:              scrollService,
-		modeIndicatorService:       modeIndicatorService,
-		stickyIndicatorService:     stickyIndicatorService,
-		hints:                      hintsComponent,
-		grid:                       grid,
-		scroll:                     scroll,
-		recursiveGrid:              recursiveGridComponent,
-		screenBounds:               screenBounds,
-		enableEventTap:             enableEventTap,
-		disableEventTap:            disableEventTap,
-		setModifierPassthrough:     setModifierPassthrough,
-		setInterceptedModifierKeys: setInterceptedModifierKeys,
-		setPassthroughCallback:     setPassthroughCallback,
-		setStickyModifierToggle:    setStickyModifierToggle,
-		postModifierEvent:          postModifierEvent,
-		refreshHotkeys:             refreshHotkeys,
-		executeHotkeyAction:        executeHotkeyAction,
-		shutdown:                   shutdown,
-		textInput:                  textInput,
-		themeProvider:              systemPort,
-		system:                     systemPort,
-		cycleHintIndex:             -1,
+	handler := &Handler{}
+	handler.handlerState = handlerState{
+		outer:                  handler,
+		ctx:                    deps.Ctx,
+		config:                 deps.Config,
+		logger:                 logger,
+		appState:               deps.AppState,
+		cursorState:            deps.CursorState,
+		modifierState:          state.NewModifierState(),
+		overlayPort:            deps.OverlayPort,
+		hintService:            deps.HintService,
+		gridService:            deps.GridService,
+		actionService:          deps.ActionService,
+		scrollService:          deps.ScrollService,
+		modeIndicatorService:   deps.ModeIndicatorService,
+		stickyIndicatorService: deps.StickyIndicatorService,
+		virtualPointerService:  deps.VirtualPointerService,
+		hints:                  deps.HintsComponent,
+		grid:                   deps.GridComponent,
+		scroll:                 deps.ScrollComponent,
+		recursiveGrid:          deps.RecursiveGridComponent,
+		bisect:                 deps.BisectComponent,
+		screenBounds:           screenBounds,
+		refreshHotkeys:         deps.RefreshHotkeys,
+		executeActionSequence:  deps.ExecuteActionSequence,
+		shutdown:               deps.Shutdown,
+		textInput:              deps.TextInput,
+		motion:                 deps.Motion,
+		system:                 deps.System,
+		focusedApp:             &focusedAppCell{},
+		cycleHintIndex:         -1,
 	}
 
-	// Initialize mode implementations
-	handler.modes = map[domain.Mode]Mode{
-		domain.ModeHints:         NewHintsMode(handler),
-		domain.ModeGrid:          NewGridMode(handler),
-		domain.ModeScroll:        NewScrollMode(handler),
-		domain.ModeRecursiveGrid: NewRecursiveGridMode(handler),
-		domain.ModeMonitorSelect: NewMonitorSelectMode(handler),
-	}
+	fillIndicatorServices(&handler.handlerState, logger)
+
+	handler.modes = newModes(&handler.handlerState)
 
 	return handler
 }
 
-// RefreshHintsForScreenChange updates the hint collection under the handler
-// mutex so that the onUpdate callback can safely read h.screenBounds and
-// write to h.overlayManager. Called from the screen-change goroutine in
-// lifecycle.go.
+// newModes builds the map the handler dispatches every mode operation through.
+// Modes run with the lock already held, so they are built on the inner state
+// and cannot re-enter the locked surface.
 //
-// Returns true if the refresh was performed, false if the mode was exited
-// concurrently (TOCTOU guard).
-func (h *Handler) RefreshHintsForScreenChange(
-	ctx context.Context,
-	hintService *services.HintService,
-) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+// Registering a mode here is what puts it in front of TestModeExtensionMatrix,
+// which then fails until the mode states which optional extensions it carries
+// (extensions.go).
+func newModes(state *handlerState) map[domain.Mode]Mode {
+	return map[domain.Mode]Mode{
+		domain.ModeHints:         NewHintsMode(state),
+		domain.ModeGrid:          NewGridMode(state),
+		domain.ModeScroll:        NewScrollMode(state),
+		domain.ModeRecursiveGrid: NewRecursiveGridMode(state),
+		domain.ModeBisect:        NewBisectMode(state),
+		domain.ModeMonitorSelect: NewMonitorSelectMode(state),
+		domain.ModeCustom:        NewCustomMode(state),
+	}
+}
 
-	// Re-check mode under the lock to close the TOCTOU window between the
-	// snapshot in processScreenChange and the actual work here.
-	if h.appState.CurrentMode() != domain.ModeHints {
-		h.logger.Debug("Skipping hint screen-change refresh: mode exited concurrently")
+// fillIndicatorServices gives the handler a service for every indicator,
+// substituting a portless one for anything the caller left out.
+//
+// Mode logic then drives an indicator unconditionally: whether the indicator
+// was ever constructed — a disabled one, a headless backend — is answered
+// inside the service instead of by a pointer test at each call site.
+//
+// Only a test builds a handler without one, so a substitution in a real
+// session is a wiring mistake, and it says so rather than leaving an
+// indicator silently dead.
+func fillIndicatorServices(state *handlerState, logger *zap.Logger) {
+	if state.modeIndicatorService == nil {
+		logIndicatorSubstitution(logger, ports.ModeIndicator)
 
-		return false
+		state.modeIndicatorService = modeindicator.NewService(state.system, nil)
 	}
 
-	// Re-read screen bounds under the lock so the onUpdate callback
-	// uses coordinates that match the resized overlay.
-	if h.system != nil {
-		b, err := h.system.ScreenBounds(ctx)
-		if err == nil {
-			h.screenBounds = b
-		} else if !derrors.IsNotSupported(err) {
-			h.logger.Warn("Failed to refresh screen bounds after screen change", zap.Error(err))
-		}
+	if state.stickyIndicatorService == nil {
+		logIndicatorSubstitution(logger, ports.StickyModifiersIndicator)
+
+		state.stickyIndicatorService = stickyindicator.NewService(state.system, nil)
 	}
 
-	// Escape any active IME search session before refreshing hints on the new
-	// screen. The old IME session is bound to the previous screen and loses
-	// focus during the space transition, causing subsequent keystrokes to be
-	// forwarded to the frontmost app instead.
-	if h.hints != nil && h.hints.Context != nil && h.hints.Context.SearchActive() {
-		h.cancelHintSearch()
+	if state.virtualPointerService == nil {
+		logIndicatorSubstitution(logger, ports.VirtualPointerIndicator)
+
+		state.virtualPointerService = virtualpointer.NewService(state.system, nil)
+	}
+}
+
+// logIndicatorSubstitution reports an indicator the handler was not given a
+// service for. It names the indicator and nothing it would draw.
+func logIndicatorSubstitution(logger *zap.Logger, indicator ports.Indicator) {
+	if logger == nil {
+		return
 	}
 
-	// Get current filter options from context
-	filterRoles := h.hints.Context.FilterRoles()
-	filterTextContains := h.hints.Context.FilterTextContains()
-	strategyOverride := h.hints.Context.StrategyOverride()
-	labelDirectionOverride := h.hints.Context.LabelDirectionOverride()
-
-	// Generate hints with filters preserved; SetHints below performs the
-	// single redraw after active-screen filtering.
-	domainHints, showHintsErr := hintService.GenerateHints(
-		ctx,
-		filterRoles,
-		filterTextContains,
-		"",
-		strategyOverride,
-		labelDirectionOverride,
+	logger.Debug(
+		"No service for indicator; it will not be drawn",
+		zap.String("indicator", indicator.String()),
 	)
-	if showHintsErr != nil {
-		h.logger.Error("Failed to refresh hints after screen change", zap.Error(showHintsErr))
-		h.exitModeLocked()
-
-		return false
-	}
-
-	if len(domainHints) == 0 {
-		h.logger.Debug("No hints after screen change refresh")
-		h.exitModeLocked()
-
-		return false
-	}
-
-	allHints := domainHints
-
-	filtered := filterHintsForScreen(allHints, h.screenBounds)
-	if len(filtered) == 0 {
-		h.logger.Debug("No hints on active screen after filter; skipping refresh")
-		h.exitModeLocked()
-
-		return false
-	}
-
-	setHintsErr := h.hints.Context.SetHints(
-		domainHint.NewCollection(filtered),
-	)
-	if setHintsErr != nil {
-		h.logger.Error("Failed to refresh hints for screen change", zap.Error(setHintsErr))
-
-		return false
-	}
-
-	return true
 }
 
-// RefreshGridForScreenChange regenerates the grid with updated screen bounds
-// under the handler mutex. The user's current input is reset because old cell
-// coordinates are invalid on the new screen. Called from the screen-change
-// handler in lifecycle.go when ModeGrid is active.
+// ActivateMode enters the mode an activation names, with every flag it was
+// given.
 //
-// Returns true if the refresh was performed, false if the mode was exited
-// concurrently (TOCTOU guard) or the draw failed.
-func (h *Handler) RefreshGridForScreenChange() bool {
+// It and ActivateEnabledMode are the handler's only activation entry points.
+// Both take the same Activation the grammar parses, the CLI builds and the
+// configuration validator reads. Nothing is copied on the way in, so a flag a
+// mode accepts cannot be lost between being read and being applied.
+func (h *Handler) ActivateMode(activation modecmd.Activation) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	// Re-check mode under the lock to close the TOCTOU window between the
-	// snapshot in processScreenChange and the actual work here.
-	if h.appState.CurrentMode() != domain.ModeGrid {
-		h.logger.Debug("Skipping grid screen-change refresh: mode exited concurrently")
-
-		return false
-	}
-
-	// Regenerate the grid with updated screen bounds.
-	// createGridInstance also updates h.screenBounds and sets the grid on the context.
-	gridInstance := h.createGridInstance()
-
-	currentInput := ""
-
-	if h.grid.Manager != nil {
-		// Sync the Manager's internal grid reference so subsequent key presses
-		// use the new grid's geometry for cell matching (fixes stale-bounds bug).
-		h.grid.Manager.UpdateGrid(gridInstance)
-
-		// Reset input state because old cell coordinates/bounds are invalid on
-		// the new screen, and any in-progress subgrid selection would reference
-		// a stale cell.
-		h.grid.Manager.Reset()
-	}
-
-	// Clear stale selection — old coordinates are invalid on the new screen.
-	h.grid.Context.ClearSelectionPoint()
-
-	drawGridErr := h.renderer.DrawGrid(gridInstance, currentInput)
-	if drawGridErr != nil {
-		h.logger.Error("Failed to refresh grid after screen change", zap.Error(drawGridErr))
-
-		return false
-	}
-
-	// Ensure the virtual pointer is hidden (DrawGrid may clear cursorIndicatorVisible
-	// via NeruClearOverlay, but we explicitly hide it for consistency).
-	h.refreshGridVirtualPointerLocked()
-
-	return true
+	h.activateMode(activation)
 }
 
-// RefreshRecursiveGridForScreenChange remaps the recursive-grid manager's
-// bounds to the new screen dimensions, preserving the user's current depth
-// and selection progress. Called from the screen-change handler in
-// lifecycle.go when ModeRecursiveGrid is active.
-//
-// Returns true if the refresh was performed, false if the mode was exited
-// concurrently (TOCTOU guard — the caller snapshots the mode without holding
-// h.mu, so a concurrent ExitMode could have transitioned to Idle by the time
-// we acquire the lock here).
-func (h *Handler) RefreshRecursiveGridForScreenChange() bool {
+// ActivateEnabledMode is ActivateMode for a caller that has to report a
+// refusal. It returns false, and does nothing, when the configuration disables
+// the mode. The check and the activation share one hold of the lock, so a
+// reload cannot disable the mode between them.
+func (h *Handler) ActivateEnabledMode(activation modecmd.Activation) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	// Re-check mode under the lock to close the TOCTOU window between the
-	// snapshot in processScreenChange and the actual work here.
-	if h.appState.CurrentMode() != domain.ModeRecursiveGrid {
-		h.logger.Debug("Skipping recursive-grid screen-change refresh: mode exited concurrently")
-
+	if h.config != nil && !h.config.ModeEnabled(domain.ModeString(activation.Mode)) {
 		return false
 	}
 
-	// Re-read screen bounds under the lock so the overlay uses coordinates
-	// that match the resized window.
-	if h.system != nil {
-		b, err := h.system.ScreenBounds(h.ctx)
-		if err == nil {
-			h.screenBounds = b
-		} else if !derrors.IsNotSupported(err) {
-			h.logger.Warn("Failed to refresh screen bounds for recursive grid", zap.Error(err))
-		}
-	}
-
-	normalizedBounds := coordinates.NormalizeToLocalCoordinates(h.screenBounds)
-
-	if h.recursiveGrid != nil && h.recursiveGrid.Manager != nil {
-		// Proportionally remap all bounds (history + currentBounds) so the
-		// user's zoomed-in region maps to the equivalent area on the new screen.
-		h.recursiveGrid.Manager.CurrentGrid().RemapToNewBounds(normalizedBounds)
-	} else {
-		// No existing manager — fall back to full initialization.
-		h.initializeRecursiveGridManager(normalizedBounds)
-	}
-
-	// Clear stale selection — old coordinates are invalid on the new screen.
-	if h.recursiveGrid != nil && h.recursiveGrid.Context != nil {
-		h.recursiveGrid.Context.ClearSelectionPoint()
-	}
-
-	// Redraw the overlay with the remapped grid.
-	h.updateRecursiveGridOverlay()
-	h.refreshRecursiveGridVirtualPointerLocked()
+	h.activateMode(activation)
 
 	return true
 }
 
-// RefreshHintsForThemeChange redraws the hints overlay with updated styles
-// after a system theme change. Only performs the redraw if ModeHints is
-// currently active.
+// activateMode is the body of both activation entry points.
 //
-// Returns true if a redraw was performed.
-func (h *Handler) RefreshHintsForThemeChange() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+// Caller must hold h.mu.
+func (h *handlerState) activateMode(activation modecmd.Activation) {
+	mode := activation.Mode
 
-	if h.appState.CurrentMode() != domain.ModeHints {
-		return false
+	// `neru stop` switches every mode off. The IPC controller refuses while
+	// paused, but the systray reaches this method directly. Leaving is always
+	// allowed, since it is what stop itself does.
+	if mode != domain.ModeIdle && !h.appState.IsEnabled() {
+		h.logger.Debug("Neru is stopped, ignoring mode activation",
+			zap.String("mode", domain.ModeString(mode)))
+
+		return
 	}
 
-	hintCollection := h.hints.Context.Hints()
-	if hintCollection == nil {
-		return false
+	// Toggle: if the mode is already active and --toggle was specified,
+	// exit to idle instead of re-activating. Every declared mode shares one
+	// enum value, so there "already active" also means the same name: toggling
+	// one declared mode from inside another switches rather than exits.
+	if activation.Toggle != nil && *activation.Toggle && h.appState.CurrentMode() == mode &&
+		(mode != domain.ModeCustom || h.appState.CustomModeName() == activation.Name) {
+		h.exitMode()
+
+		return
 	}
 
-	// Convert domain hints to overlay hints for rendering
-	filteredHints := hintCollection.All()
-	overlayHints := make([]*hints.Hint, len(filteredHints))
-	screenBounds := h.screenBounds
+	if mode == domain.ModeIdle {
+		h.exitMode()
 
-	for index, hint := range filteredHints {
-		// Convert screen-absolute coordinates to overlay-local coordinates
-		localPos := image.Point{
-			X: hint.Position().X - screenBounds.Min.X,
-			Y: hint.Position().Y - screenBounds.Min.Y,
-		}
-		overlayHints[index] = hints.NewHint(
-			hint.Label(),
-			localPos,
-			hint.Element().Bounds().Size(),
-			hint.MatchedPrefix(),
-		)
+		return
 	}
 
-	drawHintsErr := h.overlayManager.DrawHintsWithStyle(
-		overlayHints,
-		h.currentHintStyleLocked(),
-	)
-	if drawHintsErr != nil {
-		h.logger.Error("Failed to refresh hints after theme change", zap.Error(drawHintsErr))
+	modeImpl, exists := h.modes[mode]
+	if !exists {
+		h.logger.Warn("Unknown mode", zap.String("mode", domain.ModeString(mode)))
 
-		return false
+		return
 	}
 
-	return true
+	// Normalize --on-exit for external (re-)activations. The two entry points
+	// above are the only ones for user-driven activations (IPC, hotkeys,
+	// systray). Internal refreshes (repeat re-activation, space/screen change,
+	// cycle) bypass them and call the activate* helpers directly with a nil
+	// onExit to preserve the stored steps. An omitted --on-exit on a fresh external command must
+	// clear any steps left over from a prior activation of the same mode
+	// rather than inheriting them, so a later completed action does not run a
+	// stale command. A nil slice reaching those helpers means "preserve"; the
+	// non-nil empty slice substituted here means "clear", and it is a no-op at
+	// dispatch time.
+	if activation.OnExit == nil {
+		activation.OnExit = []string{}
+	}
+
+	h.advanceCycles(&activation, modeImpl)
+
+	modeImpl.Activate(activation)
 }
 
-// RefreshGridForThemeChange redraws the grid overlay with updated styles
-// after a system theme change. Only performs the redraw if ModeGrid is
-// currently active.
+// advanceCycles picks which entry of a --strategy or --capture-scope cycle
+// list this activation uses. Parsing already chose the first entry, and that
+// is kept when the mode is being entered. When the mode is already open, the
+// entry after the value in use replaces it.
 //
-// Returns true if a redraw was performed.
-func (h *Handler) RefreshGridForThemeChange() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if h.appState.CurrentMode() != domain.ModeGrid {
-		return false
+// It runs here rather than in the modes because only a user-driven activation
+// advances a cycle. The internal refreshes bypass ActivateMode and carry no list.
+func (h *handlerState) advanceCycles(activation *modecmd.Activation, target Mode) {
+	if h.appState.CurrentMode() != activation.Mode {
+		return
 	}
 
-	gridInstancePtr := h.grid.Context.GridInstance()
-	if gridInstancePtr == nil || *gridInstancePtr == nil {
-		return false
+	if reporter, ok := target.(strategyReporter); ok && len(activation.StrategyCycle) > 0 {
+		next := modecmd.NextInCycle(activation.StrategyCycle, reporter.ActiveStrategy())
+		activation.Strategy = &next
 	}
 
-	gridInstance := *gridInstancePtr
-
-	currentInput := ""
-	if h.grid.Manager != nil {
-		currentInput = h.grid.Manager.CurrentInput()
+	if reporter, ok := target.(captureScopeReporter); ok && len(activation.CaptureScopeCycle) > 0 {
+		next := modecmd.NextInCycle(activation.CaptureScopeCycle, reporter.ActiveCaptureScope())
+		activation.CaptureScope = &next
 	}
-
-	drawGridErr := h.renderer.DrawGrid(gridInstance, currentInput)
-	if drawGridErr != nil {
-		h.logger.Error("Failed to refresh grid after theme change", zap.Error(drawGridErr))
-
-		return false
-	}
-
-	h.refreshGridVirtualPointerLocked()
-
-	return true
 }
 
-// RefreshRecursiveGridForThemeChange redraws the recursive-grid overlay with
-// updated styles after a system theme change. Only performs the redraw if
-// ModeRecursiveGrid is currently active.
-//
-// Returns true if a redraw was performed.
-func (h *Handler) RefreshRecursiveGridForThemeChange() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if h.appState.CurrentMode() != domain.ModeRecursiveGrid {
-		return false
-	}
-
-	h.updateRecursiveGridOverlay()
-	h.refreshRecursiveGridVirtualPointerLocked()
-
-	return true
-}
-
-// UpdateConfig updates the handler with new configuration.
+// UpdateConfig updates the handler with new configuration. Overlay appearance
+// is not part of it: the overlay resolves its own Style and the handler reads
+// the result.
 func (h *Handler) UpdateConfig(config *configpkg.Config) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	h.config = config
 
-	if h.renderer != nil {
-		h.renderer.UpdateConfig(
-			hints.BuildStyle(config.Hints, h.themeProvider),
-			grid.BuildStyle(config.Grid, h.themeProvider),
-			recursivegrid.BuildStyle(config.RecursiveGrid, h.themeProvider),
-		)
+	h.updateComponentConfigs(config)
+
+	// A declared mode the new configuration no longer declares has no keymap
+	// to settle and no way out but this one, so the session ends here rather
+	// than leaving the keyboard captured by a mode that answers nothing.
+	if h.appState.CurrentMode() == domain.ModeCustom {
+		name := h.appState.CustomModeName()
+		if _, declared := config.Modes[name]; !declared {
+			h.logger.Info("Custom mode exited: the reloaded configuration no longer declares it",
+				zap.String("mode", name))
+			h.exitMode()
+		}
 	}
+
+	// Replacing the configuration replaces what is bound, and settling it here
+	// rather than on the next keystroke is what keeps the keystroke path unable
+	// to ask the platform anything (ADR 0005).
+	h.settledKeymap()
 
 	h.syncModifierPassthrough(h.appState.CurrentMode())
 }
 
-// ResetCurrentMode resets current mode input state without exiting.
-func (h *Handler) ResetCurrentMode() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+// updateComponentConfigs rebuilds the domain state the mode components derive
+// from configuration. Overlay appearance is not here: it reaches the render
+// components through the overlay's own Style notification.
+//
+// It runs here rather than on the app's reconfigure path because the state it
+// rebuilds is the state a keystroke reads. The grid manager is the one that
+// matters and it carries no lock of its own: the handler assigns it on
+// activation and reads it on every key, both under `h.mu`, so a reload writing
+// it from the app layer was a plain data race on live mode state (#1277).
+func (h *handlerState) updateComponentConfigs(config *configpkg.Config) {
+	if h.grid != nil {
+		h.grid.UpdateConfig(config, h.logger)
+	}
 
-	switch h.appState.CurrentMode() {
-	case domain.ModeGrid:
-		if h.grid != nil && h.grid.Manager != nil {
-			h.grid.Manager.Reset()
-
-			// Clear stale selection — input was reset so no cell is selected.
-			h.grid.Context.ClearSelectionPoint()
-
-			gridInstancePtr := h.grid.Context.GridInstance()
-			if gridInstancePtr != nil && *gridInstancePtr != nil {
-				err := h.renderer.DrawGrid(
-					*gridInstancePtr,
-					h.grid.Manager.CurrentInput(),
-				)
-				if err != nil {
-					h.logger.Error("Failed to redraw grid after reset", zap.Error(err))
-				}
-
-				h.refreshGridVirtualPointerLocked()
-			}
-		}
-	case domain.ModeRecursiveGrid:
-		if h.recursiveGrid != nil && h.recursiveGrid.Manager != nil {
-			h.recursiveGrid.Manager.Reset()
-
-			center := h.recursiveGrid.Manager.CurrentCenter()
-
-			absoluteCenter := coordinates.ConvertToAbsoluteCoordinates(center, h.screenBounds)
-			if h.recursiveGrid.Context != nil {
-				h.recursiveGrid.Context.SetSelectionPoint(absoluteCenter)
-			}
-
-			h.updateRecursiveGridOverlay()
-
-			if h.recursiveGrid.Context != nil {
-				if !h.recursiveGrid.Context.CursorFollowSelection() {
-					h.refreshRecursiveGridVirtualPointerLocked()
-
-					return
-				}
-			}
-
-			err := h.actionService.MoveCursorToPoint(
-				h.ctx,
-				absoluteCenter,
-			)
-			if err != nil {
-				h.logger.Error("Failed to move cursor after recursive-grid reset", zap.Error(err))
-			}
-		}
-	case domain.ModeMonitorSelect:
-		if h.monitorSelect != nil {
-			h.monitorSelect.input = ""
-			h.monitorSelect.selectedIndex = 0
-			h.redrawMonitorSelectLocked()
-		}
-	case domain.ModeIdle, domain.ModeHints, domain.ModeScroll:
-		// no-op
+	if h.scroll != nil {
+		h.scroll.UpdateConfig(config, h.logger)
 	}
 }
 
-// BackspaceCurrentMode performs mode-aware backspace behavior without exiting.
-func (h *Handler) BackspaceCurrentMode() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+// setScreenBounds records the active screen bounds used for overlay coordinate
+// conversion and names that display to the overlay. The grid, recursive-grid
+// and hint surfaces are drawn in screen-local coordinates (origin 0,0), so a
+// backend whose surface spans the whole desktop needs the screen to place that
+// content on the right monitor; where each screen owns a window it is ignored.
+func (h *handlerState) setScreenBounds(bounds image.Rectangle) {
+	h.screenBounds = bounds
 
-	switch h.appState.CurrentMode() {
-	case domain.ModeHints:
-		if h.hints != nil && h.hints.Context != nil && h.hints.Context.Manager() != nil {
-			backspaceErr := h.hints.Context.Manager().HandleBackspace()
-			if backspaceErr != nil {
-				h.logger.Error("Hint backspace failed", zap.Error(backspaceErr))
-			}
-		}
-
-		h.cycleHintIndex = -1
-	case domain.ModeGrid:
-		if h.grid != nil && h.grid.Manager != nil {
-			h.grid.Manager.HandleBackspace()
-		}
-	case domain.ModeRecursiveGrid:
-		if h.recursiveGrid != nil && h.recursiveGrid.Manager != nil &&
-			h.recursiveGrid.Manager.Backtrack() {
-			center := h.recursiveGrid.Manager.CurrentCenter()
-
-			absoluteCenter := coordinates.ConvertToAbsoluteCoordinates(center, h.screenBounds)
-
-			if h.recursiveGrid.Context != nil {
-				h.recursiveGrid.Context.SetSelectionPoint(absoluteCenter)
-			}
-
-			h.updateRecursiveGridOverlay()
-
-			if h.recursiveGrid.Context != nil {
-				if !h.recursiveGrid.Context.CursorFollowSelection() {
-					h.refreshRecursiveGridVirtualPointerLocked()
-
-					return
-				}
-			}
-
-			err := h.actionService.MoveCursorToPoint(
-				h.ctx,
-				absoluteCenter,
-			)
-			if err != nil {
-				h.logger.Error(
-					"Failed to move cursor after recursive-grid backspace",
-					zap.Error(err),
-				)
-			}
-		}
-	case domain.ModeMonitorSelect:
-		if h.monitorSelect != nil {
-			h.monitorSelect.Backspace()
-			h.redrawMonitorSelectLocked()
-		}
-	case domain.ModeIdle, domain.ModeScroll:
-		// no-op
+	if h.overlayPort != nil {
+		h.overlayPort.SetActiveScreen(bounds)
 	}
 }
 
-// StartHintSearch activates text filtering for hints mode.
-func (h *Handler) StartHintSearch() error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	return h.startHintSearchLocked()
-}
-
-// CycleHint cycles through visible hints in hints mode, selecting the next or previous one.
-func (h *Handler) CycleHint(ctx context.Context, backward bool) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if h.appState.CurrentMode() != domain.ModeHints {
-		return derrors.New(derrors.CodeInvalidInput, "cycle_hint requires hints mode")
+// screenScale is the display scale of bounds, 1 wherever the platform cannot
+// say. Sizes a user perceives, grid cells among them, are multiplied by it
+// before being laid out in the pixels bounds is measured in.
+func (h *handlerState) screenScale(bounds image.Rectangle) float64 {
+	if h.system == nil || bounds.Empty() {
+		return 1
 	}
 
-	if h.hints == nil || h.hints.Context == nil {
-		return derrors.New(derrors.CodeActionFailed, "hints component not available")
-	}
-
-	manager := h.hints.Context.Manager()
-	if manager == nil {
-		return derrors.New(derrors.CodeActionFailed, "hints manager not available")
-	}
-
-	filteredHints := manager.FilteredHints()
-	if len(filteredHints) == 0 {
-		filteredHints = h.hints.Context.Hints().All()
-	}
-
-	if len(filteredHints) == 0 {
-		return derrors.New(derrors.CodeActionFailed, "no hints available")
-	}
-
-	if h.cycleHintIndex >= len(filteredHints) {
-		h.cycleHintIndex = len(filteredHints) - 1
-	}
-
-	switch {
-	case h.cycleHintIndex < 0:
-		h.cycleHintIndex = 0
-		if backward {
-			h.cycleHintIndex = len(filteredHints) - 1
-		}
-	default:
-		if backward {
-			if h.cycleHintIndex > 0 {
-				h.cycleHintIndex--
-			} else {
-				h.cycleHintIndex = len(filteredHints) - 1
-			}
-		} else {
-			if h.cycleHintIndex < len(filteredHints)-1 {
-				h.cycleHintIndex++
-			} else {
-				h.cycleHintIndex = 0
-			}
-		}
-	}
-
-	selectedHint := filteredHints[h.cycleHintIndex]
-
-	center := selectedHint.Element().Center()
-
-	moveErr := h.actionService.MoveCursorToPoint(ctx, center)
-	if moveErr != nil {
-		h.logger.Error("Failed to move cursor during cycle_hint", zap.Error(moveErr))
-
-		return derrors.New(derrors.CodeActionFailed, "failed to move cursor: "+moveErr.Error())
-	}
-
-	pendingAction := h.hints.Context.PendingAction()
-	if pendingAction != nil {
-		cursorFollowSelection := h.hints.Context.CursorFollowSelection()
-		filterRoles := h.hints.Context.FilterRoles()
-		filterTextContains := h.hints.Context.FilterTextContains()
-		startWithSearch := h.hints.Context.StartWithSearch()
-		strategyOverride := h.hints.Context.StrategyOverride()
-		labelDirectionOverride := h.hints.Context.LabelDirectionOverride()
-
-		h.executeActionAtPoint(pendingAction, center, true, func() {
-			h.activateHintModeInternal(
-				nil,
-				nil,
-				filterRoles,
-				filterTextContains,
-				&startWithSearch,
-				&strategyOverride,
-				&labelDirectionOverride,
-			)
-
-			// Restore state so subsequent cycles continue to execute the action
-			if h.appState.CurrentMode() == domain.ModeHints &&
-				h.hints != nil && h.hints.Context != nil {
-				h.hints.Context.SetPendingAction(pendingAction)
-				h.hints.Context.SetRepeat(true)
-				h.hints.Context.SetCursorFollowSelection(cursorFollowSelection)
-				h.hints.Context.SetFilterRoles(filterRoles)
-				h.hints.Context.SetFilterTextContains(filterTextContains)
-				h.hints.Context.SetStartWithSearch(startWithSearch)
-				h.hints.Context.SetStrategyOverride(strategyOverride)
-				h.hints.Context.SetLabelDirectionOverride(labelDirectionOverride)
-			}
-		})
-	}
-
-	return nil
-}
-
-func (h *Handler) startHintSearchLocked() error {
-	if h.appState.CurrentMode() != domain.ModeHints {
-		return derrors.New(derrors.CodeInvalidInput, "search_hints requires hints mode")
-	}
-
-	if h.hints == nil || h.hints.Context == nil {
-		return derrors.New(derrors.CodeActionFailed, "hints component not available")
-	}
-
-	if h.hints.Context.SourceHints() == nil {
-		return derrors.New(derrors.CodeActionFailed, "hints not available")
-	}
-
-	h.stopHintSearchTextInputLocked(true)
-	h.hints.Context.SetSearchQuery("")
-	h.hints.Context.SetSearchActive(true)
-
-	setHintsErr := h.hints.Context.SetVisibleHints(
-		h.hints.Context.SourceHints(),
-	)
-	if setHintsErr != nil {
-		return setHintsErr
-	}
-
-	h.cycleHintIndex = -1
-	h.drawHintSearchInput()
-
-	if h.textInput != nil {
-		searchFrame := h.searchInputFrame()
-		position := searchFrame.Position()
-		height := estimatedSearchInputHeight(h.config.Hints.SearchInputUI)
-		textInputFrame := ports.TextInputFrame{
-			X:      position.X,
-			Y:      position.Y,
-			Width:  searchFrame.Width(),
-			Height: height,
-		}
-
-		started, _ := h.textInput.StartHintSearchSession(
-			h.ctx,
-			ports.TextInputCallbacks{
-				OnQueryChanged: func(query string) {
-					h.mu.Lock()
-					defer h.mu.Unlock()
-
-					if h.appState.CurrentMode() != domain.ModeHints || h.hints == nil ||
-						h.hints.Context == nil {
-						return
-					}
-
-					if !h.hints.Context.SearchActive() {
-						return
-					}
-
-					h.hints.Context.SetSearchQuery(query)
-					h.applyHintSearchFilter()
-				},
-				OnConfirm: func() {
-					h.mu.Lock()
-					defer h.mu.Unlock()
-
-					if h.appState.CurrentMode() != domain.ModeHints {
-						return
-					}
-
-					h.confirmHintSearch()
-				},
-				OnCancel: func() {
-					h.mu.Lock()
-					defer h.mu.Unlock()
-
-					if h.appState.CurrentMode() != domain.ModeHints {
-						return
-					}
-
-					h.cancelHintSearch()
-				},
-			},
-			textInputFrame,
-		)
-
-		if started {
-			h.hintSearchTextInputActive = true
-			if h.disableEventTap != nil {
-				h.disableEventTap()
-				h.hintSearchEventTapDisabled = true
-			}
-		}
-	}
-
-	return nil
-}
-
-func (h *Handler) stopHintSearchTextInputLocked(keepEventTapDisabled bool) {
-	if h.hintSearchTextInputActive && h.textInput != nil {
-		// Use Background context since this may be called during cleanup,
-		// after h.ctx has already been canceled.
-		_ = h.textInput.StopHintSearchSession(context.Background())
-	}
-
-	h.hintSearchTextInputActive = false
-
-	if h.hintSearchEventTapDisabled && h.enableEventTap != nil &&
-		h.appState.CurrentMode() == domain.ModeHints && !keepEventTapDisabled {
-		h.enableEventTap()
-		h.hintSearchEventTapDisabled = false
-	}
-}
-
-func (h *Handler) focusedBundleID() string {
-	if h.actionService == nil {
-		return ""
-	}
-
-	bundleID, err := h.actionService.FocusedAppBundleID(h.ctx)
+	scale, err := h.system.ScreenScale(h.ctx, bounds)
 	if err != nil {
-		h.logger.Debug("Failed to get focused app bundle ID for mode hotkeys", zap.Error(err))
+		if !derrors.IsNotSupported(err) {
+			h.logger.Warn("Failed to get screen scale", zap.Error(err))
+		}
 
-		return ""
+		return 1
 	}
 
-	return bundleID
+	return scale
 }
 
-// stopHeldRepeatLocked cancels any running held-key repeat goroutine.
-// Caller must hold h.mu.
-func (h *Handler) stopHeldRepeatLocked() {
+// stopHeldRepeat cancels any running held-key repeat goroutine.
+func (h *handlerState) stopHeldRepeat() {
 	if h.heldRepeatingCancel != nil {
 		h.heldRepeatingCancel()
 		h.heldRepeatingCancel = nil

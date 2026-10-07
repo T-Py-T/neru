@@ -2,60 +2,114 @@ package modes
 
 import (
 	"image"
+	"strings"
 	"time"
 	"unicode/utf8"
 
 	"go.uber.org/zap"
 
-	hintscomponent "github.com/y3owk1n/neru/internal/app/components/hints"
 	configpkg "github.com/y3owk1n/neru/internal/config"
-	"github.com/y3owk1n/neru/internal/core/domain"
-	"github.com/y3owk1n/neru/internal/core/domain/state"
-	"github.com/y3owk1n/neru/internal/ui/coordinates"
+	"github.com/y3owk1n/neru/internal/derrors"
+	"github.com/y3owk1n/neru/internal/domain"
+	"github.com/y3owk1n/neru/internal/domain/action"
+	"github.com/y3owk1n/neru/internal/domain/geometry"
+	"github.com/y3owk1n/neru/internal/domain/modecmd"
+	"github.com/y3owk1n/neru/internal/domain/state"
+	"github.com/y3owk1n/neru/internal/ports"
 )
 
 // executeActionAtPoint executes a pending action at the given point and exits the mode.
 // When repeat is true and reActivateFunc is provided, the mode is re-activated
 // instead of exiting after performing the action.
-func (h *Handler) executeActionAtPoint(
-	action *string,
+func (h *handlerState) executeActionAtPoint(
+	actionStr *string,
+	modifierStr *string,
 	point image.Point,
 	repeat bool,
 	reActivateFunc func(),
 ) {
-	if action == nil {
-		h.logger.Warn("executeActionAtPoint called with nil action")
+	if actionStr == nil {
+		h.logger.Warn("Pending action is nil, ignoring")
 
 		return
 	}
 
+	var modifiers action.Modifiers
+	if modifierStr != nil {
+		var err error
+
+		modifiers, err = action.ParseModifiers(*modifierStr)
+		if err != nil {
+			h.logger.Error("Failed to parse pending modifier", zap.Error(err))
+
+			return
+		}
+
+		if *modifierStr != "" && modifiers == 0 {
+			h.logger.Error("Pending modifier was non-empty but parsed to no modifiers")
+
+			return
+		}
+	}
+
+	modifiers |= h.stickyModifiers()
+
 	h.logger.Debug("Executing pending action",
-		zap.String("action", *action),
-		zap.String("modifiers", h.stickyModifiers().String()),
+		zap.String("action", *actionStr),
+		zap.String("modifiers", modifiers.String()),
 		zap.Bool("repeat", repeat))
 
 	ctx := h.ctx
 
-	performActionErr := h.actionService.PerformActionAtPoint(
-		ctx,
-		*action,
-		point,
-		h.stickyModifiers(),
-	)
-	if performActionErr != nil {
-		h.logger.Error("Failed to perform pending action", zap.Error(performActionErr))
+	// Split comma-separated actions and execute each one sequentially.
+	// This enables multi-click sequences like --action left_click,left_click
+	// which produce a double-click via the native click-counting layer.
+	actions := strings.Split(*actionStr, ",")
+	actionPerformed := false
+	chainFailed := false
+
+	for actionIdx, a := range actions {
+		trimmed := strings.TrimSpace(a)
+		if trimmed == "" {
+			continue
+		}
+
+		// Add a small delay between actions so the OS has time to process
+		// each click before the next one arrives. This is required for the
+		// native click-counting to correctly detect multi-click sequences.
+		if actionIdx > 0 {
+			time.Sleep(postActionSettleDelay)
+		}
+
+		performErr := h.actionService.PerformActionAtPoint(
+			ctx,
+			trimmed,
+			point,
+			modifiers,
+		)
+		if performErr != nil {
+			h.logger.Error("Failed to perform pending action", zap.Error(performErr))
+
+			chainFailed = true
+
+			break
+		}
+
+		// Track whether any action was a click (not a move-mouse action)
+		// so handleCursorRestoration can insert a settling delay.
+		if trimmed != "move_mouse" &&
+			trimmed != "move_mouse_relative" {
+			actionPerformed = true
+		}
 	}
 
 	// Signal that a click was just performed so handleCursorRestoration
 	// can insert a settling delay before moving the cursor.
-	// Skip move-mouse actions — they don't produce clicks that need settling.
-	if performActionErr == nil &&
-		*action != "move_mouse" &&
-		*action != "move_mouse_relative" {
+	if actionPerformed {
 		h.cursorState.MarkActionPerformed()
 	}
 
-	if repeat && reActivateFunc != nil {
+	if repeat && reActivateFunc != nil && !chainFailed {
 		// Wait for the target app to finish processing the click before
 		// re-activating (which may move the cursor for grid/recursive-grid).
 		// This mirrors the settle delay in handleCursorRestoration and
@@ -70,14 +124,69 @@ func (h *Handler) executeActionAtPoint(
 		return
 	}
 
-	h.appState.SetModeExitReason(state.ModeExitReasonCompleted)
-	h.exitModeLocked()
+	if chainFailed {
+		h.appState.SetModeExitReason(state.ModeExitReasonCancelled)
+	} else {
+		h.appState.SetModeExitReason(state.ModeExitReasonCompleted)
+	}
+
+	// Capture the mode's --on-exit action before exitMode clears the
+	// context. It only runs when the action chain was fulfilled and the mode
+	// idled through this action path — never on manual escape or a switch.
+	onExit := h.currentModeOnExit()
+
+	h.exitMode()
+
+	if !chainFailed {
+		h.runOnExit(onExit)
+	}
+}
+
+// currentModeOnExit returns the --on-exit steps configured for the currently
+// active action mode, or nil when none are set or the mode has no context.
+//
+// A mode that reports no exit steps at all — scroll, the monitor picker, idle —
+// takes no pending --action either, so there is nothing here it could have been
+// asked to run and its silence is the same nothing as an empty list.
+func (h *handlerState) currentModeOnExit() []string {
+	reporter, ok := activeModeExtension[exitStepReporter](h)
+	if !ok {
+		return nil
+	}
+
+	return reporter.ExitSteps()
+}
+
+// runOnExit dispatches the mode's --on-exit steps after the pending action was
+// fulfilled. They reuse the hotkey action grammar ("action ...", "exec ...",
+// mode names) and run asynchronously: a step may route back through IPC into
+// ActivateMode, which acquires h.mu — held by the
+// executeActionAtPoint caller.
+func (h *handlerState) runOnExit(onExit []string) {
+	if len(onExit) == 0 || h.executeActionSequence == nil {
+		return
+	}
+
+	steps := append([]string(nil), onExit...)
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				h.logger.Error("Panic in on-exit handler",
+					zap.Any("recover", r),
+					zap.Int("steps", len(steps)))
+			}
+		}()
+
+		h.executeActionSequence("on-exit", steps)
+	}()
 }
 
 // moveCursorAndHandleAction moves the cursor to a point and executes any pending action.
-func (h *Handler) moveCursorAndHandleAction(
+func (h *handlerState) moveCursorAndHandleAction(
 	point image.Point,
 	pendingAction *string,
+	pendingModifier *string,
 	shouldReActivate bool,
 	reActivateFunc func(),
 ) {
@@ -89,7 +198,9 @@ func (h *Handler) moveCursorAndHandleAction(
 	}
 
 	if pendingAction != nil {
-		h.executeActionAtPoint(pendingAction, point, shouldReActivate, reActivateFunc)
+		h.executeActionAtPoint(
+			pendingAction, pendingModifier, point, shouldReActivate, reActivateFunc,
+		)
 
 		return
 	}
@@ -102,10 +213,10 @@ func (h *Handler) moveCursorAndHandleAction(
 }
 
 // handleHintsModeKey handles key processing for hints mode.
-func (h *Handler) handleHintsModeKey(key string) {
+func (h *handlerState) handleHintsModeKey(key string) {
 	// Route hint-specific keys via domain hints router
 	if h.hints.Context.Router() == nil {
-		h.logger.Warn("Hints router is nil - ignoring key press until hints initialized")
+		h.logger.Debug("Hints router is nil, ignoring key press")
 
 		return
 	}
@@ -117,50 +228,71 @@ func (h *Handler) handleHintsModeKey(key string) {
 		return
 	}
 
+	if hintKeyResult.Unmatched() {
+		h.logger.Debug("Unmatched hint key, exiting hints mode")
+		h.exitMode()
+
+		return
+	}
+
 	// Hint input processed by router; if exact match, perform action
 	if hintKeyResult.ExactHint() != nil {
 		hint := hintKeyResult.ExactHint()
 		center := hint.Element().Center()
 
-		h.logger.Debug("Found element", zap.String("label", hint.Label()))
+		h.logger.Debug("Hint matched")
 
 		pendingAction := h.hints.Context.PendingAction()
+		pendingModifier := h.hints.Context.PendingModifier()
 		repeat := h.hints.Context.Repeat()
 		cursorFollowSelection := h.hints.Context.CursorFollowSelection()
 		filterRoles := h.hints.Context.FilterRoles()
 		filterTextContains := h.hints.Context.FilterTextContains()
 		startWithSearch := h.hints.Context.StartWithSearch()
+		exitOnUnmatched := h.hints.Context.ExitOnUnmatched()
 		strategyOverride := h.hints.Context.StrategyOverride()
+		captureScopeOverride := h.hints.Context.CaptureScopeOverride()
 		labelDirectionOverride := h.hints.Context.LabelDirectionOverride()
+		splitWord := h.hints.Context.SplitWord()
 
 		h.moveCursorAndHandleAction(
 			center,
 			pendingAction,
+			pendingModifier,
 			repeat ||
 				pendingAction == nil, // re-activate on repeat, or when no action (existing behavior)
 			func() {
-				h.activateHintModeInternal(
-					nil,
-					&cursorFollowSelection,
-					filterRoles,
-					filterTextContains,
-					&startWithSearch,
-					&strategyOverride,
-					&labelDirectionOverride,
-				)
-				// Restore repeat and action on the fresh context so subsequent
+				h.activateHintModeInternal(modecmd.Activation{
+					Mode:                  domain.ModeHints,
+					CursorFollowSelection: &cursorFollowSelection,
+					FilterRoles:           filterRoles,
+					FilterTextContains:    filterTextContains,
+					Search:                &startWithSearch,
+					ExitOnUnmatched:       &exitOnUnmatched,
+					Strategy:              &strategyOverride,
+					CaptureScope:          &captureScopeOverride,
+					LabelDirection:        &labelDirectionOverride,
+					SplitWord:             &splitWord,
+					// OnExit is left nil to preserve the stored steps across
+					// re-activation.
+				})
+				// Restore repeat, action and modifier on the fresh context so subsequent
 				// selections continue the repeat cycle.
 				// Guard: only restore if re-activation succeeded (mode is still hints).
 				if repeat && h.appState.CurrentMode() == domain.ModeHints &&
 					h.hints != nil && h.hints.Context != nil {
 					h.hints.Context.SetPendingAction(pendingAction)
+					h.hints.Context.SetPendingModifier(pendingModifier)
 					h.hints.Context.SetRepeat(true)
 					h.hints.Context.SetCursorFollowSelection(cursorFollowSelection)
 					h.hints.Context.SetFilterRoles(filterRoles)
 					h.hints.Context.SetFilterTextContains(filterTextContains)
 					h.hints.Context.SetStartWithSearch(startWithSearch)
+					h.hints.Context.SetExitOnUnmatched(exitOnUnmatched)
 					h.hints.Context.SetStrategyOverride(strategyOverride)
+					h.hints.Context.SetCaptureScopeOverride(captureScopeOverride)
 					h.hints.Context.SetLabelDirectionOverride(labelDirectionOverride)
+					h.hints.Context.SetSplitWord(splitWord)
 				}
 			},
 		)
@@ -168,7 +300,7 @@ func (h *Handler) handleHintsModeKey(key string) {
 }
 
 // handleSearchInputKey routes all keys while hint text search is active.
-func (h *Handler) handleSearchInputKey(key string) {
+func (h *handlerState) handleSearchInputKey(key string) {
 	if h.hints == nil || h.hints.Context == nil {
 		return
 	}
@@ -209,11 +341,25 @@ func (h *Handler) handleSearchInputKey(key string) {
 	h.applyHintSearchFilter()
 }
 
-func (h *Handler) applyHintSearchFilter() {
+func (h *handlerState) applyHintSearchFilter() {
 	ctx := h.hints.Context
 
 	sourceHints := ctx.SourceHints()
 	if sourceHints == nil {
+		return
+	}
+
+	// When HideOnEmptySearch is active and the query is empty, hide all hints.
+	// This lets the user see nothing until they type a search query.
+	if ctx.HideOnEmptySearch() && ctx.SearchQuery() == "" {
+		setHintsErr := ctx.ClearVisibleHints()
+		if setHintsErr != nil {
+			h.logger.Error("Failed to clear hints for empty search", zap.Error(setHintsErr))
+		}
+
+		h.drawHintSearchInput()
+		h.cycleHintIndex = -1
+
 		return
 	}
 
@@ -228,20 +374,34 @@ func (h *Handler) applyHintSearchFilter() {
 	h.cycleHintIndex = -1
 }
 
-func (h *Handler) confirmHintSearch() {
+func (h *handlerState) confirmHintSearch() {
 	if h.hints == nil || h.hints.Context == nil {
 		return
 	}
 
-	h.stopHintSearchTextInputLocked(false)
+	h.stopHintSearchTextInput(false)
 
 	ctx := h.hints.Context
 	ctx.SetSearchActive(false)
-	h.overlayManager.HideHintSearchInput()
+	h.hideHintSearchInput()
 
-	if visibleHints := ctx.Hints(); visibleHints != nil && visibleHints.Count() >= 1 {
+	visibleHints := ctx.Hints()
+	if visibleHints != nil && visibleHints.Count() >= 1 {
+		// When a pending action is configured and more than one hint matches
+		// the search query, just close the search overlay without executing
+		// the action. This lets the user type the exact hint label to select
+		// an element instead of blindly acting on the first match.
+		if ctx.PendingAction() != nil && visibleHints.Count() > 1 {
+			h.cycleHintIndex = -1
+
+			return
+		}
+
 		go func() {
-			_ = h.CycleHint(h.ctx, false)
+			err := h.outer.CycleHint(h.ctx, false, true)
+			if err != nil {
+				h.logger.Warn("Failed to select the hint search match", zap.Error(err))
+			}
 		}()
 	} else {
 		h.cancelHintSearch()
@@ -250,12 +410,12 @@ func (h *Handler) confirmHintSearch() {
 	h.cycleHintIndex = -1
 }
 
-func (h *Handler) cancelHintSearch() {
+func (h *handlerState) cancelHintSearch() {
 	if h.hints == nil || h.hints.Context == nil {
 		return
 	}
 
-	h.stopHintSearchTextInputLocked(false)
+	h.stopHintSearchTextInput(false)
 
 	ctx := h.hints.Context
 	ctx.SetSearchQuery("")
@@ -268,12 +428,12 @@ func (h *Handler) cancelHintSearch() {
 		}
 	}
 
-	h.overlayManager.HideHintSearchInput()
+	h.hideHintSearchInput()
 	h.cycleHintIndex = -1
 }
 
-func (h *Handler) drawHintSearchInput() {
-	if h.hints == nil || h.hints.Context == nil {
+func (h *handlerState) drawHintSearchInput() {
+	if h.hints == nil || h.hints.Context == nil || h.overlayPort == nil {
 		return
 	}
 
@@ -284,95 +444,51 @@ func (h *Handler) drawHintSearchInput() {
 		resultCount = ctx.Hints().Count()
 	}
 
-	style := hintscomponent.BuildSearchInputStyle(h.config.Hints, h.themeProvider)
-
-	frame := h.searchInputFrame()
-
-	err := h.overlayManager.DrawHintSearchInput(
-		ctx.SearchQuery(),
-		resultCount,
-		frame,
-		style,
-	)
+	// Where the input sits is resolved from configuration by the overlay; the
+	// handler says what is in it and which screen it is on, and nothing else.
+	err := h.overlayPort.DrawHintSearch(ports.HintSearch{
+		Screen:      h.screenBounds,
+		Query:       ctx.SearchQuery(),
+		ResultCount: resultCount,
+	})
 	if err != nil {
+		if derrors.IsNotSupported(err) {
+			// Either the backend draws no search input or it could not place
+			// the configured anchor; both mean nothing is on screen, and the
+			// overlay says which it was.
+			h.logger.Debug("Hint search input not drawn")
+
+			return
+		}
+
 		h.logger.Error("Failed to draw hint search input", zap.Error(err))
 	}
 }
 
-func (h *Handler) searchInputFrame() hintscomponent.SearchInputFrame {
-	searchInputConfig := h.config.Hints.SearchInputUI
-	screenWidth := h.screenBounds.Dx()
-	screenHeight := h.screenBounds.Dy()
-
-	width := searchInputConfig.Width
-	if width <= 0 {
-		width = configpkg.DefaultSearchInputWidth
+// hideHintSearchInput takes the search input off the screen, leaving the hint
+// labels behind it where they are.
+func (h *handlerState) hideHintSearchInput() {
+	if h.overlayPort == nil {
+		return
 	}
 
-	if screenWidth > 0 && width > screenWidth {
-		width = screenWidth
-	}
-
-	height := estimatedSearchInputHeight(searchInputConfig)
-	xOffset := searchInputConfig.XOffset
-	yOffset := searchInputConfig.YOffset
-
-	switch hintscomponent.SearchInputPosition(searchInputConfig.Position) {
-	case hintscomponent.SearchInputTopCenter:
-		xOffset = (screenWidth-width)/configpkg.DefaultSearchInputCenterDivisor + searchInputConfig.XOffset
-	case hintscomponent.SearchInputTopRight:
-		xOffset = screenWidth - width - searchInputConfig.XOffset
-	case hintscomponent.SearchInputCenter:
-		xOffset = (screenWidth-width)/configpkg.DefaultSearchInputCenterDivisor + searchInputConfig.XOffset
-		yOffset = (screenHeight-height)/configpkg.DefaultSearchInputCenterDivisor + searchInputConfig.YOffset
-	case hintscomponent.SearchInputBottomLeft:
-		yOffset = screenHeight - height - searchInputConfig.YOffset
-	case hintscomponent.SearchInputBottomCenter:
-		xOffset = (screenWidth-width)/configpkg.DefaultSearchInputCenterDivisor + searchInputConfig.XOffset
-		yOffset = screenHeight - height - searchInputConfig.YOffset
-	case hintscomponent.SearchInputBottomRight:
-		xOffset = screenWidth - width - searchInputConfig.XOffset
-		yOffset = screenHeight - height - searchInputConfig.YOffset
-	case hintscomponent.SearchInputTopLeft:
-		fallthrough
-	default:
-	}
-
-	if xOffset < 0 {
-		xOffset = 0
-	}
-
-	if yOffset < 0 {
-		yOffset = 0
-	}
-
-	if screenWidth > 0 && xOffset+width > screenWidth {
-		xOffset = screenWidth - width
-	}
-
-	if screenHeight > 0 && yOffset+height > screenHeight {
-		yOffset = screenHeight - height
-	}
-
-	return hintscomponent.NewSearchInputFrame(image.Point{X: xOffset, Y: yOffset}, width)
+	h.overlayPort.HideHintSearch()
 }
 
-func estimatedSearchInputHeight(searchInputConfig configpkg.SearchInputUI) int {
-	paddingY := searchInputConfig.PaddingY
-	if paddingY < 0 {
-		paddingY = max(
-			configpkg.DefaultSearchInputMinPaddingY,
-			searchInputConfig.FontSize/configpkg.DefaultSearchInputCenterDivisor,
-		)
+// hintSearchBounds reports where the overlay places the search input on the
+// active screen, so the platform's IME field can be put over it.
+func (h *handlerState) hintSearchBounds() image.Rectangle {
+	if h.overlayPort == nil {
+		return image.Rectangle{}
 	}
 
-	return searchInputConfig.FontSize + paddingY*configpkg.DefaultSearchInputPaddingMultiplier + configpkg.DefaultSearchInputHeightPadding
+	return h.overlayPort.HintSearchBounds(h.screenBounds)
 }
 
 // handleGridModeKey handles key processing for grid mode.
-func (h *Handler) handleGridModeKey(key string) {
+func (h *handlerState) handleGridModeKey(key string) {
 	if h.grid.Router == nil {
-		h.logger.Warn("Grid router is nil - ignoring key press until grid router initialized")
+		h.logger.Debug("Grid router is nil, ignoring key press")
 
 		return
 	}
@@ -383,7 +499,7 @@ func (h *Handler) handleGridModeKey(key string) {
 		targetPoint := gridKeyResult.TargetPoint()
 
 		// Convert from window-local coordinates to absolute screen coordinates using helper
-		absolutePoint := coordinates.ConvertToAbsoluteCoordinates(targetPoint, h.screenBounds)
+		absolutePoint := geometry.ConvertToAbsoluteCoordinates(targetPoint, h.screenBounds)
 		h.grid.Context.SetSelectionPoint(absolutePoint)
 
 		h.logger.Debug(
@@ -394,10 +510,12 @@ func (h *Handler) handleGridModeKey(key string) {
 
 		repeat := h.grid.Context.Repeat()
 		pendingAction := h.grid.Context.PendingAction()
+		pendingModifier := h.grid.Context.PendingModifier()
 		cursorFollowSelection := h.grid.Context.CursorFollowSelection()
+		captureScope := h.grid.Context.CaptureScope()
 
 		if pendingAction == nil && !repeat && !cursorFollowSelection {
-			h.refreshGridVirtualPointerLocked()
+			h.refreshGridVirtualPointer()
 
 			return
 		}
@@ -405,17 +523,26 @@ func (h *Handler) handleGridModeKey(key string) {
 		h.moveCursorAndHandleAction(
 			absolutePoint,
 			pendingAction,
+			pendingModifier,
 			repeat, // Re-activate grid mode when --repeat is set
 			func() {
-				h.activateGridModeWithAction(pendingAction, &repeat, &cursorFollowSelection)
+				h.activateGridModeWithAction(modecmd.Activation{
+					Mode:                  domain.ModeGrid,
+					Action:                pendingAction,
+					Modifier:              pendingModifier,
+					Repeat:                &repeat,
+					CursorFollowSelection: &cursorFollowSelection,
+					CaptureScope:          &captureScope,
+					// OnExit stays nil to preserve the stored steps.
+				})
 			},
 		)
 	} else if targetPoint := gridKeyResult.TargetPoint(); !targetPoint.Eq(image.Point{}) {
-		absolutePoint := coordinates.ConvertToAbsoluteCoordinates(targetPoint, h.screenBounds)
+		absolutePoint := geometry.ConvertToAbsoluteCoordinates(targetPoint, h.screenBounds)
 		h.grid.Context.SetSelectionPoint(absolutePoint)
 
 		if !h.grid.Context.CursorFollowSelection() {
-			h.refreshGridVirtualPointerLocked()
+			h.refreshGridVirtualPointer()
 
 			return
 		}

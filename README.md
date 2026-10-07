@@ -1,247 +1,164 @@
 <div align="center">
 
-<img src="assets/neru-appicon.png" alt="Neru Logo" width="80" />
+<img src="assets/neru-appicon.png" alt="Neru" width="80" />
 
 # Neru
 
-**Navigate your entire screen without touching the mouse.**
+Hints, grids and vim keys for your whole desktop. Free, open source, one binary, one TOML file.
 
-_Built for the person who already remapped Caps Lock._
-
-![Go Version](https://img.shields.io/github/go-mod/go-version/y3owk1n/neru?style=flat-square&logo=go)
 [![Latest Release](https://img.shields.io/github/v/release/y3owk1n/neru?style=flat-square)](https://github.com/y3owk1n/neru/releases)
-[![Discord](https://img.shields.io/discord/1502261043701874698?style=flat-square)](https://discord.gg/KZwnwr9dz6)
 [![License](https://img.shields.io/github/license/y3owk1n/neru?style=flat-square)](LICENSE)
+[![Discord](https://img.shields.io/discord/1502261043701874698?style=flat-square&label=discord)](https://discord.gg/KZwnwr9dz6)
+[![Sponsor](https://img.shields.io/badge/sponsor-%E2%9D%A4-30363D?style=flat-square)](https://github.com/sponsors/y3owk1n)
 
-**Free and open-source.** No subscription. No trial. No catch.
+|     macOS 14+     |   Linux (X11, Wayland)   |     Windows 10+     |
+| :---------------: | :----------------------: | :-----------------: |
+|     Stable ✅     |      Beta, daily 🔵      |    Beta, daily 🔵   |
 
-|      macOS       |      Linux       |        Windows         |
-| :--------------: | :--------------: | :--------------------: |
-| Full featured ✅ | Basic support 🔵 | Basic support 🔵       |
-
-**練る** _(neru)_ — "to refine through practice." The more you use it, the faster you get.
+<sub>Beta means every option, flag and action already works. Stable comes after six clean releases. [What the labels mean](docs/reference/platform-support.md#what-the-labels-mean)</sub>
 
 </div>
 
 ---
 
-If you use Vimium in the browser, you already know what this feels like. **Neru brings that to your entire operating system** — every app, every window, every menu bar item. Navigate with labels, grids, or vim-style keys. Click, right-click, drag, scroll, select text — all without leaving your keyboard.
+https://github.com/user-attachments/assets/f4c86753-0109-47c9-a94e-775af2546a17
 
-Here's the whole flow:
+Neru does what Vimium does in the browser, for every app, window, menu bar and dock item on your screen. Press a hotkey, type the label on the element you want, and the cursor jumps there and clicks.
 
-```
-Cmd+Shift+Space   →  labels appear on every clickable element
-type the label    →  cursor jumps there
-Shift+L           →  left click
-```
+## Why Neru
 
-The mouse is now optional.
-
-Unlike most tools in this space, Neru is **CLI-first** — every action is a command, every setting is a plain toml file, everything is scriptable. No settings panel. No GUI preferences window. It lives in your dotfiles like it was always supposed to be there.
-
----
-
-**See it in action — recursive grid mode in real use:**
-
-https://github.com/user-attachments/assets/6b5673e1-7131-4bc0-ad57-41678e9423b9
-
----
+- **Works where accessibility trees don't.** Grid modes split pixels, not widgets, so they work in canvases, games and remote desktops. Hints use the accessibility tree, on-device OCR, or a pure-Go contour scan.
+- **Fast.** The event tap sits on every keystroke, and Neru treats any added latency as a bug.
+- **No per-app hacks.** Good defaults, plus per-app overrides you write yourself, applied when focus changes.
+- **Scriptable.** Hotkeys, the `neru` CLI and the IPC socket run the same commands, so a binding works unchanged from skhd, Hammerspoon, Raycast or a shell script.
+- **Private.** OCR and element detection run on-device. No telemetry, no accounts, and typed text never reaches the log.
+- **Fails loudly.** A mistyped flag in a binding fails config validation instead of doing nothing when you press the key.
 
 ## Install
 
 ```bash
-brew tap y3owk1n/tap
-brew install --cask y3owk1n/tap/neru
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/y3owk1n/neru/main/scripts/install.sh | bash
 ```
 
-Grant **Accessibility** in **System Settings → Privacy & Security → Accessibility**, then:
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/y3owk1n/neru/main/scripts/install.ps1 | iex
+```
 
-Press `Cmd+Shift+Space`. Labels appear. You're already using it.
+Run it again to update. Homebrew, Nix, prebuilt binaries, building from source, [agent skills](docs/guide/installation.md#set-up-with-an-agent) and uninstalling are in [Installation](docs/guide/installation.md).
 
-Other options (Nix flake, build from source) → [Installation Guide](docs/INSTALLATION.md)
+## Quick start
 
----
+Run `neru launch`, grant the permissions `neru doctor` asks for, then press
+`Primary+Shift+Space` for hints. The full first run, including Linux, is in
+[Getting started](docs/guide/getting-started.md).
 
-## Pick your mode
-
-Four modes, one tool — mix and match as the situation calls for it.
+## Modes
 
 <table>
 <tr>
-<td align="center" width="33%">
-<img src="https://github.com/user-attachments/assets/0d46fa7c-345a-45ee-ad44-7a601c2b7cb1" alt="Recursive Grid Mode" /><br/>
-<sub><b>Recursive Grid</b> · start here</sub>
+<td align="center" width="50%">
+<img src="https://github.com/user-attachments/assets/d82e14fa-0ac4-4081-9a0a-f99243d1da5b" alt="Recursive Grid Mode" /><br/>
+<sub><b>Recursive Grid</b></sub>
 </td>
-<td align="center" width="33%">
-<img src="https://github.com/user-attachments/assets/d452f972-ce23-4798-955b-6dbfa8435504" alt="Grid Mode" /><br/>
+<td align="center" width="50%">
+<img src="https://github.com/user-attachments/assets/a19ef869-6400-4b5f-b3c6-92af69c2a76b" alt="Hints Mode" /><br/>
+<sub><b>Hints</b></sub>
+</td>
+</tr>
+<tr>
+<td align="center" width="50%">
+<img src="https://github.com/user-attachments/assets/913e9d15-7f42-470d-b5cf-7a55065789fe" alt="Bisect Mode" /><br/>
+<sub><b>Bisect</b></sub>
+</td>
+<td align="center" width="50%">
+<img src="https://github.com/user-attachments/assets/392fcfa1-9779-464c-8bac-a05a6afc73c3" alt="Grid Mode" /><br/>
 <sub><b>Grid</b></sub>
-</td>
-<td align="center" width="33%">
-<img src="https://github.com/user-attachments/assets/71b13850-1b87-40b5-9ac0-93cff1f2e89b" alt="Hints Mode" /><br/>
-<sub><b>Hints (AX + Vision OCR)</b></sub>
 </td>
 </tr>
 </table>
 
-| Mode                  | Hotkey            | How it works                                                       | Best for                                         |
-| :-------------------- | :---------------- | :----------------------------------------------------------------- | :----------------------------------------------- |
-| **Recursive Grid** ⭐ | `Cmd+Shift+C`     | Divides screen into cells; narrow down with home-row keys          | Everything — any app, canvas, or game            |
-| **Hints**             | `Cmd+Shift+Space` | Labels every clickable element via Accessibility API or Vision OCR | Native apps, Electron (VS Code, Slack), Figma    |
-| **Grid**              | `Cmd+Shift+G`     | Jump directly to a cell by row + column label                      | Fast coarse movement across large monitors       |
-| **Scroll**            | `Cmd+Shift+S`     | Vim-style `j`/`k` scrolling, `u`/`d` for half pages                | Reading docs and code without lifting your hands |
+| Mode                  | Default hotkey        | How it works                                                    | Best for                                    |
+| :-------------------- | :-------------------- | :-------------------------------------------------------------- | :------------------------------------------ |
+| **Recursive Grid** ⭐ | `Primary+Shift+C`     | Halve the screen with home-row keys until the cursor lands      | Anything, including canvases and games      |
+| **Bisect**            | `Primary+Shift+B`     | `hjkl` keep a half, `yubn` a quadrant, until the cursor lands   | Anything, without reading labels            |
+| **Hints**             | `Primary+Shift+Space` | Labels every target via accessibility tree, OCR or contour scan | Native apps, Electron, browsers, Figma      |
+| **Grid**              | `Primary+Shift+G`     | Type a row and column label to jump to a cell                   | Coarse jumps across big monitors            |
+| **Scroll**            | `Primary+Shift+S`     | `j`/`k`, `u`/`d`, `gg`/`G`, `h`/`l` in any scroll view          | Reading without lifting your hands          |
+| **Monitor Select**    | unbound               | Labels each display, type one to jump                           | Multi-monitor setups                        |
+| **Your own**          | unbound               | A name, an indicator and a key table you declare in config      | Window management layers, app-specific keys |
 
-All bindings are fully remappable — Colemak, Dvorak, whatever you're on. → [Configuration Guide](docs/CONFIGURATION.md#hotkeys)
+`Primary` is `Cmd` on macOS and `Ctrl` on Linux and Windows. Linux ships without these defaults so they never collide with terminal shortcuts. Every binding is remappable.
 
----
+Every mode gives you left, right and middle click, double and triple click, drag with any button, held-key glide with acceleration, and sticky modifiers.
 
-## CLI-first, by design
+## Configuration
 
-Most tools in this space are GUI apps with a settings panel. Neru is the opposite — the CLI is the interface, and config is a file you own.
+Everything is one TOML file. Apply edits with `neru config reload`, or change one value with `neru config set`.
 
-```bash
-neru hints          # trigger hints mode
-neru grid           # trigger grid mode
-neru recursive_grid # trigger recursive grid mode
-neru scroll         # trigger scroll mode
-neru config reload  # hot-reload config without restarting
-neru status         # check daemon state and permissions
+```toml
+[hotkeys]
+"Primary+Shift+Space" = "hints --action left_click"   # click on select, Vimium style
+"Primary+Shift+W" = "mode window"
+
+[macros]
+click_and_exit = ["action left_click --bail-on-error", "idle"]
+
+[[hints.app_configs]]
+bundle_id = "com.brave.Browser"   # bundle ID on macOS, WM_CLASS or app_id on Linux, exe path on Windows
+hotkeys = { "Return" = "macro click_and_exit" }
+
+[modes.window]
+indicator = "Window"
+
+[modes.window.hotkeys]
+"h" = "exec yabai -m window --focus west"
+"l" = "exec yabai -m window --focus east"
 ```
 
-Config lives at `~/.config/neru/config.toml` — plain text, version-controllable, and hot-reloadable. Every action is available over IPC, so Neru composes naturally with skhd, Raycast, Alfred, Hammerspoon, or any shell script. If it can run a command, it can drive Neru.
+Every hotkey command is also a shell command:
 
 ```bash
-neru config init      # generate a fully-commented starter config
-neru config validate  # check for errors before applying
-neru config reload    # apply changes without restarting
+neru hints --role button --text save   # only buttons whose text matches
+neru run "action save_cursor_pos" "hints --action left_click" \
+         "action wait_for_mode_exit" "action restore_cursor_pos"
+neru config set hints.strategy contour
+neru doctor                            # diagnose permissions and backends
 ```
 
-→ [CLI Guide](docs/CLI.md) · [Configuration Guide](docs/CONFIGURATION.md) · [Config Showcases](docs/CONFIG_SHOWCASES.md)
+Themes, indicators, smooth cursor and scroll, virtual pointer, app exclusions and screen-share hiding are options too.
 
----
+## Documentation
 
-## What people are saying
+Read the docs at **[y3owk1n.github.io/neru](https://y3owk1n.github.io/neru/)**,
+or browse [docs/](docs/README.md) here on GitHub.
+
+## Community
 
 > _"neru: the ACTUAL BEST app for ditching mouse"_
 
 [![Community YouTube Review](https://img.youtube.com/vi/OFnpYTDA2gY/maxresdefault.jpg)](https://www.youtube.com/watch?v=OFnpYTDA2gY)
 
-Watch the author run their entire daily workflow without touching the mouse → [HOW-I-USE-NERU.md](HOW-I-USE-NERU.md)
-
-Got questions or want to share your setup? [Join the Discord →](https://discord.gg/KZwnwr9dz6)
-
----
-
-## Neru Dojo — build your muscle memory 🥋
-
-The community built a browser-based training game to help you get fast with recursive grid and hints. Practice target acquisition, sharpen your reaction time, get reps in before it clicks.
-
-👉 **[Play Neru Dojo](https://bernatgene.github.io/neru-dojo/)** — no install, works in any browser.
-
-https://github.com/user-attachments/assets/d99328a6-b5f9-402a-a01b-297da2ffb454
-
----
-
-## How Neru compares
-
-| Tool                                            | Approach                                      |  Price   |    Open Source    |
-| :---------------------------------------------- | :-------------------------------------------- | :------: | :---------------: |
-| **Neru**                                        | Grid + Recursive Grid + AX Hints + Vision OCR | **Free** |        ✅         |
-| [Homerow](https://www.homerow.app/)             | AX-Tree Hints                                 |   Paid   |        ❌         |
-| [Wooshy](https://wooshy.app)                    | AX-Tree Search-to-click                       |   Paid   |        ❌         |
-| [Mouseless](https://mouseless.click/)           | Grid pointer control                          |   Paid   |        ❌         |
-| [Scoot](https://github.com/mjrusso/scoot)       | AX Hints + Grid                               |   Free   |        ✅         |
-| [Glyphlow](https://github.com/blindFS/Glyphlow) | Hints + vim text editing                      |   Free   |        ✅         |
-| [Stochos](https://github.com/museslabs/stochos) | Keyboard driven mouse control                 |   Free   |        ✅         |
-| [Vimac](https://github.com/dexterleng/vimac)    | AX Hints                                      |   Free   | ✅ (unmaintained) |
-| [warpd](https://github.com/rvaiya/warpd)        | Grid + Hints + Normal Pointer                 |   Free   |        ✅         |
-
-More modes, more engines, more platforms — and it's free. If you've been paying for any of the tools above, Neru is worth 10 minutes of your time.
-
----
-
-## Platform support
-
-| Capability                | macOS | Linux | Windows |
-| :------------------------ | :---: | :---: | :-----: |
-| Recursive Grid            |  ✅   |  ✅   |   ✅    |
-| Grid                      |  ✅   |  ✅   |   ✅    |
-| Vim-Style Scroll          |  ✅   |  ✅   |   ✅    |
-| Hints (Accessibility API) |  ✅   |  🔲   |   ✅    |
-| Hints (Vision OCR)        |  ✅   |  🔲   |   🔲    |
-| Direct Mouse Injection    |  ✅   |  ✅   |   ✅    |
-| Global Hotkeys            |  ✅   |  ✅   |   ✅    |
-| Native Overlays           |  ✅   |  ✅   |   ✅    |
-
-→ [Roadmap](docs/ROADMAP.md) · [Cross-platform details](docs/CROSS_PLATFORM.md)
-
----
-
-## Documentation
-
-Everything you need to go deep:
-
-| Guide                                      | What's in it                                |
-| :----------------------------------------- | :------------------------------------------ |
-| [Installation](docs/INSTALLATION.md)       | Homebrew, Nix, source, permissions, launchd |
-| [CLI](docs/CLI.md)                         | Every command and flag                      |
-| [Configuration](docs/CONFIGURATION.md)     | Keybindings, themes, overlays, all settings |
-| [Tips & Tricks](docs/TIPS_TRICKS.md)       | Power-user patterns and setups              |
-| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and fixes                     |
-| [Roadmap](docs/ROADMAP.md)                 | What's coming                               |
-| [Contributing](CONTRIBUTING.md)            | PRs and bug reports                         |
-
----
+- [Neru Dojo](https://bernatgene.github.io/neru-dojo/): a browser game to train recursive grid and hints.
+- [Community configs](docs/project/showcases.md): setups shared by users.
+- [Discord](https://discord.gg/KZwnwr9dz6): questions and setups.
 
 ## Contributing
 
-Neru is written in Go and Objective-C with a clean, modular structure — adding a new feature or platform adapter is straightforward. Pull requests are very welcome.
-
-```bash
-git checkout -b feature/your-feature
-just test && just lint
-# open a pull request
-```
-
-→ [Development Guide](docs/DEVELOPMENT.md) · [Coding Standards](docs/CODING_STANDARDS.md)
-
----
+Bug reports, especially on Linux and Windows, and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Support the project
 
-Neru is built and maintained by one person, entirely in spare time. If it's earned a place in your workflow, a sponsorship goes a long way:
-
-👉 [GitHub Sponsors](https://github.com/sponsors/y3owk1n)
-
----
-
-## Just need window management?
-
-mimi grew out of this project — it's the window and space management pieces extracted into a standalone tool, for when neru is more than you need.
-
-```bash
-brew install --cask y3owk1n/tap/mimi
-```
-
-→ [github.com/y3owk1n/mimi](https://github.com/y3owk1n/mimi)
-
----
+If Neru has earned a place in your workflow, [sponsor it](https://github.com/sponsors/y3owk1n). Need only window management? [mimi](https://github.com/y3owk1n/mimi) is Neru's window and space features as a standalone tool.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
 
 <div align="center">
 <br/>
 
-**Stop reaching for the mouse. It takes one command.**
-
-```bash
-brew install --cask y3owk1n/tap/neru
-```
-
-<br/>
-
-Welcome to the mouseless life.<br/><br/>
 Made with ❤️ by <a href="https://github.com/y3owk1n">y3owk1n</a>
 
 </div>

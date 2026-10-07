@@ -1,0 +1,88 @@
+//go:build linux && !cgo
+
+package linux
+
+import (
+	"context"
+	"image"
+
+	"github.com/y3owk1n/neru/internal/derrors"
+	"github.com/y3owk1n/neru/internal/ports"
+)
+
+func x11CursorPosition() (image.Point, error) {
+	return image.Point{}, derrors.New(
+		derrors.CodeNotSupported,
+		"X11 cursor position requires CGO-enabled Linux builds",
+	)
+}
+
+func x11MoveCursorToPoint(point image.Point) error {
+	return derrors.Newf(
+		derrors.CodeNotSupported,
+		"X11 cursor movement requires CGO-enabled Linux builds (requested point %v)",
+		point,
+	)
+}
+
+func x11FocusedApplicationPID() (int, error) {
+	return 0, derrors.New(
+		derrors.CodeNotSupported,
+		"X11 focused app inspection requires CGO-enabled Linux builds",
+	)
+}
+
+func x11FocusedAppID() (string, bool) {
+	return "", false
+}
+
+func x11FocusedAppIdentity() (string, string, bool) {
+	return "", "", false
+}
+
+// x11FocusEventFD is unavailable without CGO — the focus monitor uses Xlib.
+// Callers fall back to polling.
+func x11FocusEventFD() (int, bool) {
+	return -1, false
+}
+
+// x11ScreenEventFD is unavailable without CGO — the RandR monitor uses Xlib.
+// Callers receive no screen-change events.
+func x11ScreenEventFD() (int, bool) {
+	return -1, false
+}
+
+func x11FocusedWindowBounds() (image.Rectangle, bool, error) {
+	return image.Rectangle{}, false, derrors.New(
+		derrors.CodeNotSupported,
+		"X11 focused window bounds require CGO-enabled Linux builds",
+	)
+}
+
+func x11ActiveScreenBounds() (image.Rectangle, error) {
+	return image.Rectangle{}, derrors.New(
+		derrors.CodeNotSupported,
+		"X11 screen enumeration requires CGO-enabled Linux builds",
+	)
+}
+
+func x11Screens() ([]ports.Screen, error) {
+	return nil, derrors.New(
+		derrors.CodeNotSupported,
+		"X11 screen enumeration requires CGO-enabled Linux builds",
+	)
+}
+
+func xwaylandRefreshCursorPosition(_ context.Context) error {
+	return derrors.New(
+		derrors.CodeNotSupported,
+		"Xwayland cursor discovery requires CGO-enabled Linux builds",
+	)
+}
+
+func x11DisplayScale() (float64, error) {
+	return 0, derrors.New(
+		derrors.CodeNotSupported,
+		"X11 display scale requires CGO-enabled Linux builds",
+	)
+}

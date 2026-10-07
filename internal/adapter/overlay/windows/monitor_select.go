@@ -1,0 +1,273 @@
+//go:build windows
+
+package windows
+
+import (
+	"image"
+	"math"
+	"strings"
+
+	"go.uber.org/zap"
+
+	"github.com/y3owk1n/neru/internal/adapter/overlay/manager"
+	"github.com/y3owk1n/neru/internal/adapter/overlay/render/badge"
+	winplatform "github.com/y3owk1n/neru/internal/adapter/platform/windows"
+)
+
+// Ensure the Windows manager implements the optional monitor-select extension.
+var _ manager.MonitorSelector = (*Manager)(nil)
+
+const (
+	// These mirror the macOS overlay (monitor_select_overlay_darwin.m) and the
+	// Linux Cairo panels so the picker looks the same on every platform: auto
+	// padding derived from the label font when the config uses the -1
+	// sentinel, a small label/subtitle gap, an 80% cap on panel size relative
+	// to the monitor, and default font sizes.
+	monitorSelectLabelGap       = 4
+	monitorSelectAutoPadXMin    = 24
+	monitorSelectAutoPadYMin    = 12
+	monitorSelectAutoPadXRatio  = 0.3
+	monitorSelectAutoPadYRatio  = 0.15
+	monitorSelectMaxFraction    = 0.8
+	monitorSelectMaxRadius      = 16.0
+	monitorSelectDefaultFont    = 96
+	monitorSelectDefaultSubFont = 18
+	monitorSelectHalfDivisor    = 2
+)
+
+// monitorSelectFontOr returns the configured font size, or a default when unset
+// (<= 0), matching the macOS overlay's fallbacks (96 label / 18 subtitle).
+func monitorSelectFontOr(value, fallback int) float64 {
+	if value <= 0 {
+		return float64(fallback)
+	}
+
+	return float64(value)
+}
+
+// monitorSelectPanelLayout computes, in global pixels, the panel rect centered
+// on the monitor, the label and subtitle text rects, and the corner radius.
+// It is the Linux layout. The layered windows here sit in the physical pixels
+// EnumDisplayMonitors reports, and scale is that monitor's DPI factor, which
+// multiplies the fonts, padding and radius. Padding and radius honor the same
+// "auto" (-1) config sentinels.
+func monitorSelectPanelLayout(
+	monitor image.Rectangle,
+	label, subtitle string,
+	style manager.MonitorSelectStyle,
+	scale float64,
+) (image.Rectangle, image.Rectangle, image.Rectangle, float64) {
+	labelFont := monitorSelectFontOr(style.FontSize, monitorSelectDefaultFont) * scale
+	subFont := monitorSelectFontOr(style.SubtitleFontSize, monitorSelectDefaultSubFont) * scale
+
+	padX := scaledInt(style.PaddingX, scale)
+	if style.PaddingX < 0 {
+		padX = max(
+			scaledInt(monitorSelectAutoPadXMin, scale),
+			int(math.Round(labelFont*monitorSelectAutoPadXRatio)),
+		)
+	}
+
+	padY := scaledInt(style.PaddingY, scale)
+	if style.PaddingY < 0 {
+		padY = max(
+			scaledInt(monitorSelectAutoPadYMin, scale),
+			int(math.Round(labelFont*monitorSelectAutoPadYRatio)),
+		)
+	}
+
+	labelW := badge.TextWidth(label, style.FontFamily, labelFont, true)
+	labelH := badge.EstimateTextHeight(labelFont)
+
+	subW, subH, gap := 0, 0, 0
+	if subtitle != "" {
+		subW = badge.TextWidth(subtitle, style.SubtitleFontFamily, subFont, false)
+		subH = badge.EstimateTextHeight(subFont)
+		gap = scaledInt(monitorSelectLabelGap, scale)
+	}
+
+	panelW := max(labelW, subW) + padX*winPaddingMultiplier
+
+	panelH := labelH + padY*winPaddingMultiplier
+	if subtitle != "" {
+		panelH += subH + gap
+	}
+
+	panelW = min(panelW, int(float64(monitor.Dx())*monitorSelectMaxFraction))
+	panelH = min(panelH, int(float64(monitor.Dy())*monitorSelectMaxFraction))
+
+	center := image.Pt(
+		monitor.Min.X+monitor.Dx()/monitorSelectHalfDivisor,
+		monitor.Min.Y+monitor.Dy()/monitorSelectHalfDivisor,
+	)
+	panel := badge.CenteredOn(center, panelW, panelH)
+
+	radius := float64(style.BorderRadius) * scale
+	if style.BorderRadius < 0 {
+		radius = math.Min(float64(panelH)/monitorSelectHalfDivisor, monitorSelectMaxRadius*scale)
+	}
+
+	totalTextH := labelH
+	if subtitle != "" {
+		totalTextH += gap + subH
+	}
+
+	textTop := panel.Min.Y + (panelH-totalTextH)/monitorSelectHalfDivisor
+	labelRect := image.Rect(panel.Min.X, textTop, panel.Max.X, textTop+labelH)
+
+	subtitleRect := image.Rectangle{}
+	if subtitle != "" {
+		subTop := labelRect.Max.Y + gap
+		subtitleRect = image.Rect(panel.Min.X, subTop, panel.Max.X, subTop+subH)
+	}
+
+	return panel, labelRect, subtitleRect, radius
+}
+
+// DrawMonitorSelect renders one labeled panel per monitor for the interactive
+// monitor picker. Each target gets a layered window of its own covering that
+// monitor, the way macOS gives each display an NSPanel: the shared overlay is
+// sized to the active monitor only, and the picker has to reach every one.
+// Windows are kept between draws so a narrowing keystroke repaints in place,
+// and one left over from a display that went away is hidden rather than
+// destroyed, so the next draw with more targets does not recreate it.
+func (m *Manager) DrawMonitorSelect(
+	targets []manager.MonitorSelectTarget,
+	style manager.MonitorSelectStyle,
+) error {
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
+
+	backdrop := badge.ParseHexARGB(style.BackdropColor)
+	hasBackdrop := strings.TrimSpace(style.BackdropColor) != ""
+	background := badge.ParseHexARGB(style.BackgroundColor)
+	border := badge.ParseHexARGB(style.BorderColor)
+	text := badge.ParseHexARGB(style.TextColor)
+	subtitleText := badge.ParseHexARGB(style.SubtitleTextColor)
+	drawn := 0
+
+	for _, target := range targets {
+		if target.Bounds.Empty() {
+			continue
+		}
+
+		win, err := m.monitorWindowLocked(drawn, target.Bounds)
+		if err != nil {
+			// The adapter records a draw only when it succeeds, so a panel
+			// already shown here would outlive the refusal.
+			m.hideMonitorWindowsLocked()
+
+			return err
+		}
+
+		drawn++
+
+		// Every rect below is global; the window's own pixels start at the
+		// monitor's origin.
+		local := target.Bounds.Sub(target.Bounds.Min)
+
+		win.Clear()
+
+		if hasBackdrop {
+			win.FillRect(local, backdrop)
+		}
+
+		// Each panel is on its own monitor, at that monitor's scale.
+		scale := win.Scale()
+		borderWidth := float64(style.BorderWidth) * scale
+
+		// Each monitor fits its own text, because they differ in size, in scale and in
+		// name. The panel is laid out from the fitted style, so it is sized
+		// to the text that is drawn.
+		fitted := style.FittedTo(target, scale)
+		labelFont := float64(fitted.FontSize) * scale
+		subtitleFont := float64(fitted.SubtitleFontSize) * scale
+
+		panel, labelRect, subtitleRect, radius := monitorSelectPanelLayout(
+			target.Bounds, target.Label, target.Subtitle, fitted, scale,
+		)
+		panel = panel.Sub(target.Bounds.Min)
+		labelRect = labelRect.Sub(target.Bounds.Min)
+		subtitleRect = subtitleRect.Sub(target.Bounds.Min)
+
+		win.FillRoundedRect(panel, radius, background)
+
+		if borderWidth > 0 {
+			win.StrokeRoundedRect(panel, radius, border, borderWidth)
+		}
+
+		win.DrawTextCentered(target.Label, labelRect, style.FontFamily, labelFont, text, true)
+
+		if target.Subtitle != "" {
+			win.DrawTextCentered(
+				target.Subtitle, subtitleRect, style.SubtitleFontFamily, subtitleFont, subtitleText,
+				false,
+			)
+		}
+
+		flushErr := win.Flush()
+		if flushErr != nil && m.logger != nil {
+			m.logger.Warn("Monitor select panel flush failed", zap.Error(flushErr))
+		}
+
+		win.Show()
+	}
+
+	for _, win := range m.monitorWins[drawn:] {
+		win.Hide()
+	}
+
+	return nil
+}
+
+// monitorWindowLocked returns the panel window for the target at index,
+// covering bounds, creating or recreating it when there is none or the last
+// one is no longer healthy.
+func (m *Manager) monitorWindowLocked(
+	index int,
+	bounds image.Rectangle,
+) (*winplatform.OverlayWindow, error) {
+	if index < len(m.monitorWins) && m.monitorWins[index].Healthy() {
+		win := m.monitorWins[index]
+
+		return win, win.ResizeTo(bounds.Min.X, bounds.Min.Y, bounds.Dx(), bounds.Dy())
+	}
+
+	win, err := winplatform.NewOverlayWindowAt(bounds.Min.X, bounds.Min.Y, bounds.Dx(), bounds.Dy())
+	if err != nil {
+		return nil, err
+	}
+
+	if index < len(m.monitorWins) {
+		m.monitorWins[index].Destroy()
+		m.monitorWins[index] = win
+	} else {
+		m.monitorWins = append(m.monitorWins, win)
+	}
+
+	return win, nil
+}
+
+// HideMonitorSelect takes every panel window off the screen.
+func (m *Manager) HideMonitorSelect() {
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
+
+	m.hideMonitorWindowsLocked()
+}
+
+func (m *Manager) hideMonitorWindowsLocked() {
+	for _, win := range m.monitorWins {
+		win.Hide()
+	}
+}
+
+// destroyMonitorWindowsLocked releases the panel windows. Called from Destroy
+// with renderMu held.
+func (m *Manager) destroyMonitorWindowsLocked() {
+	for _, win := range m.monitorWins {
+		win.Destroy()
+	}
+
+	m.monitorWins = nil
+}

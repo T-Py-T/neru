@@ -2,24 +2,21 @@ package modes
 
 import (
 	"image"
-	"strings"
 
 	"go.uber.org/zap"
 
-	"github.com/y3owk1n/neru/internal/core/domain"
-	"github.com/y3owk1n/neru/internal/core/domain/action"
-	domainGrid "github.com/y3owk1n/neru/internal/core/domain/grid"
-	derrors "github.com/y3owk1n/neru/internal/core/errors"
-	"github.com/y3owk1n/neru/internal/ui/coordinates"
-	"github.com/y3owk1n/neru/internal/ui/overlay"
+	"github.com/y3owk1n/neru/internal/app/components/grid"
+	"github.com/y3owk1n/neru/internal/derrors"
+	"github.com/y3owk1n/neru/internal/domain"
+	"github.com/y3owk1n/neru/internal/domain/action"
+	"github.com/y3owk1n/neru/internal/domain/geometry"
+	domainGrid "github.com/y3owk1n/neru/internal/domain/grid"
+	"github.com/y3owk1n/neru/internal/domain/modecmd"
+	"github.com/y3owk1n/neru/internal/ports"
 )
 
 // activateGridModeWithAction activates grid mode with optional action parameter.
-func (h *Handler) activateGridModeWithAction(
-	actionStr *string,
-	repeat *bool,
-	cursorFollowSelection *bool,
-) {
+func (h *handlerState) activateGridModeWithAction(activation modecmd.Activation) {
 	// Detect refresh before validation so we can do partial cleanup on re-activation.
 	isRefresh := h.appState.CurrentMode() == domain.ModeGrid
 
@@ -31,7 +28,7 @@ func (h *Handler) activateGridModeWithAction(
 	)
 	if !activated {
 		if isRefresh {
-			h.exitModeLocked()
+			h.exitMode()
 		}
 
 		return
@@ -47,17 +44,13 @@ func (h *Handler) activateGridModeWithAction(
 		// The overlay is cleared unconditionally below.
 		h.stopIndicatorPolling()
 	} else {
-		h.exitModeLocked()
+		// Coming from another mode, the keyboard is handed over rather than
+		// given back: exit now, release at return if nothing is entered.
+		defer h.exitModeForTransition()()
 	}
 
-	// Clear any previous overlay content (e.g., scroll highlights) before drawing grid.
-	// This prevents scroll highlights from persisting when switching from scroll mode to grid mode.
-	h.overlayManager.Clear()
-
-	h.appState.SetGridOverlayNeedsRefresh(false)
-
-	gridInstance := h.createGridInstance()
-	h.updateGridOverlayConfig()
+	scope := h.resolveCaptureScope(domain.ModeNameGrid, activation, &h.config.Grid)
+	gridInstance := h.createGridInstance(scope)
 
 	// Reset the grid manager state when setting up the grid.
 	// Note: Manager is reused across activations (holds grid state) but reset to clear input.
@@ -70,67 +63,51 @@ func (h *Handler) activateGridModeWithAction(
 
 	h.grid.Router = domainGrid.NewRouter(h.grid.Manager, h.logger)
 
-	// Draw the grid to populate the overlay
-	drawGridErr := h.renderer.DrawGrid(gridInstance, "")
-	if drawGridErr != nil {
-		h.logger.Error("Failed to draw grid", zap.Error(drawGridErr))
-
+	// Hand the grid over as a Frame: showing the overlay, switching it to grid
+	// mode and drawing the cells is one step the overlay owns, and a previous
+	// mode's content (scroll highlights, a subgrid) goes with it.
+	if !h.showFrame(ports.GridFrame{Grid: gridInstance}, "show grid overlay") {
 		if isRefresh {
-			h.exitModeLocked()
+			h.exitMode()
+		} else {
+			// Nothing is entering grid mode, so nothing would take the
+			// half-shown overlay off the screen later.
+			h.clearOverlayFrame()
 		}
 
 		return
 	}
 
-	h.overlayManager.ResizeToActiveScreen()
-
-	// Show the overlay (the grid is already drawn with proper style)
-	h.overlayManager.Show()
-
-	// Store pending action and repeat flag if provided
-	if isRefresh {
-		if actionStr != nil {
-			h.grid.Context.SetPendingAction(actionStr)
-		}
-
-		if repeat != nil {
-			h.grid.Context.SetRepeat(*repeat)
-		}
-
-		if cursorFollowSelection != nil {
-			h.grid.Context.SetCursorFollowSelection(*cursorFollowSelection)
-		}
-	} else {
-		h.grid.Context.SetPendingAction(actionStr)
-		h.grid.Context.SetRepeat(repeat != nil && *repeat)
-		h.grid.Context.SetCursorFollowSelection(resolveCursorFollowSelection(
-			domain.ModeGrid,
-			cursorFollowSelection,
-		))
-	}
+	applyGridFlags(h.grid.Context, activation, isRefresh)
+	h.grid.Context.SetCaptureScope(scope)
 
 	h.grid.Context.ClearSelectionPoint()
-	h.refreshGridVirtualPointerLocked()
-
-	if actionStr != nil {
-		h.logger.Debug("Grid mode activated with pending action",
-			zap.String("action", *actionStr),
-			zap.Bool("repeat", repeat != nil && *repeat))
-	}
+	h.refreshGridVirtualPointer()
 
 	// Only set mode and enable event tap on initial activation;
-	// during refresh these are already in the correct state.
+	// during refresh these are already in the correct state. The overlay was
+	// switched to grid mode when the Frame was realized.
 	if !isRefresh {
-		h.setModeLocked(domain.ModeGrid, overlay.ModeGrid)
+		h.enterMode(domain.ModeGrid)
 	}
 
-	h.logger.Info("Grid mode activated", zap.String("action", actionString))
+	h.logger.Info("Grid mode activated", activationLogFields(actionString, scope, activation)...)
 
 	h.startIndicatorPolling(domain.ModeGrid)
 }
 
-// createGridInstance creates a new grid instance with proper bounds and characters.
-func (h *Handler) createGridInstance() *domainGrid.Grid {
+// gridOptionsFor is the configured grid options with the display scale of
+// screenBounds, so every grid built for that screen plans in apparent units.
+func (h *handlerState) gridOptionsFor(screenBounds image.Rectangle) domainGrid.Options {
+	options := h.config.GridOptions()
+	options.DisplayScale = h.screenScale(screenBounds)
+
+	return options
+}
+
+// createGridInstance creates a new grid over the region scope names, in the
+// active screen's own space, with the configured characters.
+func (h *handlerState) createGridInstance(scope string) *domainGrid.Grid {
 	var screenBounds image.Rectangle
 
 	if h.system != nil {
@@ -143,21 +120,15 @@ func (h *Handler) createGridInstance() *domainGrid.Grid {
 	}
 
 	// Store screen bounds for coordinate conversion
-	h.screenBounds = screenBounds
+	h.setScreenBounds(screenBounds)
 
-	// Normalize normalizedBounds to window-local coordinates using helper function
-	normalizedBounds := coordinates.NormalizeToLocalCoordinates(screenBounds)
+	// The region is global like the screen; the overlay draws in the
+	// screen's own space.
+	region := h.captureStart(domain.ModeNameGrid, screenBounds, scope).Sub(screenBounds.Min)
 
-	characters := h.config.Grid.Characters
-	if strings.TrimSpace(characters) == "" {
-		characters = h.config.Hints.HintCharacters
-	}
-
-	gridInstance := domainGrid.NewGridWithLabels(
-		characters,
-		h.config.Grid.RowLabels,
-		h.config.Grid.ColLabels,
-		normalizedBounds,
+	gridInstance := domainGrid.NewGridWithOptions(
+		h.gridOptionsFor(screenBounds),
+		region,
 		h.logger,
 	)
 	h.grid.Context.SetGridInstanceValue(gridInstance)
@@ -165,19 +136,10 @@ func (h *Handler) createGridInstance() *domainGrid.Grid {
 	return gridInstance
 }
 
-// updateGridOverlayConfig updates the grid overlay configuration.
-func (h *Handler) updateGridOverlayConfig() {
-	if h.grid.Overlay != nil {
-		h.grid.Overlay.SetConfig(h.config.Grid)
-	}
-}
-
 // initializeGridManager initializes the grid manager with the new grid instance.
 // It sets up subgrid configuration, creates the manager with update callbacks for
 // overlay rendering and subgrid navigation, and configures the grid router.
-func (h *Handler) initializeGridManager(gridInstance *domainGrid.Grid) {
-	const defaultGridCharacters = "asdfghjkl"
-
+func (h *handlerState) initializeGridManager(gridInstance *domainGrid.Grid) {
 	// Defensive check for grid instance
 	if gridInstance == nil {
 		h.logger.Warn("Grid instance is nil, creating with default bounds")
@@ -194,45 +156,21 @@ func (h *Handler) initializeGridManager(gridInstance *domainGrid.Grid) {
 		}
 
 		bounds := image.Rect(0, 0, screenBounds.Dx(), screenBounds.Dy())
-		gridInstance = domainGrid.NewGridWithLabels(
-			h.config.Grid.Characters,
-			h.config.Grid.RowLabels,
-			h.config.Grid.ColLabels,
+		gridInstance = domainGrid.NewGridWithOptions(
+			h.gridOptionsFor(screenBounds),
 			bounds,
 			h.logger,
 		)
 	}
 
-	// Configure subgrid keys for 3x3 subgrid navigation within selected cells
-	keys := strings.TrimSpace(h.config.Grid.SublayerKeys)
-	if keys == "" {
-		keys = h.config.Grid.Characters
-	}
-
-	// Ensure we have valid keys for subgrid
-	if keys == "" {
-		h.logger.Warn("No subgrid keys configured, using grid characters as fallback")
-		keys = h.config.Grid.Characters
-	}
-
-	// Final fallback to default characters if none configured
-	if keys == "" {
-		keys = defaultGridCharacters
-
-		h.logger.Warn("No characters available for subgrid, using default")
-	}
-
-	const (
-		subRows = 3
-		subCols = 3
-	)
-
 	// Create grid manager with callbacks for overlay updates and subgrid navigation
 	h.grid.Manager = domainGrid.NewManager(
 		gridInstance,
-		subRows,
-		subCols,
-		keys,
+		domain.SubgridDimensions(),
+		// The keys the subgrid is drawn with, resolved once by the config
+		// (config.ResolveSublayerKeys) so that the set accepted here is the set
+		// the overlay draws.
+		h.config.Grid.SublayerKeys,
 		// Update callback: handles grid redrawing and match filtering
 		func(forceRedraw bool) {
 			// Defensive check for grid manager
@@ -244,31 +182,29 @@ func (h *Handler) initializeGridManager(gridInstance *domainGrid.Grid) {
 
 			input := h.grid.Manager.CurrentInput()
 
-			// Force redraw only when exiting subgrid to restore main grid
+			// Force redraw only when exiting subgrid to restore main grid.
+			// The overlay is already up, so this is a redraw and not a
+			// transition: erasing the subgrid it replaces is the overlay's
+			// business, and it is the one that knows a subgrid is there.
 			if forceRedraw {
-				h.overlayManager.Clear()
-
-				gridErr := h.renderer.DrawGrid(gridInstance, input)
-				if gridErr != nil {
-					h.logger.Error("Failed to redraw grid", zap.Error(gridErr))
-
-					return
-				}
-
-				h.overlayManager.Show()
+				h.redrawFrame(
+					ports.GridFrame{Grid: gridInstance, Input: input},
+					"restore grid overlay",
+				)
 			}
 
-			// Hide unmatched cells if configured and input exists
+			// Narrowing is the per-keystroke path and stays a plain call: no
+			// frame is built and nothing is redrawn (ADR 0003).
 			hideUnmatched := h.config.Grid.HideUnmatched && len(input) > 0
-			h.renderer.SetHideUnmatched(hideUnmatched)
-			h.renderer.UpdateGridMatches(input)
-			h.refreshGridVirtualPointerLocked()
+			h.setGridHideUnmatched(hideUnmatched)
+			h.updateGridMatches(input)
+			h.refreshGridVirtualPointer()
 		},
 		// Subgrid callback: moves cursor and shows subgrid overlay
 		func(cell *domainGrid.Cell) {
 			// Defensive check for cell
 			if cell == nil {
-				h.logger.Warn("Attempted to show subgrid for nil cell")
+				h.logger.Debug("Subgrid cell is nil, ignoring")
 
 				return
 			}
@@ -277,7 +213,7 @@ func (h *Handler) initializeGridManager(gridInstance *domainGrid.Grid) {
 			ctx := h.ctx
 
 			// Convert cell center from window-local to screen-absolute coordinates
-			absoluteCenter := coordinates.ConvertToAbsoluteCoordinates(
+			absoluteCenter := geometry.ConvertToAbsoluteCoordinates(
 				cell.Center(),
 				h.screenBounds,
 			)
@@ -286,8 +222,11 @@ func (h *Handler) initializeGridManager(gridInstance *domainGrid.Grid) {
 				h.grid.Context.SetSelectionPoint(absoluteCenter)
 
 				if !h.grid.Context.CursorFollowSelection() {
-					h.renderer.ShowSubgrid(cell)
-					h.refreshGridVirtualPointerLocked()
+					// One call, because the surface is one surface: the
+					// pointer just moved onto the cell this subgrid opens
+					// inside, and saying so separately repaints the subgrid a
+					// second time (#1492).
+					h.showGridSubgrid(cell, h.gridPointer())
 
 					return
 				}
@@ -298,10 +237,49 @@ func (h *Handler) initializeGridManager(gridInstance *domainGrid.Grid) {
 				h.logger.Error("Failed to move cursor", zap.Error(moveCursorErr))
 			}
 
-			// Draw 3x3 subgrid inside selected cell
-			h.renderer.ShowSubgrid(cell)
-			h.refreshGridVirtualPointerLocked()
+			// Draw 3x3 subgrid inside selected cell. The real cursor is on the
+			// selection here, so the pointer this carries stands for nothing
+			// and is invisible — the open still says so, rather than leaving
+			// whatever the surface last held.
+			h.showGridSubgrid(cell, h.gridPointer())
 		},
 		h.logger,
+	)
+}
+
+// applyGridFlags writes the flags an activation carries into the context. A refresh
+// writes only what it was given; a fresh activation writes every field so
+// nothing leaks over from the previous run.
+func applyGridFlags(ctx *grid.Context, activation modecmd.Activation, isRefresh bool) {
+	if isRefresh {
+		if activation.Action != nil {
+			ctx.SetPendingAction(activation.Action)
+		}
+
+		if activation.OnExit != nil {
+			ctx.SetOnExit(activation.OnExit)
+		}
+
+		if activation.Modifier != nil {
+			ctx.SetPendingModifier(activation.Modifier)
+		}
+
+		if activation.Repeat != nil {
+			ctx.SetRepeat(*activation.Repeat)
+		}
+
+		if activation.CursorFollowSelection != nil {
+			ctx.SetCursorFollowSelection(*activation.CursorFollowSelection)
+		}
+
+		return
+	}
+
+	ctx.SetPendingAction(activation.Action)
+	ctx.SetOnExit(activation.OnExit)
+	ctx.SetPendingModifier(activation.Modifier)
+	ctx.SetRepeat(activation.Repeat != nil && *activation.Repeat)
+	ctx.SetCursorFollowSelection(
+		resolveCursorFollowSelection(activation.CursorFollowSelection),
 	)
 }

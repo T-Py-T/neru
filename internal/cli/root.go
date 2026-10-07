@@ -4,31 +4,35 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 
 	"github.com/spf13/cobra"
 
+	"github.com/y3owk1n/neru/internal/adapter/ipc"
+	"github.com/y3owk1n/neru/internal/buildinfo"
 	"github.com/y3owk1n/neru/internal/cli/cliutil"
-	derrors "github.com/y3owk1n/neru/internal/core/errors"
-	"github.com/y3owk1n/neru/internal/core/infra/ipc"
+	"github.com/y3owk1n/neru/internal/derrors"
 )
 
 const (
 	// DefaultIPCTimeoutSeconds is the default IPC timeout in seconds.
-	DefaultIPCTimeoutSeconds = 5
+	//
+	// This is the client-side ceiling for a full request/response round-trip
+	// and MUST stay comfortably larger than the daemon's own per-request work
+	// budget — notably the hints element scan (modes.HintTimeout, 5s) plus
+	// activation overhead. If the client gives up first, it disconnects and the
+	// daemon logs a spurious "broken pipe" when it finally writes the response
+	// (which the client is no longer there to read). The headroom keeps a slow
+	// (but not wedged) accessibility backend from tripping that race.
+	DefaultIPCTimeoutSeconds = 10
 )
 
 var (
 	configPath string
 	// LaunchFunc is set by main to handle daemon launch.
 	LaunchFunc func(configPath string)
-	// Version is set via ldflags at build time.
-	Version = "dev"
-	// GitCommit is set via ldflags at build time.
-	GitCommit = "unknown"
-	// BuildDate is set via ldflags at build time.
-	BuildDate  = "unknown"
-	timeoutSec = 5
+	// timeoutSec is overridden by the --timeout flag (default
+	// DefaultIPCTimeoutSeconds); kept in sync so any pre-parse use matches.
+	timeoutSec = DefaultIPCTimeoutSeconds
 
 	// CLI utilities.
 	formatter *cliutil.OutputFormatter
@@ -45,7 +49,7 @@ vim-like navigation capabilities across applications using accessibility APIs.`,
   neru hints --action left_click     Activate hints mode with pending click
   neru action scroll_down --steps 3  Scroll down 3 steps`,
 	SilenceErrors: true,
-	Version:       Version,
+	Version:       buildinfo.Version,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if IsRunningFromAppBundle() && len(args) == 0 {
 			launchProgram(cmd, configPath)
@@ -114,7 +118,12 @@ func init() {
 	// Set the build version for IPC version validation so both the CLI
 	// client and the daemon (which also imports this package) agree on
 	// the expected version.
-	ipc.SetBuildVersion(Version)
+	ipc.SetBuildVersion(buildinfo.Version)
+
+	// Override Cobra's default OutOrStderr() for cmd.Println so that
+	// primary command output goes to stdout (pipeable) while errors
+	// via cmd.PrintErrln still correctly go to stderr.
+	RootCmd.SetOut(os.Stdout)
 
 	// Initialize CLI utilities.
 	formatter = cliutil.NewOutputFormatter()
@@ -122,9 +131,9 @@ func init() {
 	RootCmd.SetVersionTemplate(
 		fmt.Sprintf(
 			"Neru version %s\nGit commit: %s\nBuild date: %s\n",
-			Version,
-			GitCommit,
-			BuildDate,
+			buildinfo.Version,
+			buildinfo.GitCommit,
+			buildinfo.BuildDate,
 		),
 	)
 
@@ -146,6 +155,12 @@ func launchProgram(cmd *cobra.Command, cfgPath string) {
 		cmd.Println("Neru is already running")
 		os.Exit(0)
 	}
+
+	// From here on this process is the daemon rather than a CLI client. On
+	// Windows that means giving up a console the shell allocated for us, so a
+	// Start Menu or autostart launch does not leave a window behind. No-op
+	// elsewhere, and no-op when a terminal owns the console.
+	detachConsoleIfOwned()
 
 	if LaunchFunc != nil {
 		LaunchFunc(cfgPath)
@@ -171,374 +186,4 @@ func requiresRunningInstance() error {
 	}
 
 	return nil
-}
-
-// BuildSimpleCommand creates a simple cobra command with the given parameters.
-func BuildSimpleCommand(use, short, long string, action string) *cobra.Command {
-	return &cobra.Command{
-		Use:   use,
-		Short: short,
-		Long:  long,
-		PreRunE: func(_ *cobra.Command, _ []string) error {
-			return requiresRunningInstance()
-		},
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return sendCommand(cmd, action, args)
-		},
-	}
-}
-
-// BuildActionCommand creates an action cobra command with the given parameters.
-func BuildActionCommand(
-	use, short, long string,
-	params []string,
-	allowTargetOverride bool,
-) *cobra.Command {
-	var (
-		modifier  string
-		selection bool
-		bare      bool
-	)
-
-	cmd := &cobra.Command{
-		Use:   use,
-		Short: short,
-		Long:  long,
-		PreRunE: func(_ *cobra.Command, _ []string) error {
-			return requiresRunningInstance()
-		},
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if selection && bare {
-				return derrors.New(
-					derrors.CodeInvalidInput,
-					"--selection and --bare cannot be used together",
-				)
-			}
-
-			args := make([]string, 0, len(params)+1)
-			args = append(args, params...)
-
-			if modifier != "" {
-				args = append(args, "--modifier="+modifier)
-			}
-
-			if selection {
-				args = append(args, "--selection")
-			}
-
-			if bare {
-				args = append(args, "--bare")
-			}
-
-			return sendCommand(cmd, "action", args)
-		},
-	}
-
-	cmd.Flags().StringVar(&modifier, "modifier", "",
-		"Comma-separated modifier keys to hold during action (cmd, super, meta, shift, alt, option, ctrl)")
-
-	if allowTargetOverride {
-		cmd.Flags().BoolVar(
-			&selection,
-			"selection",
-			false,
-			"Explicitly use the active mode selection as the target point",
-		)
-		cmd.Flags().BoolVar(
-			&bare,
-			"bare",
-			false,
-			"Use the current cursor position even when a mode selection exists",
-		)
-	}
-
-	return cmd
-}
-
-// BuildMoveMouseCommand creates a move_mouse cobra command with x and y flags.
-func BuildMoveMouseCommand() *cobra.Command {
-	var (
-		targetX, targetY int
-		center           bool
-		window           bool
-		selection        bool
-		bare             bool
-	)
-
-	cmd := &cobra.Command{
-		Use:   "move_mouse",
-		Short: "Move mouse cursor to absolute position",
-		Long: `Move the mouse cursor to the specified absolute position.
-Coordinates are relative to the current display.
-When --center is used, the cursor moves to the center of the active screen.
-When --window is used, the cursor moves to the center of the focused window.
-If --x and --y are also provided with --center or --window, they act as offsets from center.
-Without coordinates, move_mouse targets the active mode selection by default when one exists.
-Use --bare to force current-cursor targeting.`,
-		PreRunE: func(_ *cobra.Command, _ []string) error {
-			return requiresRunningInstance()
-		},
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if selection &&
-				(center || window || cmd.Flags().Changed("x") || cmd.Flags().Changed("y")) {
-				return derrors.New(
-					derrors.CodeInvalidInput,
-					"--selection cannot be combined with --x, --y, --center, or --window",
-				)
-			}
-
-			if selection && bare {
-				return derrors.New(
-					derrors.CodeInvalidInput,
-					"--selection and --bare cannot be used together",
-				)
-			}
-
-			if center && window {
-				return derrors.New(
-					derrors.CodeInvalidInput,
-					"--center and --window cannot be used together",
-				)
-			}
-
-			if !center && !window && !selection &&
-				((cmd.Flags().Changed("x") && !cmd.Flags().Changed("y")) ||
-					(!cmd.Flags().Changed("x") && cmd.Flags().Changed("y"))) {
-				return derrors.New(
-					derrors.CodeInvalidInput,
-					"both --x and --y are required when using absolute coordinates",
-				)
-			}
-
-			args := []string{"move_mouse"}
-
-			if center {
-				args = append(args, "--center")
-			}
-
-			if window {
-				args = append(args, "--window")
-			}
-
-			if cmd.Flags().Changed("x") {
-				args = append(args, fmt.Sprintf("--x=%d", targetX))
-			}
-
-			if cmd.Flags().Changed("y") {
-				args = append(args, fmt.Sprintf("--y=%d", targetY))
-			}
-
-			if selection {
-				args = append(args, "--selection")
-			}
-
-			if bare {
-				args = append(args, "--bare")
-			}
-
-			return sendCommand(cmd, "action", args)
-		},
-	}
-
-	cmd.Flags().
-		IntVar(&targetX, "x", 0, "X coordinate (pixels); with --center, horizontal offset (default 0)")
-	cmd.Flags().
-		IntVar(&targetY, "y", 0, "Y coordinate (pixels); with --center, vertical offset (default 0)")
-	cmd.Flags().BoolVar(&center, "center", false, "Move to the center of the active screen")
-	cmd.Flags().
-		BoolVar(&window, "window", false, "Move to the center of the focused window")
-	cmd.Flags().
-		BoolVar(&selection, "selection", false, "Explicitly move to the active mode selection")
-	cmd.Flags().
-		BoolVar(&bare, "bare", false, "Use the current cursor position when no explicit target is provided")
-
-	return cmd
-}
-
-// BuildScrollActionCommand creates a scroll action cobra command.
-// If supportSteps is true, a --steps flag is added to override the scroll step amount.
-func BuildScrollActionCommand(use, short, long string, supportSteps bool) *cobra.Command {
-	var (
-		selection bool
-		bare      bool
-		steps     int
-	)
-
-	cmd := &cobra.Command{
-		Use:   use,
-		Short: short,
-		Long:  long,
-		PreRunE: func(_ *cobra.Command, _ []string) error {
-			return requiresRunningInstance()
-		},
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if selection && bare {
-				return derrors.New(
-					derrors.CodeInvalidInput,
-					"--selection and --bare cannot be used together",
-				)
-			}
-
-			args := []string{use}
-			if selection {
-				args = append(args, "--selection")
-			}
-
-			if bare {
-				args = append(args, "--bare")
-			}
-
-			if supportSteps {
-				if cmd.Flags().Changed("steps") && steps <= 0 {
-					return derrors.New(
-						derrors.CodeInvalidInput,
-						"--steps must be a positive integer",
-					)
-				}
-
-				if steps > 0 {
-					args = append(args, "--steps", strconv.Itoa(steps))
-				}
-			}
-
-			return sendCommand(cmd, "action", args)
-		},
-	}
-
-	cmd.Flags().
-		BoolVar(&selection, "selection", false, "Explicitly use the active mode selection as the target point")
-	cmd.Flags().
-		BoolVar(&bare, "bare", false, "Use the current cursor position even when a mode selection exists")
-
-	if supportSteps {
-		cmd.Flags().
-			IntVar(&steps, "steps", 0, "Override the scroll step amount (pixels); configured default is used when omitted")
-	}
-
-	return cmd
-}
-
-// BuildMoveMonitorCommand creates a move_monitor cobra command that moves the
-// cursor (and any active overlay) to a specific monitor by name, or cycles
-// through monitors.
-func BuildMoveMonitorCommand() *cobra.Command {
-	var (
-		monitorName string
-		usePrevious bool
-	)
-
-	cmd := &cobra.Command{
-		Use:   "move_monitor",
-		Short: "Move cursor and overlay to another monitor",
-		Long: `Move the cursor, and any active mode overlay (hints/grid/recursive-grid), to another monitor.
-
-By default, cycles to the next monitor. Use --previous to cycle backwards.
-Use --name to jump directly to a specific display by name.
-
-Monitor names are matched case-insensitively against the localized display names
-reported by macOS (e.g. "Built-in Retina Display", "DELL U2720Q").`,
-		PreRunE: func(_ *cobra.Command, _ []string) error {
-			return requiresRunningInstance()
-		},
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			hasName := cmd.Flags().Changed("name")
-
-			if hasName && monitorName == "" {
-				return derrors.New(
-					derrors.CodeInvalidInput,
-					"--name value must not be empty",
-				)
-			}
-
-			if hasName && usePrevious {
-				return derrors.New(
-					derrors.CodeInvalidInput,
-					"--previous cannot be used with --name",
-				)
-			}
-
-			actionArgs := []string{"move_monitor"}
-
-			if hasName {
-				actionArgs = append(actionArgs, "--name="+monitorName)
-			}
-
-			if usePrevious {
-				actionArgs = append(actionArgs, "--previous")
-			}
-
-			return sendCommand(cmd, "action", actionArgs)
-		},
-	}
-
-	cmd.Flags().StringVar(&monitorName, "name", "",
-		"Target monitor by display name (e.g. \"Built-in Retina Display\")")
-	cmd.Flags().
-		BoolVar(&usePrevious, "previous", false, "Cycle to the previous monitor instead of the next one")
-
-	return cmd
-}
-
-// BuildMoveMouseRelativeCommand creates a move_mouse_relative cobra command with deltaX and deltaY flags.
-func BuildMoveMouseRelativeCommand() *cobra.Command {
-	var deltaX, deltaY int
-
-	cmd := &cobra.Command{
-		Use:   "move_mouse_relative",
-		Short: "Move mouse cursor relatively",
-		Long: `Move the mouse cursor by the specified delta from current position.
-Positive values move right/down, negative values move left/up.`,
-		PreRunE: func(_ *cobra.Command, _ []string) error {
-			return requiresRunningInstance()
-		},
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return sendCommand(
-				cmd,
-				"action",
-				[]string{
-					"move_mouse_relative",
-					fmt.Sprintf("--dx=%d", deltaX),
-					fmt.Sprintf("--dy=%d", deltaY),
-				},
-			)
-		},
-	}
-
-	cmd.Flags().IntVar(&deltaX, "dx", 0, "Delta X (pixels, positive=right, negative=left)")
-	cmd.Flags().IntVar(&deltaY, "dy", 0, "Delta Y (pixels, positive=down, negative=up)")
-	_ = cmd.MarkFlagRequired("dx")
-	_ = cmd.MarkFlagRequired("dy")
-
-	return cmd
-}
-
-// BuildCycleHintCommand creates a cycle_hint cobra command that cycles through visible hints.
-func BuildCycleHintCommand() *cobra.Command {
-	var backward bool
-
-	cmd := &cobra.Command{
-		Use:   "cycle_hint",
-		Short: "Cycle through visible hints",
-		Long: `Cycle through visible hints in hints mode.
-
-Cycles forward through hints (or backward with --backward), wrapping at the end.
-Requires hints mode to be active.`,
-		PreRunE: func(_ *cobra.Command, _ []string) error {
-			return requiresRunningInstance()
-		},
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			actionArgs := []string{"cycle_hint"}
-
-			if backward {
-				actionArgs = append(actionArgs, "--backward")
-			}
-
-			return sendCommand(cmd, "action", actionArgs)
-		},
-	}
-
-	cmd.Flags().
-		BoolVar(&backward, "backward", false, "Cycle to the previous hint instead of the next one")
-
-	return cmd
 }

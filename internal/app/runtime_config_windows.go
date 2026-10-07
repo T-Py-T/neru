@@ -2,6 +2,13 @@
 
 package app
 
-import "github.com/y3owk1n/neru/internal/config"
+import (
+	"go.uber.org/zap"
 
-func configurePlatformRuntimeConfigProviders(_ *config.Service) {}
+	"github.com/y3owk1n/neru/internal/adapter/platform/windows"
+	"github.com/y3owk1n/neru/internal/config/loader"
+)
+
+func configurePlatformRuntimeConfigProviders(cfgService *loader.Service, _ *zap.Logger) {
+	windows.SetConfigProvider(cfgService)
+}

@@ -1,9 +1,14 @@
 package cli
 
 import (
+	"fmt"
+	"os"
+	"strings"
+
 	"github.com/spf13/cobra"
 
-	derrors "github.com/y3owk1n/neru/internal/core/errors"
+	"github.com/y3owk1n/neru/internal/derrors"
+	"github.com/y3owk1n/neru/internal/domain/action"
 )
 
 // ActionCmd is the CLI action command for performing immediate actions.
@@ -17,23 +22,44 @@ Point-targeted actions use the active mode selection when one exists. Use
 support --modifier to hold modifier keys during the action.
 
 Available subcommands:
-  Click actions:    left_click, right_click, middle_click, mouse_down, mouse_up
+  Click actions:    left_click, right_click, middle_click
   Scroll actions:   scroll_up, scroll_down, scroll_left, scroll_right,
                     go_top, go_bottom, page_up, page_down
   Mouse movement:   move_mouse, move_mouse_relative, move_monitor
-  Mode control:     reset, backspace, wait_for_mode_exit, cycle_hint
+  Mode control:     reset, backspace, move_cell, bisect, wait_for_mode_exit, cycle_hint
   Cursor saving:    save_cursor_pos, restore_cursor_pos
+  Cursor visibility: hide_cursor, show_cursor
   Key injection:    feed
+
+Click actions can be chained with commas to produce multi-click sequences:
+  neru action left_click,left_click              Double-click at cursor
+  neru action left_click,left_click,left_click    Triple-click at cursor
+
+Click actions also accept --state down/--state up to press and release the
+button as separate actions (drag workflows), or --toggle to do both from a
+single binding. Held buttons are released when Neru returns to idle.
 
 Examples:
   neru action left_click                        Click at current cursor
+  neru action left_click,left_click             Double-click at cursor
+  neru action right_click --state down          Press and hold right button
+  neru action middle_click --toggle             Press or release middle button
   neru action scroll_down --steps 5             Scroll down 5 steps
   neru action move_mouse --x 1920 --y 1080      Move to absolute position
+  neru action move_cell --direction right       Slide the selection one cell
   neru action feed ctrl+c                        Send Ctrl+C keystroke`,
+	DisableFlagParsing: true,
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		return requiresRunningInstance()
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) > 0 && strings.Contains(args[0], ",") {
+			// Comma-separated action chain (e.g. "left_click,left_click")
+			// doesn't match a subcommand name. Forward it directly through IPC
+			// where handleActionChain will split and execute each action.
+			return sendCommand(cmd, "action", args)
+		}
+
 		return derrors.New(
 			derrors.CodeInvalidInput,
 			"action subcommand required (e.g., neru action left_click, neru action scroll_up)",
@@ -42,67 +68,159 @@ Examples:
 }
 
 // ActionLeftClickCmd is the left click action command.
-var ActionLeftClickCmd = BuildActionCommand(
+var ActionLeftClickCmd = BuildClickActionCommand(
 	"left_click",
 	"Perform left click",
 	`Execute a left click.
 
 Targets the active mode selection when one exists, otherwise clicks at
 the current cursor location. Use --modifier to hold modifier keys
-(e.g. --modifier shift for Shift+click).`,
+(e.g. --modifier shift for Shift+click).
+
+Use --state down/--state up to press and release the button separately
+(drag workflows), or --toggle to bind both halves to a single key.`,
 	[]string{"left_click"},
-	true,
 )
 
 // ActionRightClickCmd is the right click action command.
-var ActionRightClickCmd = BuildActionCommand(
+var ActionRightClickCmd = BuildClickActionCommand(
 	"right_click",
 	"Perform right click",
 	`Execute a right click.
 
 Targets the active mode selection when one exists, otherwise clicks at
 the current cursor location. Use --modifier to hold modifier keys
-(e.g. --modifier option for Option+click).`,
+(e.g. --modifier option for Option+click).
+
+Use --state down/--state up to press and release the button separately
+(right-drag workflows), or --toggle to bind both halves to a single key.`,
 	[]string{"right_click"},
-	true,
 )
 
-// ActionMouseUpCmd is the mouse up action command.
-var ActionMouseUpCmd = BuildActionCommand(
+// ActionMouseUpCmd is the deprecated mouse up action command.
+var ActionMouseUpCmd = buildDeprecatedMouseButtonCommand(
 	"mouse_up",
-	"Release mouse button",
+	"Release left mouse button (deprecated)",
 	`Release the left mouse button.
 
-Useful for drag-and-drop workflows with mouse_down. Targets the active
-mode selection when one exists, otherwise the current cursor location.`,
-	[]string{"mouse_up"},
-	true,
+Deprecated: use "neru action left_click --state up" instead.`,
+	"mouse_up",
+	"left_click --state up",
 )
 
-// ActionMouseDownCmd is the mouse down action command.
-var ActionMouseDownCmd = BuildActionCommand(
+// ActionMouseDownCmd is the deprecated mouse down action command.
+var ActionMouseDownCmd = buildDeprecatedMouseButtonCommand(
 	"mouse_down",
-	"Press mouse button",
+	"Press left mouse button (deprecated)",
 	`Press and hold the left mouse button.
 
-Intended for drag operations: use mouse_down at the start point, move
-the cursor, then mouse_up at the destination. Targets the active mode
-selection when one exists, otherwise the current cursor location.`,
-	[]string{"mouse_down"},
-	true,
+Deprecated: use "neru action left_click --state down" instead.`,
+	"mouse_down",
+	"left_click --state down",
 )
 
 // ActionMiddleClickCmd is the middle click action command.
-var ActionMiddleClickCmd = BuildActionCommand(
+var ActionMiddleClickCmd = BuildClickActionCommand(
 	"middle_click",
 	"Perform middle click",
 	`Execute a middle click (useful for opening links in new tabs).
 
 Targets the active mode selection when one exists, otherwise clicks at
-the current cursor location. Use --modifier to hold modifier keys.`,
+the current cursor location. Use --modifier to hold modifier keys.
+
+Use --state down/--state up to press and release the button separately
+(canvas panning and similar), or --toggle to bind both halves to a
+single key.`,
 	[]string{"middle_click"},
-	true,
 )
+
+// buttonPhaseAliasCommands are the press, release, and toggle actions spelled
+// as their own subcommands.
+//
+// The flag form (left_click --state down) is the documented spelling, but the
+// action names are what a mode --action takes, and hotkey action strings reach
+// the daemon without passing through Cobra — so "action right_mouse_down" in a
+// config already works. These keep `neru action right_mouse_down` working too,
+// so a string that works in one place works everywhere. Hidden, so that help
+// output still steers people to the flags.
+var buttonPhaseAliasCommands = buildButtonPhaseAliasCommands()
+
+// buildButtonPhaseAliasCommands builds a hidden subcommand per button phase
+// action, derived from the domain names so the two cannot drift.
+func buildButtonPhaseAliasCommands() []*cobra.Command {
+	phases := []struct {
+		phase       action.MousePhase
+		description string
+	}{
+		{action.PhaseDown, "Press and hold the %s mouse button"},
+		{action.PhaseUp, "Release the %s mouse button"},
+		{action.PhaseToggle, "Release the %s mouse button when held, press and hold it otherwise"},
+	}
+
+	commands := make([]*cobra.Command, 0, len(phases)*len(action.MouseButtons()))
+
+	for _, button := range action.MouseButtons() {
+		for _, phase := range phases {
+			name, ok := action.MouseButtonName(button, phase.phase)
+			if !ok {
+				continue
+			}
+
+			short := fmt.Sprintf(phase.description, button)
+			cmd := BuildActionCommand(
+				string(name),
+				short,
+				short+".\n\nEquivalent to "+clickFlagSpelling(button, phase.phase)+".",
+				[]string{string(name)},
+				true,
+			)
+			cmd.Hidden = true
+
+			commands = append(commands, cmd)
+		}
+	}
+
+	return commands
+}
+
+// clickFlagSpelling renders the documented flag form of a button phase action.
+func clickFlagSpelling(button action.MouseButton, phase action.MousePhase) string {
+	clickName, ok := action.MouseButtonName(button, action.PhaseClick)
+	if !ok {
+		return ""
+	}
+
+	flag := "--toggle"
+	if phase != action.PhaseToggle {
+		flag = "--state " + phase.String()
+	}
+
+	return "neru action " + string(clickName) + " " + flag
+}
+
+// buildDeprecatedMouseButtonCommand builds one of the original left-button
+// press/release commands. They still work, but warn on stderr — stdout stays
+// clean for scripts — pointing at the --state spelling that also covers the
+// right and middle buttons.
+func buildDeprecatedMouseButtonCommand(
+	use, short, long, param, replacement string,
+) *cobra.Command {
+	cmd := BuildActionCommand(use, short, long, []string{param}, true)
+
+	requiresInstance := cmd.PreRunE
+	cmd.PreRunE = func(command *cobra.Command, args []string) error {
+		fmt.Fprintf(
+			os.Stderr,
+			"warning: \"neru action %s\" is deprecated; use \"neru action %s\" instead\n",
+			use,
+			replacement,
+		)
+
+		return requiresInstance(command, args)
+	}
+
+	return cmd
+}
 
 // ActionMoveMouseCmd is the move mouse action command.
 var ActionMoveMouseCmd = BuildMoveMouseCommand()
@@ -162,21 +280,97 @@ without a completed selection (e.g. user presses Escape).`,
 	return cmd
 }()
 
+// actionCmdName is the IPC command every action subcommand dispatches through.
+// It is spelled here rather than taken from domain.CommandAction because the
+// package-level helpers in root.go take a parameter named "action", which would
+// shadow the action package this file imports.
+const actionCmdName = "action"
+
+// BuildCursorSlotActionCommand creates an action cobra command for
+// save_cursor_pos or restore_cursor_pos, whose only flag is --slot.
+//
+// It does not go through buildActionCommand because that one always offers
+// --modifier, which the daemon rejects for these two actions: a command should
+// not advertise a flag its own daemon refuses.
+func BuildCursorSlotActionCommand(use, short, long string, params []string) *cobra.Command {
+	var slot string
+
+	cmd := &cobra.Command{
+		Use:   use,
+		Short: short,
+		Long:  long,
+		PreRunE: func(_ *cobra.Command, _ []string) error {
+			return requiresRunningInstance()
+		},
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			args := make([]string, 0, len(params)+1)
+			args = append(args, params...)
+
+			if slot != "" {
+				if !action.IsValidCursorSlotName(slot) {
+					return derrors.Newf(
+						derrors.CodeInvalidInput,
+						"invalid --slot %q: names start with a letter and may contain "+
+							"letters, digits, underscores, and dashes",
+						slot,
+					)
+				}
+
+				args = append(args, "--slot="+slot)
+			}
+
+			return sendCommand(cmd, actionCmdName, args)
+		},
+	}
+
+	cmd.Flags().StringVar(&slot, "slot", "",
+		"Named slot to use instead of the default one")
+
+	return cmd
+}
+
 // ActionSaveCursorPosCmd saves cursor position for later restoration.
-var ActionSaveCursorPosCmd = BuildActionCommand(
+var ActionSaveCursorPosCmd = BuildCursorSlotActionCommand(
 	"save_cursor_pos",
 	"Save current cursor position",
-	`Save the current cursor position so it can be restored later with restore_cursor_pos.`,
+	`Save the current cursor position so it can be restored later with restore_cursor_pos.
+
+Without --slot the position goes to the slot named "default". Pass --slot to
+use a slot of your own, so a sequence that saves the cursor does not overwrite
+the save of a sequence it was invoked from. The occupied slots are reported by
+"neru status --json" under saved_cursor_slots.`,
 	[]string{"save_cursor_pos"},
-	false,
 )
 
 // ActionRestoreCursorPosCmd restores previously saved cursor position.
-var ActionRestoreCursorPosCmd = BuildActionCommand(
+var ActionRestoreCursorPosCmd = BuildCursorSlotActionCommand(
 	"restore_cursor_pos",
 	"Restore saved cursor position",
-	`Restore cursor position previously saved by save_cursor_pos.`,
+	`Restore cursor position previously saved by save_cursor_pos.
+
+Reads the slot named "default" unless --slot names another. Restoring consumes
+the slot, so a second restore of the same slot finds nothing and succeeds
+without moving the cursor.`,
 	[]string{"restore_cursor_pos"},
+)
+
+// ActionHideCursorCmd hides the system cursor.
+var ActionHideCursorCmd = BuildActionCommand(
+	"hide_cursor",
+	"Hide system cursor",
+	`Hide the system cursor. Used together with show_cursor to create a virtual
+pointer experience. The cursor stays hidden until show_cursor is called or
+the application exits.`,
+	[]string{"hide_cursor"},
+	false,
+)
+
+// ActionShowCursorCmd shows the system cursor.
+var ActionShowCursorCmd = BuildActionCommand(
+	"show_cursor",
+	"Show system cursor",
+	`Show the system cursor after it was hidden by hide_cursor.`,
+	[]string{"show_cursor"},
 	false,
 )
 
@@ -271,12 +465,23 @@ at the current cursor location.`,
 // ActionCycleHintCmd cycles through visible hints in hints mode.
 var ActionCycleHintCmd = BuildCycleHintCommand()
 
+// ActionMoveCellCmd moves the active mode's selection to a neighboring cell.
+var ActionMoveCellCmd = BuildMoveCellCommand()
+
+// ActionBisectCmd keeps half, or a quadrant, of the bisect region.
+var ActionBisectCmd = BuildBisectCommand()
+
 func init() {
 	ActionCmd.AddCommand(ActionLeftClickCmd)
 	ActionCmd.AddCommand(ActionRightClickCmd)
 	ActionCmd.AddCommand(ActionMouseUpCmd)
 	ActionCmd.AddCommand(ActionMouseDownCmd)
 	ActionCmd.AddCommand(ActionMiddleClickCmd)
+
+	for _, cmd := range buttonPhaseAliasCommands {
+		ActionCmd.AddCommand(cmd)
+	}
+
 	ActionCmd.AddCommand(ActionMoveMouseCmd)
 	ActionCmd.AddCommand(ActionMoveMouseRelativeCmd)
 	ActionCmd.AddCommand(ActionMoveMonitorCmd)
@@ -295,6 +500,10 @@ func init() {
 	ActionCmd.AddCommand(ActionPageUpCmd)
 	ActionCmd.AddCommand(ActionPageDownCmd)
 	ActionCmd.AddCommand(ActionCycleHintCmd)
+	ActionCmd.AddCommand(ActionMoveCellCmd)
+	ActionCmd.AddCommand(ActionBisectCmd)
+	ActionCmd.AddCommand(ActionHideCursorCmd)
+	ActionCmd.AddCommand(ActionShowCursorCmd)
 
 	RootCmd.AddCommand(ActionCmd)
 }

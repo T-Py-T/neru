@@ -1,0 +1,38 @@
+package platform
+
+import (
+	"runtime"
+)
+
+// OS is the operating system.
+type OS string
+
+const (
+	// Darwin represents macOS.
+	Darwin OS = "darwin"
+	// Linux represents Linux.
+	Linux OS = "linux"
+	// Windows represents Windows.
+	Windows OS = "windows"
+	// Unknown is an unknown operating system.
+	Unknown OS = "unknown"
+)
+
+// CurrentOS returns the current operating system.
+func CurrentOS() OS {
+	switch runtime.GOOS {
+	case "darwin":
+		return Darwin
+	case "linux":
+		return Linux
+	case "windows":
+		return Windows
+	default:
+		return Unknown
+	}
+}
+
+// IsDarwin returns true if the current OS is macOS.
+func IsDarwin() bool {
+	return CurrentOS() == Darwin
+}

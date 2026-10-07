@@ -1,59 +1,20 @@
 package config
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"runtime"
-	"sort"
-	"strconv"
-	"strings"
-
-	"github.com/BurntSushi/toml"
-
-	derrors "github.com/y3owk1n/neru/internal/core/errors"
+	"github.com/y3owk1n/neru/internal/domain"
+	"github.com/y3owk1n/neru/internal/domain/element"
+	"github.com/y3owk1n/neru/internal/domain/keyvocab"
+	"github.com/y3owk1n/neru/internal/domain/modecmd"
+	"github.com/y3owk1n/neru/internal/domain/parity"
 )
 
-// StringOrStringArray is a type that can unmarshal from either a TOML string
-// or a TOML array of strings. Used for backward compatibility.
-type StringOrStringArray []string
-
-// UnmarshalTOML implements custom unmarshaling for TOML compatibility.
-// It accepts both single string values and arrays of strings.
-func (s *StringOrStringArray) UnmarshalTOML(value any) error {
-	switch val := value.(type) {
-	case string:
-		*s = []string{val}
-
-	case []any:
-		*s = make([]string, 0, len(val))
-		for _, a := range val {
-			actionStr, ok := a.(string)
-			if !ok {
-				return derrors.Newf(derrors.CodeInvalidConfig, "expected string, got %T", a)
-			}
-
-			*s = append(*s, actionStr)
-		}
-
-	case []string:
-		*s = val
-
-	default:
-		return derrors.Newf(
-			derrors.CodeInvalidConfig,
-			"cannot unmarshal %T into StringOrStringArray",
-			value,
-		)
-	}
-
-	return nil
-}
-
-// Accessibility role constants.
+// Semantic role names injected into the clickable role list when the
+// corresponding hints flags are enabled. They are resolved to native role
+// names alongside the user's own entries; on platforms with no menu bar or
+// dock they resolve to nothing.
 const (
-	RoleMenuBarItem = "AXMenuBarItem"
-	RoleDockItem    = "AXDockItem"
+	RoleMenuBarItem = string(element.SemanticMenubarItem)
+	RoleDockItem    = string(element.SemanticDockItem)
 )
 
 // Mode name constants used in config lookups (HotkeysForMode, validation).
@@ -62,23 +23,32 @@ const (
 	ModeNameHints         = "hints"
 	ModeNameGrid          = "grid"
 	ModeNameRecursiveGrid = "recursive_grid"
+	ModeNameBisect        = "bisect"
 	ModeNameScroll        = "scroll"
 	ModeNameMonitorSelect = "monitor_select"
 )
 
-// Display-form key name constants used in config files and maps.
+// Display-form key name constants used in config files and maps. The spellings
+// come from internal/domain/keyvocab, which declares the named-key vocabulary.
 const (
-	KeyDisplaySpace     = "Space"
-	KeyDisplayEscape    = "Escape"
-	KeyDisplayBackspace = "Backspace"
-	KeyDisplayDown      = "Down"
-	KeyDisplayLeft      = "Left"
-	KeyDisplayRight     = "Right"
-	KeyReturn           = "Return"
+	KeyDisplaySpace     = keyvocab.KeySpace
+	KeyDisplayEscape    = keyvocab.KeyEscape
+	KeyDisplayBackspace = keyvocab.KeyBackspace
+	KeyDisplayDown      = keyvocab.KeyDown
+	KeyDisplayLeft      = keyvocab.KeyLeft
+	KeyDisplayRight     = keyvocab.KeyRight
+	KeyReturn           = keyvocab.KeyReturn
 )
 
 // Common action command constants.
 const (
+	// CmdRun runs the rest of the binding as an ordered action sequence.
+	CmdRun = "run"
+	// CmdMacro runs a named sequence from the [macros] table.
+	CmdMacro = MacroCommand
+	// OnExitFlag carries a step a mode runs once its action is fulfilled. It is
+	// repeatable, and its values are steps in their own right.
+	OnExitFlag                     = "--" + string(modecmd.FlagOnExit)
 	CmdToggleCursorFollowSelection = "toggle-cursor-follow-selection"
 	CmdMoveMouseUp                 = "action move_mouse_relative --dx=0 --dy=-10"
 )
@@ -94,21 +64,29 @@ const (
 
 // Common action strings.
 const (
-	CmdIdle           = "idle"
-	CmdLeftClick      = "action left_click"
-	CmdRightClick     = "action right_click"
-	CmdMiddleClick    = "action middle_click"
-	CmdMouseDown      = "action mouse_down"
-	CmdMouseUp        = "action mouse_up"
-	CmdGoTop          = "action go_top"
-	CmdBackspace      = "action backspace"
-	CmdMoveMouseDown  = "action move_mouse_relative --dx=0 --dy=10"
-	CmdMoveMouseLeft  = "action move_mouse_relative --dx=-10 --dy=0"
-	CmdMoveMouseRight = "action move_mouse_relative --dx=10 --dy=0"
+	CmdIdle          = "idle"
+	CmdLeftClick     = "action left_click"
+	CmdRightClick    = "action right_click"
+	CmdMiddleClick   = "action middle_click"
+	CmdLeftMouseDown = "action left_click --state down"
+	CmdLeftMouseUp   = "action left_click --state up"
+	CmdGoTop         = "action go_top"
+	CmdBackspace     = "action backspace"
+	CmdReset         = "action reset"
+	// CmdBisectLeft and the seven beside it are the bisect cuts, spelled as
+	// the bindings a user reads.
+	CmdBisectLeft      = "action bisect --direction=left"
+	CmdBisectRight     = "action bisect --direction=right"
+	CmdBisectUp        = "action bisect --direction=up"
+	CmdBisectDown      = "action bisect --direction=down"
+	CmdBisectUpLeft    = "action bisect --direction=up_left"
+	CmdBisectUpRight   = "action bisect --direction=up_right"
+	CmdBisectDownLeft  = "action bisect --direction=down_left"
+	CmdBisectDownRight = "action bisect --direction=down_right"
+	CmdMoveMouseDown   = "action move_mouse_relative --dx=0 --dy=10"
+	CmdMoveMouseLeft   = "action move_mouse_relative --dx=-10 --dy=0"
+	CmdMoveMouseRight  = "action move_mouse_relative --dx=10 --dy=0"
 )
-
-// Placement strings for UI configuration.
-const placementBottom = "bottom"
 
 // DisabledSentinel is a special action value that removes a default hotkey binding.
 // Use it in [hotkeys] or [<mode>.hotkeys] to disable a specific default:
@@ -117,337 +95,56 @@ const placementBottom = "bottom"
 //	"j" = "__disabled__"   # removes the default "j" = "action scroll_down"
 const DisabledSentinel = "__disabled__"
 
-// Key name constants for normalization.
-// These are the canonical lowercase forms used throughout the codebase.
+// OverrideSuffix is the suffix appended to a config file's base name to
+// derive the override file path. For example, "config.toml" produces
+// "config.override.toml", and "my-neru.toml" produces "my-neru.override.toml".
+const OverrideSuffix = ".override.toml"
+
+// The comparison forms the control characters a tap delivers resolve to, and
+// the modifier names. These are not a listing of the named keys —
+// internal/domain/keyvocab declares those, and every other named key reaches
+// its comparison form by being lowercased rather than by being named here.
 const (
 	minimumModifierParts = 2
 	KeyNameEscape        = "escape"
 	KeyNameReturn        = "return"
 	KeyNameTab           = "tab"
 	KeyNameSpace         = "space"
-	KeyNameBackspace     = "backspace"
 	KeyNameDelete        = "delete"
-	KeyNameHome          = "home"
-	KeyNameEnd           = "end"
-	KeyNamePageUp        = "pageup"
-	KeyNamePageDown      = "pagedown"
-	KeyNameUp            = "up"
-	KeyNameDown          = "down"
-	KeyNameLeft          = "left"
-	KeyNameRight         = "right"
 	modifierNameCmd      = "cmd"
 	modifierNameCtrl     = "ctrl"
 	modifierNameAlt      = "alt"
 	modifierNameShift    = "shift"
 )
 
-// validNamedKeys is the canonical set of all named keys the system supports.
-// Every validator, normalizer, and key parser should reference this set via the
-// public helpers (IsValidNamedKey, CanonicalNamedKeyForm) instead of maintaining
-// its own ad-hoc list. The keys are stored in their display form (the casing
-// that the event tap / config files use).
-//
-// The variable is unexported to prevent accidental mutation by other packages.
-var validNamedKeys = map[string]bool{
-	// Special keys
-	KeyDisplaySpace:     true,
-	KeyReturn:           true,
-	"Enter":             true, // alias for Return
-	KeyDisplayEscape:    true,
-	"Tab":               true,
-	"Delete":            true,
-	KeyDisplayBackspace: true, // alias for Delete on macOS
-	// Navigation keys
-	"Up":            true,
-	KeyDisplayDown:  true,
-	KeyDisplayLeft:  true,
-	KeyDisplayRight: true,
-	"Home":          true,
-	"End":           true,
-	"PageUp":        true,
-	"PageDown":      true,
-	// Function keys
-	"F1":  true,
-	"F2":  true,
-	"F3":  true,
-	"F4":  true,
-	"F5":  true,
-	"F6":  true,
-	"F7":  true,
-	"F8":  true,
-	"F9":  true,
-	"F10": true,
-	"F11": true,
-	"F12": true,
-	"F13": true,
-	"F14": true,
-	"F15": true,
-	"F16": true,
-	"F17": true,
-	"F18": true,
-	"F19": true,
-	"F20": true,
-}
-
-// validNamedKeysLower is a precomputed lowercase lookup for IsValidNamedKey.
-var validNamedKeysLower map[string]bool
-
-// namedKeyDisplayForm maps lowercase key names to their canonical display form
-// (e.g. "pagedown" → "PageDown", "f1" → "F1"). Used by CanonicalNamedKeyForm.
-var namedKeyDisplayForm map[string]string
-
-func init() {
-	validNamedKeysLower = make(map[string]bool, len(validNamedKeys))
-	namedKeyDisplayForm = make(map[string]string, len(validNamedKeys))
-
-	for k := range validNamedKeys {
-		lower := strings.ToLower(k)
-		validNamedKeysLower[lower] = true
-		namedKeyDisplayForm[lower] = k
-	}
-}
-
-// IsValidNamedKey checks whether a key name is a recognized named key (case-insensitive).
-func IsValidNamedKey(key string) bool {
-	return validNamedKeysLower[strings.ToLower(key)]
-}
-
-// CanonicalNamedKeyForm returns the canonical display form of a named key
-// (e.g. "pagedown" → "PageDown", "UP" → "Up", "f1" → "F1").
-// If the key is not a recognized named key, it returns the input unchanged
-// and false as the second return value.
-func CanonicalNamedKeyForm(key string) (string, bool) {
-	display, displayOk := namedKeyDisplayForm[strings.ToLower(key)]
-
-	if !displayOk {
-		return key, false
-	}
-
-	return display, displayOk
-}
-
-// NormalizeKeyForComparison converts escape sequences and key names to a canonical form for comparison.
-// This ensures that "\x1b" and "escape" are treated as the same key, and provides case-insensitive
-// matching for all keys (e.g. "q" matches "Q", "Ctrl+R" matches "ctrl+r").
-// On macOS, both "backspace" and "delete" are treated as synonyms for the DEL key (\x7f).
-// Named keys (arrows, function keys, nav keys) are normalized to their canonical lowercase form.
-// Also normalizes fullwidth CJK characters to their halfwidth ASCII equivalents.
-func NormalizeKeyForComparison(key string) string {
-	// Normalize fullwidth CJK characters first, before lowercasing and canonical matching.
-	// This ensures e.g. fullwidth space (U+3000) → " " → "space" in a single pass.
-	key = normalizeFullwidthChars(key)
-	key = strings.ToLower(key)
-
-	// Handle escape sequences and aliases that map to a different canonical form.
-	switch key {
-	case "\x1b", "esc":
-		return KeyNameEscape
-	case "\r", "enter":
-		return KeyNameReturn
-	case "\t":
-		return KeyNameTab
-	case " ":
-		return KeyNameSpace
-	case "\x08", "\x7f", KeyNameBackspace:
-		// On macOS, the Delete key (above Return) sends \x7f.
-		// \x08 is the ASCII BS control character (rarely generated on macOS but included for completeness).
-		// Treat "delete", "backspace", \x7f, and \x08 as synonyms for user-friendly matching.
-		return KeyNameDelete
-	}
-
-	// Normalize key aliases inside modifier combos.
-	// The switch above only handles bare "enter" / "backspace" etc., but users may
-	// write "Shift+Enter" which lowercases to "shift+enter". The event tap always
-	// produces the canonical form "shift+return", so we must resolve the alias here.
-	key = normalizeKeyAliasesInCombo(key)
-
-	// Normalize modifier aliases like "Primary" to the platform-native token
-	// so shared config can map to Cmd on macOS and Ctrl elsewhere.
-	key = normalizeModifierAliasesInCombo(key, runtime.GOOS)
-
-	// All other keys (named keys, plain characters, modifier combos) are already
-	// lowercased by strings.ToLower above and pass through as-is.
-	return key
-}
-
-// HasPassthroughModifier reports whether the key contains a modifier that can
-// be allowed through to macOS while a mode is active. Shift-only combos are
-// excluded because they are commonly used inside modes.
-func HasPassthroughModifier(key string) bool {
-	parts := strings.Split(NormalizeKeyForComparison(key), "+")
-	if len(parts) < minimumModifierParts {
-		return false
-	}
-
-	for _, part := range parts[:len(parts)-1] {
-		trimmed := strings.TrimSpace(part)
-		switch trimmed {
-		case modifierNameCmd, modifierNameCtrl, modifierNameAlt:
-			return true
-		}
-	}
-
-	return false
-}
-
-func primaryModifierTokenForOS(goos string) string {
-	if goos == "darwin" {
-		return "cmd"
-	}
-
-	return modifierNameCtrl
-}
-
-func normalizeModifierTokenForOS(token, goos string) string {
-	switch strings.TrimSpace(strings.ToLower(token)) {
-	case "primary":
-		return primaryModifierTokenForOS(goos)
-	case modifierNameCmd, "command", "super", "meta", "rightcmd", "leftcmd":
-		return modifierNameCmd
-	case modifierNameCtrl, "control", "rightctrl", "leftctrl":
-		return modifierNameCtrl
-	case modifierNameAlt, "option", "rightalt", "leftalt", "rightoption", "leftoption":
-		return modifierNameAlt
-	case modifierNameShift, "rightshift", "leftshift":
-		return modifierNameShift
-	default:
-		return strings.TrimSpace(strings.ToLower(token))
-	}
-}
-
-// comboKeyAliases maps alias key names to their canonical forms.
-// Used by normalizeKeyAliasesInCombo to resolve the final segment of compound keys.
-var comboKeyAliases = map[string]string{
-	"enter":     "return",
-	"backspace": "delete",
-	"esc":       "escape",
-}
-
-// normalizeKeyAliasesInCombo resolves key name aliases inside modifier combos.
-// e.g. "shift+enter" → "shift+return", "cmd+backspace" → "cmd+delete".
-// Only applies to compound keys (containing "+"); bare keys are handled by the
-// switch in NormalizeKeyForComparison.
-// Splits on the last "+" and only normalizes the final segment to avoid mangling
-// modifier names or canonical forms that share a prefix (e.g. "escape" vs "esc").
-func normalizeKeyAliasesInCombo(key string) string {
-	idx := strings.LastIndex(key, "+")
-	if idx < 0 {
-		return key
-	}
-
-	prefix, suffix := key[:idx+1], key[idx+1:]
-	if canonical, ok := comboKeyAliases[suffix]; ok {
-		return prefix + canonical
-	}
-
-	return key
-}
-
-func normalizeModifierAliasesInCombo(key, goos string) string {
-	parts := strings.Split(key, "+")
-	if len(parts) < minimumModifierParts {
-		return key
-	}
-
-	for idx := range len(parts) - 1 {
-		parts[idx] = normalizeModifierTokenForOS(parts[idx], goos)
-	}
-
-	return strings.Join(parts, "+")
-}
-
-func displayModifierTokenForOS(token, goos string) string {
-	switch token {
-	case modifierNameCmd:
-		if goos == "darwin" {
-			return "Cmd"
-		}
-
-		return "Super"
-	case modifierNameCtrl:
-		return "Ctrl"
-	case modifierNameAlt:
-		return "Alt"
-	case modifierNameShift:
-		return "Shift"
-	default:
-		return token
-	}
-}
-
-// CanonicalHotkeyForPlatform rewrites shared modifier aliases like "Primary"
-// into the concrete tokens expected by the current platform backend.
-func CanonicalHotkeyForPlatform(hotkey string) string {
-	return canonicalHotkeyForOS(hotkey, runtime.GOOS)
-}
-
-func canonicalHotkeyForOS(hotkey, goos string) string {
-	if hotkey == "" {
-		return hotkey
-	}
-
-	parts := strings.Split(hotkey, "+")
-
-	for idx := range len(parts) - 1 {
-		parts[idx] = displayModifierTokenForOS(normalizeModifierTokenForOS(parts[idx], goos), goos)
-	}
-
-	last := strings.TrimSpace(parts[len(parts)-1])
-	if canonical, ok := CanonicalNamedKeyForm(last); ok {
-		parts[len(parts)-1] = canonical
-	} else {
-		parts[len(parts)-1] = last
-	}
-
-	return strings.Join(parts, "+")
-}
-
-// normalizeFullwidthChars converts fullwidth CJK characters (U+FF01-U+FF5E)
-// to their halfwidth ASCII equivalents (U+0021-U+007E).
-// This ensures keys work correctly when using CJK input methods.
-// Uses strings.Map for efficiency - only allocates when transformation occurs.
-func normalizeFullwidthChars(key string) string {
-	const (
-		fullwidthStart  = 0xFF01 // Fullwidth exclamation mark
-		fullwidthEnd    = 0xFF5E // Fullwidth tilde
-		halfwidthOffset = 0xFEE0 // Difference between fullwidth and halfwidth
-		fullwidthSpace  = 0x3000 // CJK fullwidth space
-	)
-
-	return strings.Map(func(char rune) rune {
-		switch {
-		case char >= fullwidthStart && char <= fullwidthEnd:
-			// Convert fullwidth to halfwidth
-			return char - halfwidthOffset
-		case char == fullwidthSpace:
-			// Fullwidth space -> regular space
-			return ' '
-		default:
-			// Return unchanged (strings.Map optimizes this case)
-			return char
-		}
-	}, key)
-}
-
-// Config represents the complete application configuration structure.
+// Config is the complete application configuration structure.
 type Config struct {
-	General         GeneralConfig         `json:"general"         toml:"general"`
-	Theme           ThemeConfig           `json:"theme"           toml:"theme"`
-	Hotkeys         HotkeysConfig         `json:"hotkeys"         toml:"-"`
-	Hints           HintsConfig           `json:"hints"           toml:"hints"`
-	Grid            GridConfig            `json:"grid"            toml:"grid"`
-	RecursiveGrid   RecursiveGridConfig   `json:"recursiveGrid"   toml:"recursive_grid"`
-	MonitorSelect   MonitorSelectConfig   `json:"monitorSelect"   toml:"monitor_select"`
-	VirtualPointer  VirtualPointerConfig  `json:"virtualPointer"  toml:"virtual_pointer"`
-	MouseAction     MouseActionConfig     `json:"mouseAction"     toml:"mouse_action_indicator"`
-	Scroll          ScrollConfig          `json:"scroll"          toml:"scroll"`
-	ModeIndicator   ModeIndicatorConfig   `json:"modeIndicator"   toml:"mode_indicator"`
-	StickyModifiers StickyModifiersConfig `json:"stickyModifiers" toml:"sticky_modifiers"`
-	Logging         LoggingConfig         `json:"logging"         toml:"logging"`
-	SmoothCursor    SmoothCursorConfig    `json:"smoothCursor"    toml:"smooth_cursor"`
-	SmoothScroll    SmoothScrollConfig    `json:"smoothScroll"    toml:"smooth_scroll"`
-	HeldRepeat      HeldRepeatConfig      `json:"heldRepeat"      toml:"held_repeat"`
-	Systray         SystrayConfig         `json:"systray"         toml:"systray"`
+	General         GeneralConfig                  `json:"general"         toml:"general"`
+	Theme           ThemeConfig                    `json:"theme"           toml:"theme"`
+	Hotkeys         HotkeysConfig                  `json:"hotkeys"         toml:"-"`
+	Macros          map[string]StringOrStringArray `json:"macros"          toml:"macros"`
+	Modes           map[string]CustomModeConfig    `json:"modes"           toml:"modes"`
+	Hints           HintsConfig                    `json:"hints"           toml:"hints"`
+	Grid            GridConfig                     `json:"grid"            toml:"grid"`
+	RecursiveGrid   RecursiveGridConfig            `json:"recursiveGrid"   toml:"recursive_grid"`
+	Bisect          BisectConfig                   `json:"bisect"          toml:"bisect"`
+	MonitorSelect   MonitorSelectConfig            `json:"monitorSelect"   toml:"monitor_select"`
+	VirtualPointer  VirtualPointerConfig           `json:"virtualPointer"  toml:"virtual_pointer"`
+	MouseAction     MouseActionConfig              `json:"mouseAction"     toml:"mouse_action_indicator"`
+	Scroll          ScrollConfig                   `json:"scroll"          toml:"scroll"`
+	ModeIndicator   ModeIndicatorConfig            `json:"modeIndicator"   toml:"mode_indicator"`
+	StickyModifiers StickyModifiersConfig          `json:"stickyModifiers" toml:"sticky_modifiers"`
+	Logging         LoggingConfig                  `json:"logging"         toml:"logging"`
+	SmoothCursor    SmoothCursorConfig             `json:"smoothCursor"    toml:"smooth_cursor"`
+	SmoothScroll    SmoothScrollConfig             `json:"smoothScroll"    toml:"smooth_scroll"`
+	HeldRepeat      HeldRepeatConfig               `json:"heldRepeat"      toml:"held_repeat"`
+	Systray         SystrayConfig                  `json:"systray"         toml:"systray"`
+
+	// AppConfigs holds per-application overrides for global hotkeys, similar to
+	// per-mode [[<mode>.app_configs]].  Each entry can override or disable
+	// specific global bindings (via __disabled__) when the identified app
+	// is focused.  Populated by the TOML struct decoder from [[app_configs]].
+	AppConfigs []AppConfig `json:"appConfigs" toml:"app_configs"`
 }
 
 // ThemePalette defines a semantic base palette for one appearance mode.
@@ -510,6 +207,7 @@ type ModeIndicatorConfig struct {
 	Hints         ModeIndicatorModeConfig `json:"hints"         toml:"hints"`
 	Grid          ModeIndicatorModeConfig `json:"grid"          toml:"grid"`
 	RecursiveGrid ModeIndicatorModeConfig `json:"recursiveGrid" toml:"recursive_grid"`
+	Bisect        ModeIndicatorModeConfig `json:"bisect"        toml:"bisect"`
 	MonitorSelect ModeIndicatorModeConfig `json:"monitorSelect" toml:"monitor_select"`
 	UI            ModeIndicatorUI         `json:"ui"            toml:"ui"`
 }
@@ -540,10 +238,11 @@ type StickyModifiersConfig struct {
 type AppConfig struct {
 	BundleID             string                         `json:"bundleId"             toml:"bundle_id"`
 	Strategy             string                         `json:"strategy"             toml:"strategy"`
+	CaptureScope         string                         `json:"captureScope"         toml:"capture_scope"`
 	LabelDirection       string                         `json:"labelDirection"       toml:"label_direction"`
 	AdditionalClickable  []string                       `json:"additionalClickable"  toml:"additional_clickable_roles"`
-	IgnoreClickableCheck bool                           `json:"ignoreClickableCheck" toml:"ignore_clickable_check"`
-	VisibleCheckEnabled  bool                           `json:"visibleCheckEnabled"  toml:"visible_check_enabled"`
+	IgnoreClickableCheck *bool                          `json:"ignoreClickableCheck" toml:"ignore_clickable_check,omitempty"`
+	VisibleCheckEnabled  *bool                          `json:"visibleCheckEnabled"  toml:"visible_check_enabled,omitempty"`
 	ScrollStep           *int                           `json:"scrollStep"           toml:"scroll_step,omitempty"`
 	ScrollStepHalf       *int                           `json:"scrollStepHalf"       toml:"scroll_step_half,omitempty"`
 	ScrollStepFull       *int                           `json:"scrollStepFull"       toml:"scroll_step_full,omitempty"`
@@ -573,6 +272,58 @@ type ScrollConfig struct {
 	ScrollStepFull int `json:"scrollStepFull" toml:"scroll_step_full"`
 
 	InvertScroll bool `json:"invertScroll" toml:"invert_scroll"`
+
+	AppConfigs []AppConfig `json:"appConfigs" toml:"app_configs"`
+
+	Hotkeys map[string]StringOrStringArray `json:"hotkeys" toml:"-"`
+}
+
+// BisectConfig defines bisect mode: a region that starts as the screen, and
+// keys that keep half of it or a quadrant. It is drawn on the recursive-grid
+// surface, so its appearance and its transition are [recursive_grid.ui] and
+// [recursive_grid.animation].
+type BisectConfig struct {
+	Enabled bool `json:"enabled" toml:"enabled"`
+	// CaptureScope is the region the session starts from: the whole active
+	// screen, or the focused window.
+	CaptureScope string `json:"captureScope" toml:"capture_scope"`
+	// Animation configures the native transition between cuts on supported
+	// platforms. It is the recursive grid's shape because the two modes draw
+	// the same picture; the values are bisect's own.
+	Animation RecursiveGridAnimationConfig `json:"animation" toml:"animation"`
+	// UI is the region's appearance, the recursive grid's shape for the same
+	// reason. The sub-key preview options are accepted and inert: a bisect
+	// level has no next level to preview.
+	UI RecursiveGridUI `json:"ui" toml:"ui"`
+
+	AppConfigs []AppConfig `json:"appConfigs" toml:"app_configs"`
+
+	Hotkeys map[string]StringOrStringArray `json:"hotkeys" toml:"-"`
+}
+
+// RenderConfig is the bisect section in the shape the region-grid render
+// component is built from: the recursive grid's, since it draws both modes.
+func (c *BisectConfig) RenderConfig() RecursiveGridConfig {
+	return RecursiveGridConfig{
+		Enabled:   c.Enabled,
+		Animation: c.Animation,
+		UI:        c.UI,
+	}
+}
+
+// CustomModeConfig is one mode the user declared under [modes.<name>]: a mode
+// with no logic of its own, entered by "mode <name>", that captures the
+// keyboard and answers every key from its own hotkey table.
+//
+// The hotkey table is tagged toml:"-" like every mode's, and read from the raw
+// decode by the loader for the same reason; [DefaultCustomModeHotkeys] is what
+// a declared table merges over. Per-app overrides reuse AppConfig so the
+// same walk and the same __disabled__ sentinel apply, and the fields on it
+// that belong to hints or scroll are refused here as they are for grid.
+type CustomModeConfig struct {
+	// Indicator is the mode indicator's text while the mode is open. Empty
+	// hides the indicator.
+	Indicator string `json:"indicator" toml:"indicator"`
 
 	AppConfigs []AppConfig `json:"appConfigs" toml:"app_configs"`
 
@@ -670,27 +421,29 @@ type HintsVisionConfig struct {
 	GenericClickableMinConfidence float64 `json:"genericClickableMinConfidence" toml:"generic_clickable_min_confidence"`
 }
 
-// Strategy constants for element detection.
-const (
-	StrategyAXTree = "axtree"
-	StrategyVision = "vision"
-)
-
-// Label direction constants for hint label enumeration.
-const (
-	// LabelDirectionReverse spreads labels across the alphabet by varying the
-	// first character so same-prefix labels never cluster together.
-	LabelDirectionReverse = "reverse"
-
-	// LabelDirectionNormal uses the original prefix-avoidance algorithm that
-	// prefers shorter labels. This is the default.
-	LabelDirectionNormal = "normal"
-)
+// HintsContourConfig defines tunable settings for the contour strategy. The
+// shipped values are wl-kbptr's; sizes are logical pixels and the edge
+// thresholds are Sobel gradient magnitudes on a 0..255 luma frame.
+type HintsContourConfig struct {
+	RequestTimeoutMS  int     `json:"requestTimeoutMs"  toml:"request_timeout_ms"`
+	EdgeLowThreshold  int     `json:"edgeLowThreshold"  toml:"edge_low_threshold"`
+	EdgeHighThreshold int     `json:"edgeHighThreshold" toml:"edge_high_threshold"`
+	MinTargetWidth    float64 `json:"minTargetWidth"    toml:"min_target_width"`
+	MinTargetHeight   float64 `json:"minTargetHeight"   toml:"min_target_height"`
+	MaxTargetWidth    float64 `json:"maxTargetWidth"    toml:"max_target_width"`
+	MaxTargetHeight   float64 `json:"maxTargetHeight"   toml:"max_target_height"`
+	FlatLineHeight    float64 `json:"flatLineHeight"    toml:"flat_line_height"`
+	ContainerHeight   float64 `json:"containerHeight"   toml:"container_height"`
+	SameCenterSlack   float64 `json:"sameCenterSlack"   toml:"same_center_slack"`
+	SquareIconSize    float64 `json:"squareIconSize"    toml:"square_icon_size"`
+	SquareIconSlack   float64 `json:"squareIconSlack"   toml:"square_icon_slack"`
+}
 
 // HintsConfig defines the visual and behavioral settings for hints mode.
 type HintsConfig struct {
 	Enabled           bool                `json:"enabled"           toml:"enabled"`
 	Strategy          string              `json:"strategy"          toml:"strategy"`
+	CaptureScope      string              `json:"captureScope"      toml:"capture_scope"`
 	HintCharacters    string              `json:"hintCharacters"    toml:"hint_characters"`
 	LabelDirection    string              `json:"labelDirection"    toml:"label_direction"`
 	MaxDepth          int                 `json:"maxDepth"          toml:"max_depth"`
@@ -698,6 +451,7 @@ type HintsConfig struct {
 	SearchInputUI     SearchInputUI       `json:"searchInputUi"     toml:"search_input_ui"`
 	BoundaryHighlight BoundaryHighlightUI `json:"boundaryHighlight" toml:"boundary_highlight"`
 	Vision            HintsVisionConfig   `json:"vision"            toml:"vision"`
+	Contour           HintsContourConfig  `json:"contour"           toml:"contour"`
 
 	IncludeMenubarHints           bool                `json:"includeMenubarHints"           toml:"include_menubar_hints"`
 	AdditionalMenubarHintsTargets []string            `json:"additionalMenubarHintsTargets" toml:"additional_menubar_hints_targets"`
@@ -715,8 +469,6 @@ type HintsConfig struct {
 	VisibleCheckEnabled  bool     `json:"visibleCheckEnabled"  toml:"visible_check_enabled"`
 
 	AppConfigs []AppConfig `json:"appConfigs" toml:"app_configs"`
-
-	AdditionalAXSupport AdditionalAXSupport `json:"additionalAxSupport" toml:"additional_ax_support"`
 
 	Hotkeys map[string]StringOrStringArray `json:"hotkeys" toml:"-"`
 }
@@ -737,9 +489,13 @@ type GridUI struct {
 
 // GridConfig defines the visual and behavioral settings for grid mode.
 type GridConfig struct {
-	Enabled      bool   `json:"enabled"      toml:"enabled"`
-	Characters   string `json:"characters"   toml:"characters"`
-	SublayerKeys string `json:"sublayerKeys" toml:"sublayer_keys"`
+	Enabled bool `json:"enabled" toml:"enabled"`
+	// CaptureScope is the region the grid covers: the whole active screen,
+	// or the focused window.
+	CaptureScope   string `json:"captureScope"   toml:"capture_scope"`
+	Characters     string `json:"characters"     toml:"characters"`
+	SublayerKeys   string `json:"sublayerKeys"   toml:"sublayer_keys"`
+	MaxLabelLength int    `json:"maxLabelLength" toml:"max_label_length"`
 	// Optional custom labels for rows and columns
 	// If not provided, labels will be inferred from characters
 	RowLabels       string `json:"rowLabels"       toml:"row_labels"`
@@ -763,16 +519,20 @@ type RecursiveGridUI struct {
 	TextColor                       Color   `json:"textColor"                       toml:"text_color"`
 	FontSize                        int     `json:"fontSize"                        toml:"font_size"`
 	FontFamily                      string  `json:"fontFamily"                      toml:"font_family"`
+	MinFontSize                     int     `json:"minFontSize"                     toml:"min_font_size"`
 	LabelBackground                 bool    `json:"labelBackground"                 toml:"label_background"`
 	LabelBackgroundColor            Color   `json:"labelBackgroundColor"            toml:"label_background_color"`
 	LabelBackgroundPaddingX         int     `json:"labelBackgroundPaddingX"         toml:"label_background_padding_x"`
 	LabelBackgroundPaddingY         int     `json:"labelBackgroundPaddingY"         toml:"label_background_padding_y"`
 	LabelBackgroundBorderRadius     int     `json:"labelBackgroundBorderRadius"     toml:"label_background_border_radius"`
 	LabelBackgroundBorderWidth      int     `json:"labelBackgroundBorderWidth"      toml:"label_background_border_width"`
+	LabelChar                       string  `json:"labelChar"                       toml:"label_char"`
+	LabelAutohideMultiplier         float64 `json:"labelAutohideMultiplier"         toml:"label_autohide_multiplier"`
 	SubKeyPreview                   bool    `json:"subKeyPreview"                   toml:"sub_key_preview"`
 	SubKeyPreviewFontSize           int     `json:"subKeyPreviewFontSize"           toml:"sub_key_preview_font_size"`
 	SubKeyPreviewAutohideMultiplier float64 `json:"subKeyPreviewAutohideMultiplier" toml:"sub_key_preview_autohide_multiplier"`
 	SubKeyPreviewTextColor          Color   `json:"subKeyPreviewTextColor"          toml:"sub_key_preview_text_color"`
+	SubKeyPreviewLabelChar          string  `json:"subKeyPreviewLabelChar"          toml:"sub_key_preview_label_char"`
 }
 
 // RecursiveGridLayerConfig defines per-depth overrides for the recursive grid.
@@ -793,12 +553,16 @@ type RecursiveGridAnimationConfig struct {
 // RecursiveGridConfig defines the visual and behavioral settings for recursive-grid mode.
 type RecursiveGridConfig struct {
 	Enabled bool `json:"enabled" toml:"enabled"`
+	// CaptureScope is the region the first level covers: the whole active
+	// screen, or the focused window.
+	CaptureScope string `json:"captureScope" toml:"capture_scope"`
 	// Animation configures native depth transition animations for recursive-grid on supported platforms.
 	Animation RecursiveGridAnimationConfig `json:"animation" toml:"animation"`
-	// Grid dimensions: columns and rows (default: 2x2)
+	// Grid dimensions: columns and rows (default: 3x3)
 	GridCols int `json:"gridCols" toml:"grid_cols"`
 	GridRows int `json:"gridRows" toml:"grid_rows"`
-	// Key bindings (warpd convention for 2x2: u=TL, i=TR, j=BL, k=BR)
+	// Key bindings, one per cell, left to right then top to bottom
+	// (default: rtyfghvbn for the 3x3 grid above)
 	Keys string          `json:"keys" toml:"keys"`
 	UI   RecursiveGridUI `json:"ui"   toml:"ui"`
 	// Behavior
@@ -814,16 +578,18 @@ type RecursiveGridConfig struct {
 	Hotkeys map[string]StringOrStringArray `json:"hotkeys" toml:"-"`
 }
 
-// VirtualPointerUI defines the visual settings for the hold-mode virtual pointer.
+// VirtualPointerUI defines the visual settings for the character-based virtual pointer.
 type VirtualPointerUI struct {
-	Size  int   `json:"size"  toml:"size"`
-	Color Color `json:"color" toml:"color"`
+	Char       string `json:"char"       toml:"char"`
+	FontSize   int    `json:"fontSize"   toml:"font_size"`
+	FontFamily string `json:"fontFamily" toml:"font_family"`
+	TextColor  Color  `json:"textColor"  toml:"text_color"`
 }
 
-// VirtualPointerConfig defines settings for the hold-mode virtual pointer.
+// VirtualPointerConfig styles the standalone pointer drawn when the system
+// cursor is hidden, plus the in-frame grid and recursive-grid indicators.
 type VirtualPointerConfig struct {
-	Enabled bool             `json:"enabled" toml:"enabled"`
-	UI      VirtualPointerUI `json:"ui"      toml:"ui"`
+	UI VirtualPointerUI `json:"ui" toml:"ui"`
 }
 
 // MouseActionUI defines the visual settings for mouse action indicators.
@@ -891,11 +657,19 @@ type LoggingConfig struct {
 }
 
 // SmoothCursorConfig defines the smooth cursor movement settings.
+//
+// RelativeMovementDuration applies to relative (keyboard-driven) movements
+// such as move_mouse_relative. Unlike jumps, these arrive as rapid small
+// deltas under key repeat, so their animation uses a fixed duration per move
+// — speed then scales with the delta — instead of the distance-proportional
+// duration used for jumps, which would clamp every delta to the same constant
+// velocity.
 type SmoothCursorConfig struct {
-	MoveMouseEnabled bool    `json:"moveMouseEnabled" toml:"move_mouse_enabled"`
-	Steps            int     `json:"steps"            toml:"steps"`
-	MaxDuration      int     `json:"maxDuration"      toml:"max_duration"`       // Max animation duration in ms
-	DurationPerPixel float64 `json:"durationPerPixel" toml:"duration_per_pixel"` // Ms per pixel for adaptive duration
+	MoveMouseEnabled         bool    `json:"moveMouseEnabled"         toml:"move_mouse_enabled"`
+	Steps                    int     `json:"steps"                    toml:"steps"`
+	MaxDuration              int     `json:"maxDuration"              toml:"max_duration"`               // Max animation duration in ms
+	DurationPerPixel         float64 `json:"durationPerPixel"         toml:"duration_per_pixel"`         // Ms per pixel for adaptive duration
+	RelativeMovementDuration int     `json:"relativeMovementDuration" toml:"relative_movement_duration"` // Fixed duration per relative move in ms
 }
 
 // SmoothScrollConfig defines smooth scroll animation settings.
@@ -908,18 +682,13 @@ type SmoothScrollConfig struct {
 
 // HeldRepeatConfig defines held-key repeat settings for scroll, page, and mouse-move actions.
 type HeldRepeatConfig struct {
-	Enabled      bool `json:"enabled"      toml:"enabled"`          // Master toggle for held-key repeat
-	InitialDelay int  `json:"initialDelay" toml:"initial_delay_ms"` // Delay before first repeat fires (ms)
-	Interval     int  `json:"interval"     toml:"interval_ms"`      // Interval between subsequent repeats (ms)
-}
-
-// AdditionalAXSupport defines accessibility support for specific application frameworks.
-type AdditionalAXSupport struct {
-	Enable                    bool     `json:"enable"                    toml:"enable"`
-	AdditionalElectronBundles []string `json:"additionalElectronBundles" toml:"additional_electron_bundles"`
-	AdditionalChromiumBundles []string `json:"additionalChromiumBundles" toml:"additional_chromium_bundles"`
-	AdditionalFirefoxBundles  []string `json:"additionalFirefoxBundles"  toml:"additional_firefox_bundles"`
-	AdditionalWebKitBundles   []string `json:"additionalWebKitBundles"   toml:"additional_webkit_bundles"`
+	Enabled            bool     `json:"enabled"            toml:"enabled"`              // Master toggle for held-key repeat
+	InitialDelay       int      `json:"initialDelay"       toml:"initial_delay_ms"`     // Delay before first repeat fires (ms)
+	Interval           int      `json:"interval"           toml:"interval_ms"`          // Interval between subsequent repeats (ms)
+	AccelEnabled       bool     `json:"accelEnabled"       toml:"accel_enabled"`        // Ramp the glide's speed up the longer the key stays held
+	AccelRampMs        int      `json:"accelRampMs"        toml:"accel_ramp_ms"`        // Hold time to reach accel_max_multiplier (ms)
+	AccelMaxMultiplier float64  `json:"accelMaxMultiplier" toml:"accel_max_multiplier"` // Speed multiplier at full ramp
+	AccelTargets       []string `json:"accelTargets"       toml:"accel_targets"`        // Action names eligible for acceleration
 }
 
 // SystrayConfig defines system tray settings.
@@ -932,768 +701,51 @@ type LoadResult struct {
 	Config          *Config
 	ValidationError error
 	ConfigPath      string
+
+	// Written is Config before any derived value was settled: the
+	// configuration the user wrote, every layer of it, and nothing the daemon
+	// worked out for them. Settling is one-way — a resolved grid label reads
+	// exactly like one somebody typed — so a change to a *source* option can
+	// only be re-derived from a configuration that never had the derivation
+	// applied. It is what `neru config set` starts from; keeping it is the
+	// price of that command not re-reading the file.
+	Written *Config
+
+	// Warnings are the parts of the loaded configuration that will not do what
+	// they say. The configuration loaded regardless — that is what separates
+	// one of these from ValidationError, which leaves the defaults running
+	// instead — so they are reported rather than acted on. They are empty
+	// whenever ValidationError is set: the configuration they described is not
+	// the one that ended up loaded.
+	Warnings []string
+
+	// Inert are the words the user's files write that do nothing on this
+	// platform, as [InertWords] found them, or on the display backend it is
+	// running, as [X11InertWords] found them. The warnings above say the same
+	// thing in a sentence; this is the same finding with its platform column
+	// and its reason still attached, which is what `neru doctor` prints
+	// (docs/adr/0013-parity-is-measured-in-words-not-subsystems.md).
+	Inert parity.Declaration
 }
 
-// Validate validates the configuration.
-func (c *Config) Validate() error {
-	if c == nil {
-		return derrors.New(derrors.CodeInvalidConfig, "configuration cannot be nil")
-	}
-
-	err := c.ValidateGeneral()
-	if err != nil {
-		return err
-	}
-
-	err = c.ValidateTheme()
-	if err != nil {
-		return err
-	}
-
-	err = c.ValidateModes()
-	if err != nil {
-		return err
-	}
-
-	err = c.ValidateMonitorSelect()
-	if err != nil {
-		return err
-	}
-
-	err = c.ValidateModeIndicator()
-	if err != nil {
-		return err
-	}
-
-	// Validate hints configuration
-	err = c.ValidateHints()
-	if err != nil {
-		return err
-	}
-
-	err = c.ValidateLogging()
-	if err != nil {
-		return err
-	}
-
-	err = c.ValidateScroll()
-	if err != nil {
-		return err
-	}
-
-	// Validate app configs
-	err = c.ValidateAppConfigs()
-	if err != nil {
-		return err
-	}
-
-	// Validate grid settings
-	err = c.ValidateGrid()
-	if err != nil {
-		return err
-	}
-
-	// Validate recursive-grid settings
-	err = c.ValidateRecursiveGrid()
-	if err != nil {
-		return err
-	}
-
-	err = c.ValidateVirtualPointer()
-	if err != nil {
-		return err
-	}
-
-	err = c.ValidateMouseAction()
-	if err != nil {
-		return err
-	}
-
-	// Validate sticky modifiers settings
-	err = c.ValidateStickyModifiers()
-	if err != nil {
-		return err
-	}
-
-	// Validate smooth cursor settings
-	err = c.ValidateSmoothCursor()
-	if err != nil {
-		return err
-	}
-
-	// Validate smooth scroll settings
-	err = c.ValidateSmoothScroll()
-	if err != nil {
-		return err
-	}
-
-	// Validate held-key repeat settings
-	err = c.ValidateHeldRepeat()
-	if err != nil {
-		return err
-	}
-
-	// Validate top-level hotkey bindings
-	err = c.ValidateHotkeyBindings()
-	if err != nil {
-		return err
-	}
-
-	// Validate per-mode custom hotkeys
-	err = c.ValidateHotkeys()
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// ValidateHotkeyBindings validates the top-level [hotkeys] key format and action strings.
-func (c *Config) ValidateHotkeyBindings() error {
-	// Check for duplicate normalized keys (mirrors checkHotkeysConflicts
-	// for per-mode hotkeys). After merge, two keys that normalize identically
-	// would cause ambiguous runtime behavior.
-	seen := make(map[string]string, len(c.Hotkeys.Bindings))
-
-	for key, actions := range c.Hotkeys.Bindings {
-		fieldName := "hotkeys." + key
-		if strings.TrimSpace(key) == "" {
-			return derrors.New(
-				derrors.CodeInvalidConfig,
-				"hotkeys contains an empty key",
-			)
-		}
-
-		normalized := NormalizeKeyForComparison(key)
-		if prev, ok := seen[normalized]; ok {
-			return derrors.Newf(
-				derrors.CodeInvalidConfig,
-				"hotkeys has duplicate bindings (%q and %q)",
-				prev,
-				key,
-			)
-		}
-
-		seen[normalized] = key
-
-		err := ValidateHotkey(key, fieldName)
-		if err != nil {
-			return err
-		}
-
-		if len(actions) == 0 {
-			return derrors.Newf(
-				derrors.CodeInvalidConfig,
-				"%s cannot have an empty action list",
-				fieldName,
-			)
-		}
-
-		for actionIndex, actionStr := range actions {
-			trimmed := strings.TrimSpace(actionStr)
-			if trimmed == "" {
-				return derrors.Newf(
-					derrors.CodeInvalidConfig,
-					"%s[%d] cannot be empty",
-					fieldName,
-					actionIndex,
-				)
-			}
-
-			err := validateHotkeyActionString(trimmed)
-			if err != nil {
-				return derrors.Newf(
-					derrors.CodeInvalidConfig,
-					"%s[%d]: %v",
-					fieldName,
-					actionIndex,
-					err,
-				)
-			}
-		}
-	}
-
-	return nil
-}
-
-// ValidateGeneral validates general settings.
-func (c *Config) ValidateGeneral() error {
-	if c.General.KBLayoutToUse != "" && strings.TrimSpace(c.General.KBLayoutToUse) == "" {
-		return derrors.New(
-			derrors.CodeInvalidConfig,
-			"general.kb_layout_to_use cannot be whitespace-only",
-		)
-	}
-
-	for index, key := range c.General.PassthroughUnboundedKeysBlacklist {
-		fieldName := fmt.Sprintf("general.passthrough_unbounded_keys_blacklist[%d]", index)
-
-		err := ValidateHotkey(key, fieldName)
-		if err != nil {
-			return err
-		}
-
-		if !HasPassthroughModifier(key) {
-			return derrors.Newf(
-				derrors.CodeInvalidConfig,
-				"%s must include Cmd, Ctrl, Alt, or Option: %s",
-				fieldName,
-				key,
-			)
-		}
-	}
-
-	if c.General.ExecShell == "" {
-		return derrors.New(
-			derrors.CodeInvalidConfig,
-			"general.exec_shell cannot be empty",
-		)
-	}
-
-	if !filepath.IsAbs(c.General.ExecShell) {
-		return derrors.Newf(
-			derrors.CodeInvalidConfig,
-			"general.exec_shell must be an absolute path (got: %q)",
-			c.General.ExecShell,
-		)
-	}
-
-	if len(c.General.ExecShellArgs) == 0 {
-		return derrors.New(
-			derrors.CodeInvalidConfig,
-			"general.exec_shell_args cannot be empty",
-		)
-	}
-
-	return nil
-}
-
-// ValidateModeIndicator validates the mode indicator configuration.
-func (c *Config) ValidateModeIndicator() error {
-	err := validateMinValue(c.ModeIndicator.UI.FontSize, 1, "mode_indicator.ui.font_size")
-	if err != nil {
-		return err
-	}
-
-	err = validateMinValue(c.ModeIndicator.UI.BorderWidth, 0, "mode_indicator.ui.border_width")
-	if err != nil {
-		return err
-	}
-
-	err = validateMinValue(c.ModeIndicator.UI.PaddingX, -1, "mode_indicator.ui.padding_x")
-	if err != nil {
-		return err
-	}
-
-	err = validateMinValue(c.ModeIndicator.UI.PaddingY, -1, "mode_indicator.ui.padding_y")
-	if err != nil {
-		return err
-	}
-
-	err = validateMinValue(c.ModeIndicator.UI.BorderRadius, -1, "mode_indicator.ui.border_radius")
-	if err != nil {
-		return err
-	}
-
-	err = validateColors([]colorField{
-		{c.ModeIndicator.UI.BackgroundColor, "mode_indicator.ui.background_color"},
-		{c.ModeIndicator.UI.TextColor, "mode_indicator.ui.text_color"},
-		{c.ModeIndicator.UI.BorderColor, "mode_indicator.ui.border_color"},
-	})
-	if err != nil {
-		return err
-	}
-
-	// Validate per-mode color overrides (only when non-empty).
-	modes := []struct {
-		cfg  ModeIndicatorModeConfig
-		name string
-	}{
-		{c.ModeIndicator.Scroll, ModeNameScroll},
-		{c.ModeIndicator.Hints, ModeNameHints},
-		{c.ModeIndicator.Grid, ModeNameGrid},
-		{c.ModeIndicator.RecursiveGrid, ModeNameRecursiveGrid},
-	}
-
-	for _, mode := range modes {
-		err = validateColors([]colorField{
-			{mode.cfg.BackgroundColor, "mode_indicator." + mode.name + ".background_color"},
-			{mode.cfg.TextColor, "mode_indicator." + mode.name + ".text_color"},
-			{mode.cfg.BorderColor, "mode_indicator." + mode.name + ".border_color"},
-		})
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// writeStringOrStringArrayMap writes a map[string]StringOrStringArray (or
-// map[string][]string) as a TOML table to the given file.  Single-action
-// entries are emitted as plain strings for backward compatibility; multi-action
-// entries use TOML array syntax.  The section header (e.g. "[scroll.hotkeys]")
-// is always written so that an empty map round-trips correctly.
-//
-// When defaults is non-nil, any default key not present in _map (after
-// normalization) is emitted as "__disabled__" so that Save+LoadWithValidation
-// round-trips correctly under merge-on-top-of-defaults semantics.
-func writeStringOrStringArrayMap(
-	file *os.File,
-	sectionHeader string,
-	_map map[string]StringOrStringArray,
-	defaults map[string]StringOrStringArray,
-) error {
-	_, err := fmt.Fprintf(file, "\n[%s]\n", sectionHeader)
-	if err != nil {
-		return derrors.Wrap(
-			err, derrors.CodeConfigIOFailed, "failed to write section header",
-		)
-	}
-
-	if len(_map) == 0 {
-		return nil
-	}
-
-	keys := make([]string, 0, len(_map))
-	for k := range _map {
-		keys = append(keys, k)
-	}
-
-	sort.Strings(keys)
-
-	for _, key := range keys {
-		actions := _map[key]
-
-		if len(actions) == 0 {
-			continue
-		}
-
-		var line string
-		if len(actions) == 1 {
-			line = fmt.Sprintf("%q = %q", key, actions[0])
-		} else {
-			quoted := make([]string, 0, len(actions))
-			for _, a := range actions {
-				quoted = append(quoted, fmt.Sprintf("%q", a))
-			}
-
-			line = fmt.Sprintf("%q = [%s]", key, strings.Join(quoted, ", "))
-		}
-
-		_, err := fmt.Fprintln(file, line)
-		if err != nil {
-			return derrors.Wrap(
-				err, derrors.CodeConfigIOFailed, "failed to write binding",
-			)
-		}
-	}
-
-	// Emit __disabled__ markers for default bindings that were removed.
-	if defaults != nil {
-		disabledKeys := make([]string, 0)
-		for defaultKey := range defaults {
-			found := findNormalizedMapKey(_map, defaultKey)
-			if _, exists := _map[found]; !exists {
-				disabledKeys = append(disabledKeys, defaultKey)
-			}
-		}
-
-		sort.Strings(disabledKeys)
-
-		for _, key := range disabledKeys {
-			line := fmt.Sprintf("%q = %q", key, DisabledSentinel)
-
-			_, disabledErr := fmt.Fprintln(file, line)
-			if disabledErr != nil {
-				return derrors.Wrap(
-					disabledErr,
-					derrors.CodeConfigIOFailed,
-					"failed to write disabled binding marker",
-				)
-			}
-		}
-	}
-
-	return nil
-}
-
-// Save saves the configuration to the specified path.
-func (c *Config) Save(path string) error {
-	// Create directory if it doesn't exist
-	dir := filepath.Dir(path)
-
-	mkdirErr := os.MkdirAll(dir, DefaultDirPerms)
-	if mkdirErr != nil {
-		return derrors.Wrap(
-			mkdirErr,
-			derrors.CodeConfigIOFailed,
-			"failed to create config directory",
-		)
-	}
-
-	// Create file
-	var closeErr error
-	// #nosec G304 -- Path is validated and controlled by the application
-	file, fileErr := os.Create(path)
-	if fileErr != nil {
-		return derrors.Wrap(fileErr, derrors.CodeConfigIOFailed, "failed to create config file")
-	}
-
-	defer func() {
-		cerr := file.Close()
-		if cerr != nil && closeErr == nil {
-			closeErr = derrors.Wrap(cerr, derrors.CodeConfigIOFailed, "failed to close config file")
-		}
-	}()
-
-	// Encode the main config struct to TOML.
-	// The Hotkeys field is tagged toml:"-" so the encoder skips it entirely;
-	// we append the flat [hotkeys] section manually afterwards.
-	encoder := toml.NewEncoder(file)
-
-	encodeErr := encoder.Encode(c)
-	if encodeErr != nil {
-		return derrors.Wrap(encodeErr, derrors.CodeSerializationFailed, "failed to encode config")
-	}
-
-	// Write the [hotkeys] section so that LoadWithValidation sees
-	// raw["hotkeys"] and merges user entries on top of defaults.  An empty
-	// section (no keys) is the documented way to disable all hotkeys.
-	//
-	// Convert map[string][]string → map[string]StringOrStringArray so we can
-	// reuse writeStringOrStringArrayMap (StringOrStringArray is []string).
-	defaults := DefaultConfig()
-
-	hotkeysSOSA := make(map[string]StringOrStringArray, len(c.Hotkeys.Bindings))
-	for k, v := range c.Hotkeys.Bindings {
-		hotkeysSOSA[k] = StringOrStringArray(v)
-	}
-
-	defaultHotkeysSOSA := make(map[string]StringOrStringArray, len(defaults.Hotkeys.Bindings))
-	for k, v := range defaults.Hotkeys.Bindings {
-		defaultHotkeysSOSA[k] = StringOrStringArray(v)
-	}
-
-	err := writeStringOrStringArrayMap(file, "hotkeys", hotkeysSOSA, defaultHotkeysSOSA)
-	if err != nil {
-		return err
-	}
-
-	// Write per-mode [<mode>.hotkeys] sections.
-	// These fields are tagged toml:"-" so the encoder skips them; we write
-	// them manually to preserve the single-string format for single-action
-	// entries (backward compatibility).
-	hotkeysSections := []struct {
-		header   string
-		hotkeys  map[string]StringOrStringArray
-		defaults map[string]StringOrStringArray
-	}{
-		{"scroll.hotkeys", c.Scroll.Hotkeys, defaults.Scroll.Hotkeys},
-		{"hints.hotkeys", c.Hints.Hotkeys, defaults.Hints.Hotkeys},
-		{"grid.hotkeys", c.Grid.Hotkeys, defaults.Grid.Hotkeys},
-		{
-			"recursive_grid.hotkeys",
-			c.RecursiveGrid.Hotkeys,
-			defaults.RecursiveGrid.Hotkeys,
-		},
-		{
-			"monitor_select.hotkeys",
-			c.MonitorSelect.Hotkeys,
-			defaults.MonitorSelect.Hotkeys,
-		},
-	}
-	for _, section := range hotkeysSections {
-		err = writeStringOrStringArrayMap(file, section.header, section.hotkeys, section.defaults)
-		if err != nil {
-			return err
-		}
-	}
-
-	return closeErr
-}
-
-// HotkeysForMode returns the hotkeys map for the given mode name.
-// These are per-mode hotkeys that are only active while that mode is active,
-// using the same action syntax as [hotkeys] (e.g. "exec ...", "action ...", "hints", etc.).
-func (c *Config) HotkeysForMode(modeName string) map[string]StringOrStringArray {
-	return c.HotkeysForModeAndApp(modeName, "")
-}
-
-// HotkeysForModeAndApp returns the effective per-mode hotkeys map for the given mode
-// and focused app bundle ID. For modes without app-specific overrides, it returns the
-// base mode hotkeys unchanged. Hints, Grid, RecursiveGrid, and Scroll modes support
-// per-app hotkey overrides through [[<mode>.app_configs]].
-func (c *Config) HotkeysForModeAndApp(
-	modeName, bundleID string,
-) map[string]StringOrStringArray {
-	base := c.baseHotkeysForMode(modeName)
-	if bundleID == "" {
-		return base
-	}
-
-	var appConfig *AppConfig
+// ModeEnabled reports whether the configuration lets the named mode be
+// entered. Scroll, idle and declared modes have no enabled switch, so they are
+// always enabled.
+func (c *Config) ModeEnabled(modeName string) bool {
 	switch modeName {
 	case ModeNameHints:
-		appConfig = c.Hints.AppConfigForBundleID(bundleID)
+		return c.Hints.Enabled
 	case ModeNameGrid:
-		appConfig = c.Grid.AppConfigForBundleID(bundleID)
+		return c.Grid.Enabled
 	case ModeNameRecursiveGrid:
-		appConfig = c.RecursiveGrid.AppConfigForBundleID(bundleID)
-	case ModeNameScroll:
-		appConfig = c.Scroll.AppConfigForBundleID(bundleID)
+		return c.RecursiveGrid.Enabled
+	case ModeNameBisect:
+		return c.Bisect.Enabled
 	case ModeNameMonitorSelect:
-		return base
+		return c.MonitorSelect.Enabled
+	default:
+		return true
 	}
-
-	if appConfig == nil || len(appConfig.Hotkeys) == 0 {
-		return base
-	}
-
-	merged := make(map[string]StringOrStringArray, len(base)+len(appConfig.Hotkeys))
-	for key, actions := range base {
-		copied := make(StringOrStringArray, len(actions))
-		copy(copied, actions)
-		merged[key] = copied
-	}
-
-	for key, actions := range appConfig.Hotkeys {
-		canonicalKey := findNormalizedMapKey(merged, key)
-		if len(actions) == 1 && actions[0] == DisabledSentinel {
-			delete(merged, canonicalKey)
-
-			continue
-		}
-
-		delete(merged, canonicalKey)
-
-		copied := make(StringOrStringArray, len(actions))
-		copy(copied, actions)
-		merged[key] = copied
-	}
-
-	return merged
-}
-
-// HasAppHotkeyOverrides reports whether any [[hints.app_configs]] entry has a
-// non-empty Hotkeys map. Callers can use this to skip expensive operations
-// (e.g. accessibility API calls) when no per-app hotkey overrides are configured.
-func (c *HintsConfig) HasAppHotkeyOverrides() bool {
-	for idx := range c.AppConfigs {
-		if len(c.AppConfigs[idx].Hotkeys) > 0 {
-			return true
-		}
-	}
-
-	return false
-}
-
-// HasAppHotkeyOverrides reports whether any [[grid.app_configs]] entry has a
-// non-empty Hotkeys map.
-func (c *GridConfig) HasAppHotkeyOverrides() bool {
-	for idx := range c.AppConfigs {
-		if len(c.AppConfigs[idx].Hotkeys) > 0 {
-			return true
-		}
-	}
-
-	return false
-}
-
-// HasAppHotkeyOverrides reports whether any [[recursive_grid.app_configs]] entry has a
-// non-empty Hotkeys map.
-func (c *RecursiveGridConfig) HasAppHotkeyOverrides() bool {
-	for idx := range c.AppConfigs {
-		if len(c.AppConfigs[idx].Hotkeys) > 0 {
-			return true
-		}
-	}
-
-	return false
-}
-
-// HasAppHotkeyOverrides reports whether any [[scroll.app_configs]] entry has a
-// non-empty Hotkeys map.
-func (c *ScrollConfig) HasAppHotkeyOverrides() bool {
-	for idx := range c.AppConfigs {
-		if len(c.AppConfigs[idx].Hotkeys) > 0 {
-			return true
-		}
-	}
-
-	return false
-}
-
-// AppConfigForBundleID returns the matching hints app config for the given bundle ID.
-func (c *HintsConfig) AppConfigForBundleID(bundleID string) *AppConfig {
-	for idx := range c.AppConfigs {
-		if c.AppConfigs[idx].BundleID == bundleID {
-			return &c.AppConfigs[idx]
-		}
-	}
-
-	return nil
-}
-
-// AppConfigForBundleID returns the matching grid app config for the given bundle ID.
-func (c *GridConfig) AppConfigForBundleID(bundleID string) *AppConfig {
-	for idx := range c.AppConfigs {
-		if c.AppConfigs[idx].BundleID == bundleID {
-			return &c.AppConfigs[idx]
-		}
-	}
-
-	return nil
-}
-
-// AppConfigForBundleID returns the matching recursive grid app config for the given bundle ID.
-func (c *RecursiveGridConfig) AppConfigForBundleID(bundleID string) *AppConfig {
-	for idx := range c.AppConfigs {
-		if c.AppConfigs[idx].BundleID == bundleID {
-			return &c.AppConfigs[idx]
-		}
-	}
-
-	return nil
-}
-
-// AppConfigForBundleID returns the matching scroll app config for the given bundle ID.
-func (c *ScrollConfig) AppConfigForBundleID(bundleID string) *AppConfig {
-	for idx := range c.AppConfigs {
-		if c.AppConfigs[idx].BundleID == bundleID {
-			return &c.AppConfigs[idx]
-		}
-	}
-
-	return nil
-}
-
-// IsAppExcluded checks if the given bundle ID is in the excluded apps list.
-func (c *Config) IsAppExcluded(bundleID string) bool {
-	if bundleID == "" {
-		return false
-	}
-
-	// Normalize bundle ID for case-insensitive comparison
-	bundleID = strings.ToLower(strings.TrimSpace(bundleID))
-
-	for _, excludedApp := range c.General.ExcludedApps {
-		excludedApp = strings.ToLower(strings.TrimSpace(excludedApp))
-		if excludedApp == bundleID {
-			return true
-		}
-	}
-
-	return false
-}
-
-// ClickableRolesForApp returns the clickable roles for a specific app bundle ID.
-func (c *Config) ClickableRolesForApp(bundleID string) []string {
-	rolesMap := c.Hints.buildRolesMap(bundleID)
-
-	return rolesMapToSlice(rolesMap)
-}
-
-// ShouldIgnoreClickableCheckForApp returns whether clickable check should be ignored for a specific app bundle ID.
-// It first checks for app-specific configuration, then falls back to the global setting.
-func (c *Config) ShouldIgnoreClickableCheckForApp(bundleID string) bool {
-	// Check if the app has an app-specific ignore_clickable_check
-	appConfig := c.Hints.AppConfigForBundleID(bundleID)
-	if appConfig != nil {
-		return appConfig.IgnoreClickableCheck
-	}
-
-	// Fall back to global ignore_clickable_check
-	return c.Hints.IgnoreClickableCheck
-}
-
-// ShouldEnableVisibleCheckForApp returns whether the visibility hit-test check should be performed
-// for a specific app bundle ID. It first checks for app-specific configuration, then falls back
-// to the global setting. Default is false (visibility check skipped).
-func (c *Config) ShouldEnableVisibleCheckForApp(bundleID string) bool {
-	appConfig := c.Hints.AppConfigForBundleID(bundleID)
-	if appConfig != nil {
-		return appConfig.VisibleCheckEnabled
-	}
-
-	return c.Hints.VisibleCheckEnabled
-}
-
-// rolesMapToSlice converts a roles map to a slice.
-func rolesMapToSlice(rolesMap map[string]struct{}) []string {
-	roles := make([]string, 0, len(rolesMap))
-	for role := range rolesMap {
-		roles = append(roles, role)
-	}
-
-	return roles
-}
-
-// ValidateModes validates that at least one mode is enabled.
-func (c *Config) ValidateModes() error {
-	if !c.Hints.Enabled && !c.Grid.Enabled && !c.RecursiveGrid.Enabled {
-		return derrors.New(
-			derrors.CodeInvalidConfig,
-			"at least one mode must be enabled: hints.enabled, grid.enabled, or recursive_grid.enabled",
-		)
-	}
-
-	return nil
-}
-
-// ValidateLogging validates the logging configuration.
-func (c *Config) ValidateLogging() error {
-	validLogLevels := map[string]bool{
-		"debug": true,
-		"info":  true,
-		"warn":  true,
-		"error": true,
-	}
-	if !validLogLevels[c.Logging.LogLevel] {
-		return derrors.New(
-			derrors.CodeInvalidConfig,
-			"log_level must be one of: debug, info, warn, error",
-		)
-	}
-
-	return nil
-}
-
-// validateMinValue validates that a value is at least the minimum.
-func validateMinValue(value int, minimum int, fieldName string) error {
-	if value < minimum {
-		return derrors.New(
-			derrors.CodeInvalidConfig,
-			fieldName+" must be at least "+strconv.Itoa(minimum),
-		)
-	}
-
-	return nil
-}
-
-// ValidateScroll validates the scroll configuration.
-func (c *Config) ValidateScroll() error {
-	err := validateMinValue(c.Scroll.ScrollStep, 1, "scroll.scroll_step")
-	if err != nil {
-		return err
-	}
-
-	err = validateMinValue(c.Scroll.ScrollStepHalf, 1, "scroll.scroll_step_half")
-	if err != nil {
-		return err
-	}
-
-	err = validateMinValue(c.Scroll.ScrollStepFull, 1, "scroll.scroll_step_full")
-	if err != nil {
-		return err
-	}
-
-	err = validateScrollAppConfigs("scroll", c.Scroll.AppConfigs)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func (c *Config) baseHotkeysForMode(modeName string) map[string]StringOrStringArray {
@@ -1704,110 +756,29 @@ func (c *Config) baseHotkeysForMode(modeName string) map[string]StringOrStringAr
 		return c.Grid.Hotkeys
 	case ModeNameRecursiveGrid:
 		return c.RecursiveGrid.Hotkeys
+	case ModeNameBisect:
+		return c.Bisect.Hotkeys
 	case ModeNameScroll:
 		return c.Scroll.Hotkeys
 	case ModeNameMonitorSelect:
 		return c.MonitorSelect.Hotkeys
 	default:
-		return nil
+		// A name no built-in mode answers to is a declared one, or nothing:
+		// an undeclared name reads the zero value, whose table is nil.
+		return c.Modes[modeName].Hotkeys
 	}
-}
-
-// ClickableRolesForApp returns the clickable roles for a specific app bundle ID.
-func (c *HintsConfig) ClickableRolesForApp(bundleID string) []string {
-	rolesMap := c.buildRolesMap(bundleID)
-
-	return rolesMapToSlice(rolesMap)
-}
-
-// StrategyForApp returns the element detection strategy for the given bundle ID.
-// Falls back to the global HintsConfig.Strategy if no app-specific override is set.
-func (c *HintsConfig) StrategyForApp(bundleID string) string {
-	appConfig := c.AppConfigForBundleID(bundleID)
-	if appConfig != nil && appConfig.Strategy != "" {
-		return appConfig.Strategy
-	}
-
-	return c.Strategy
 }
 
 // LabelDirectionForApp returns the label direction for the given bundle ID.
-// Falls back to the global `HintsConfig.LabelDirection` if no app-specific
-// override is set. An empty global value is normalized to the default
-// `normal` so callers can always treat the result as a fully-qualified direction.
+// Delegates to MergedForApp to handle the root→app-config override chain.
+// An empty result is normalized to the default "normal".
 func (c *HintsConfig) LabelDirectionForApp(bundleID string) string {
-	appConfig := c.AppConfigForBundleID(bundleID)
-	if appConfig != nil && appConfig.LabelDirection != "" {
-		return appConfig.LabelDirection
+	dir := c.MergedForApp(bundleID).LabelDirection
+	if dir == "" {
+		return domain.LabelDirectionNormal
 	}
 
-	if c.LabelDirection == "" {
-		return LabelDirectionNormal
-	}
-
-	return c.LabelDirection
-}
-
-// buildRolesMap builds a map of clickable roles for the given bundle ID.
-func (c *HintsConfig) buildRolesMap(bundleID string) map[string]struct{} {
-	rolesMap := make(map[string]struct{})
-
-	for _, role := range c.ClickableRoles {
-		trimmed := strings.TrimSpace(role)
-		if trimmed != "" {
-			rolesMap[trimmed] = struct{}{}
-		}
-	}
-
-	for _, appConfig := range c.AppConfigs {
-		if appConfig.BundleID == bundleID {
-			for _, role := range appConfig.AdditionalClickable {
-				trimmed := strings.TrimSpace(role)
-				if trimmed != "" {
-					rolesMap[trimmed] = struct{}{}
-				}
-			}
-
-			break
-		}
-	}
-
-	if c.IncludeMenubarHints {
-		rolesMap[RoleMenuBarItem] = struct{}{}
-	}
-
-	if c.IncludeDockHints {
-		rolesMap[RoleDockItem] = struct{}{}
-	}
-
-	return rolesMap
-}
-
-// MatchesAdditionalBundle checks if a bundle ID matches any user-provided additional bundles.
-// It supports both exact matches and wildcard patterns (ending with *).
-func MatchesAdditionalBundle(bundleID string, additionalBundles []string) bool {
-	if bundleID == "" || len(additionalBundles) == 0 {
-		return false
-	}
-
-	lower := strings.ToLower(strings.TrimSpace(bundleID))
-
-	for _, candidate := range additionalBundles {
-		trimmed := strings.ToLower(strings.TrimSpace(candidate))
-		if trimmed == "" {
-			continue
-		}
-
-		if prefix, found := strings.CutSuffix(trimmed, "*"); found {
-			if strings.HasPrefix(lower, prefix) {
-				return true
-			}
-		} else if lower == trimmed {
-			return true
-		}
-	}
-
-	return false
+	return dir
 }
 
 // IsAllLetters checks if a string contains only letters (a-z, A-Z).
@@ -1821,39 +792,4 @@ func IsAllLetters(keyStr string) bool {
 	}
 
 	return len(keyStr) > 0
-}
-
-// KnownChromiumBundles contains known Chromium-based application bundle identifiers.
-// These applications benefit from AXEnhancedUserInterface accessibility improvements.
-var KnownChromiumBundles = []string{
-	"net.imput.helium",
-	"com.google.Chrome",
-	"com.brave.Browser",
-	"company.thebrowser.Browser",
-}
-
-// KnownFirefoxBundles contains known Firefox-based application bundle identifiers.
-// These applications benefit from AXEnhancedUserInterface accessibility improvements.
-var KnownFirefoxBundles = []string{
-	"org.mozilla.firefox",
-	"app.zen-browser.zen",
-}
-
-// KnownElectronBundles contains known Electron-based application bundle identifiers.
-// These applications require manual accessibility attribute toggling to work properly.
-var KnownElectronBundles = []string{
-	"com.microsoft.VSCode",
-	"com.exafunction.windsurf",
-	"com.tinyspeck.slackmacgap",
-	"com.spotify.client",
-	"md.obsidian",
-	"com.hnc.discord",
-	"com.openai.codex",
-	"com.google.antigravity",
-}
-
-// KnownWebKitBundles contains known WebKit-based application bundle identifiers.
-// These applications skip hit-test visibility checks to avoid slow AX API calls.
-var KnownWebKitBundles = []string{
-	"com.apple.Safari",
 }

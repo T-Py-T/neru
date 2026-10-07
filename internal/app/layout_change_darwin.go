@@ -5,7 +5,7 @@ package app
 import (
 	"go.uber.org/zap"
 
-	"github.com/y3owk1n/neru/internal/core/infra/platform/darwin"
+	"github.com/y3owk1n/neru/internal/adapter/platform/darwin"
 )
 
 // registerLayoutChangeHandler registers a Go-level callback that fires after
@@ -17,27 +17,9 @@ import (
 // hotkeys and re-registers them with the updated keycodes.
 func (a *App) registerLayoutChangeHandler() {
 	darwin.SetKeymapLayoutChangeHandler(func() {
-		a.logger.Info("Keyboard layout changed; re-registering global hotkeys")
+		a.hotkeys.Reregister()
 
-		a.hotkeyRegistrationMu.Lock()
-		defer a.hotkeyRegistrationMu.Unlock()
-
-		if !a.appState.HotkeysRegistered() {
-			a.logger.Debug("Hotkeys not currently registered; skipping re-registration")
-
-			return
-		}
-
-		// Unregister all existing CGEventTap hotkeys
-		a.stopAllHotkeyRepeats()
-		a.hotkeyManager.UnregisterAll()
-		a.appState.SetHotkeysRegistered(false)
-
-		// Re-register with updated keycodes from the new layout
-		a.registerHotkeys()
-		a.appState.SetHotkeysRegistered(true)
-
-		a.logger.Info("Global hotkeys re-registered for new keyboard layout")
+		a.logger.Debug("Global hotkeys re-registered after keyboard layout change")
 	})
 
 	a.logger.Debug("Registered keyboard layout change handler for hotkey re-registration",

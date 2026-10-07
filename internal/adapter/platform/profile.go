@@ -1,0 +1,188 @@
+package platform
+
+// DisplayServer identifies the active or planned display-system family.
+type DisplayServer string
+
+const (
+	// DisplayServerCocoa is the native macOS window/display stack.
+	DisplayServerCocoa DisplayServer = "cocoa"
+	// DisplayServerWayland is the Linux Wayland compositor stack.
+	DisplayServerWayland DisplayServer = "wayland"
+	// DisplayServerX11 is the Linux X11 stack.
+	DisplayServerX11 DisplayServer = "x11"
+	// DisplayServerWin32 is the Windows desktop/windowing stack.
+	DisplayServerWin32 DisplayServer = "win32"
+	// DisplayServerWaylandKDE is Wayland on KDE Plasma (doctor/runtime label).
+	DisplayServerWaylandKDE DisplayServer = "wayland (KDE Plasma)"
+	// DisplayServerWaylandCOSMIC is Wayland on COSMIC (doctor/runtime label).
+	DisplayServerWaylandCOSMIC DisplayServer = "wayland (COSMIC)"
+	// DisplayServerWaylandGNOME is Wayland on GNOME Shell (doctor/runtime label).
+	DisplayServerWaylandGNOME DisplayServer = "wayland (GNOME)"
+	// DisplayServerUnknown means the display server could not be identified yet.
+	DisplayServerUnknown DisplayServer = "unknown"
+)
+
+// BuildMode describes whether a backend is expected to need CGO.
+type BuildMode string
+
+const (
+	// BuildModePureGo means the backend should build without CGO.
+	BuildModePureGo BuildMode = "pure_go"
+	// BuildModeCGORequired means the backend depends on CGO/native linkage.
+	BuildModeCGORequired BuildMode = "cgo_required"
+	// BuildModeBackendDependent means the answer depends on which backend is chosen.
+	BuildModeBackendDependent BuildMode = "backend_dependent"
+)
+
+const (
+	defaultPrimaryModifier                 = "ctrl"
+	backendPlanNameX11OrCompositorSpecific = "x11 or compositor-specific backend"
+	// notificationDaemonCaveat is the freedesktop backend's only precondition,
+	// in one phrasing. Every Linux profile states it, and the backend is the
+	// same one on all of them, so they say it in the same words rather than
+	// each inventing its own.
+	notificationDaemonCaveat = "needs a notification daemon running"
+)
+
+// BackendPlan describes the intended backend family for one subsystem and
+// whether contributors should expect CGO to be required.
+type BackendPlan struct {
+	Name      string
+	BuildMode BuildMode
+	Notes     string
+}
+
+// Profile describes the platform conventions contributors should target when
+// adding OS-specific implementations.
+type Profile struct {
+	OS              OS
+	PrimaryModifier string
+	DisplayServer   DisplayServer
+	Accessibility   BackendPlan
+	Hotkeys         BackendPlan
+	KeyboardCapture BackendPlan
+	Overlay         BackendPlan
+	Notifications   BackendPlan
+}
+
+// ProfileFor returns the contributor-facing platform profile for a target OS.
+func ProfileFor(target OS) Profile {
+	switch target {
+	case Darwin:
+		return Profile{
+			OS:              Darwin,
+			PrimaryModifier: "cmd",
+			DisplayServer:   DisplayServerCocoa,
+			Accessibility: BackendPlan{
+				Name:      "axuielement",
+				BuildMode: BuildModeCGORequired,
+				Notes:     "Objective-C bridge into macOS accessibility APIs",
+			},
+			Hotkeys: BackendPlan{
+				Name:      "cgeventtap-hotkeys",
+				BuildMode: BuildModeCGORequired,
+				Notes:     "Per-hotkey CGEventTaps via Objective-C bridge",
+			},
+			KeyboardCapture: BackendPlan{
+				Name:      "quartz-event-tap",
+				BuildMode: BuildModeCGORequired,
+				Notes:     "Quartz event taps use CGO-backed Cocoa/CoreGraphics bindings",
+			},
+			Overlay: BackendPlan{
+				Name:      "cocoa-overlay-window",
+				BuildMode: BuildModeCGORequired,
+				Notes:     "Native overlay windows are implemented through Cocoa",
+			},
+			Notifications: BackendPlan{
+				Name:      "usernotifications/nsalert",
+				BuildMode: BuildModeCGORequired,
+				Notes:     "Current macOS notifications and alerts use the native bridge",
+			},
+		}
+	case Linux:
+		return linuxProfileForCurrentBackend()
+	case Windows:
+		return Profile{
+			OS:              Windows,
+			PrimaryModifier: defaultPrimaryModifier,
+			DisplayServer:   DisplayServerWin32,
+			Accessibility: BackendPlan{
+				Name:      "uia",
+				BuildMode: BuildModePureGo,
+				Notes:     "Prefer COM/Win32 bindings through x/sys or equivalent wrappers",
+			},
+			Hotkeys: BackendPlan{
+				Name:      "RegisterHotKey",
+				BuildMode: BuildModePureGo,
+				Notes:     "Win32 hotkeys should not require CGO for a first implementation",
+			},
+			KeyboardCapture: BackendPlan{
+				Name:      "low-level keyboard hook",
+				BuildMode: BuildModePureGo,
+				Notes:     "Hooks are reachable through Win32/syscall bindings",
+			},
+			Overlay: BackendPlan{
+				Name:      "layered win32 window",
+				BuildMode: BuildModePureGo,
+				Notes:     "Keep the first overlay implementation CGO-free if practical",
+			},
+			Notifications: BackendPlan{
+				Name:      "tray balloon tips",
+				BuildMode: BuildModePureGo,
+				Notes: "Shell_NotifyIcon NIF_INFO on the tray icon, shown as toasts on " +
+					"Windows 10 and 11; needs the tray icon, no AppUserModelID",
+			},
+		}
+	case Unknown:
+		return Profile{
+			OS:              Unknown,
+			PrimaryModifier: defaultPrimaryModifier,
+			DisplayServer:   DisplayServerUnknown,
+		}
+	default:
+		return Profile{
+			OS:              Unknown,
+			PrimaryModifier: defaultPrimaryModifier,
+			DisplayServer:   DisplayServerUnknown,
+		}
+	}
+}
+
+// CurrentProfile returns the contributor-facing profile for the running OS.
+func CurrentProfile() Profile {
+	return ProfileFor(CurrentOS())
+}
+
+func linuxProfile(ds DisplayServer) Profile {
+	return Profile{
+		OS:              Linux,
+		PrimaryModifier: defaultPrimaryModifier,
+		DisplayServer:   ds,
+		Accessibility: BackendPlan{
+			Name:      "at-spi",
+			BuildMode: BuildModePureGo,
+			Notes:     "Prefer D-Bus/pure-Go bindings before reaching for CGO",
+		},
+		Hotkeys: BackendPlan{
+			Name:      backendPlanNameX11OrCompositorSpecific,
+			BuildMode: BuildModeBackendDependent,
+			Notes:     "X11 may stay pure Go; Wayland/compositor paths may need CGO or native helpers",
+		},
+		KeyboardCapture: BackendPlan{
+			Name:      backendPlanNameX11OrCompositorSpecific,
+			BuildMode: BuildModeBackendDependent,
+			Notes:     "Backend choice determines whether pure Go is enough",
+		},
+		Overlay: BackendPlan{
+			Name:      "x11 window or wayland layer-shell",
+			BuildMode: BuildModeBackendDependent,
+			Notes:     "Simple X11 overlays may stay pure Go; Wayland paths may require native linkage",
+		},
+		Notifications: BackendPlan{
+			Name:      "freedesktop notifications",
+			BuildMode: BuildModePureGo,
+			Notes: "org.freedesktop.Notifications over the session bus, on every backend " +
+				"and with no CGO; " + notificationDaemonCaveat,
+		},
+	}
+}

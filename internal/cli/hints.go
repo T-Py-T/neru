@@ -1,8 +1,10 @@
 package cli
 
+import "github.com/y3owk1n/neru/internal/domain"
+
 // HintsCmd is the CLI hints command.
 var HintsCmd = BuildModeCommand(ModeConfig{
-	Name:  "hints",
+	Mode:  domain.ModeHints,
 	Short: "Launch hints mode for clickable elements",
 	Long: `Assign letter hints to on-screen elements for keyboard-driven clicking.
 
@@ -17,12 +19,32 @@ var HintsCmd = BuildModeCommand(ModeConfig{
   When --search is enabled, the mode shows a search/filter input
   instead of navigating by hint keys directly.
 
+  Use --hide-on-empty-search with --search to hide all hints when the
+  search query is empty. Hints appear only as you type a query, making
+  it easier to focus on matching results.
+
+  Use --exit-on-unmatched to exit hints mode when a pressed key does not
+  start any hint label.
+
   Use --role and --text to filter which elements get hinted:
-    --role AXButton,AXLink       Only hint buttons and links
+    --role button,link           Only hint buttons and links
     --text "Submit,Cancel"        Only hint elements containing "Submit" or "Cancel"
 
-  Use --strategy vision to use the Vision Framework (macOS) for element
-  detection instead of the default AX API.
+  Use --strategy vision to detect elements by recognizing what is on screen
+  instead of walking the accessibility tree — the Vision framework on macOS,
+  tesseract OCR on Linux, where it finds text only. Not available on Windows.
+
+  Use --strategy contour to detect interactive targets (buttons, icons,
+  text) by edge and contour analysis of the focused window's pixels, an
+  algorithm ported from wl-kbptr. Faster than vision and needs no OCR engine,
+  but yields no text to search. Not available on Windows.
+
+  Both capture strategies scan the focused window. Use --capture-scope screen
+  to scan the whole active screen instead, so notifications, panels and
+  adjacent windows get hints too.
+
+  Use --split-word to split detected text into word-level regions (requires
+  vision strategy).
 
   Use --debug to probe the focused window and print the clickable elements
   that would be hinted (count plus a sample) without showing the overlay.
@@ -38,17 +60,17 @@ var HintsCmd = BuildModeCommand(ModeConfig{
     neru hints --action left_click           Select a hint to click once
     neru hints --action left_click --repeat  Click multiple elements in sequence
     neru hints --search                      Start with search input shown
-    neru hints --role AXButton               Hint only buttons
-    neru hints --strategy vision             Use Vision Framework detection
+    neru hints --search --hide-on-empty-search  Start search with hints hidden until you type
+    neru hints --action left_click --exit-on-unmatched Exit overlay if key matches no hint
+    neru hints --role button                 Hint only buttons
+    neru hints --strategy vision             Detect elements by screen recognition
+    neru hints --strategy contour           Detect buttons and icons via contour analysis
+    neru hints --strategy contour --capture-scope screen  Hint the whole screen, not just the window
+    neru hints --strategy vision --split-word  Use vision strategy with word-level splitting
     neru hints --debug                       Print detected elements, no overlay (used on windows),
     neru hints --label-direction reverse     Use spread labels for this run`,
 
-	ActionDesc:            "hint selection",
-	SupportSearch:         true,
-	SupportFiltering:      true,
-	SupportStrategy:       true,
-	SupportDebug:          true,
-	SupportLabelDirection: true,
+	SupportDebug: true,
 })
 
 func init() {

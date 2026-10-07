@@ -9,25 +9,18 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/y3owk1n/neru/internal/adapter/platform"
 	"github.com/y3owk1n/neru/internal/app"
 	"github.com/y3owk1n/neru/internal/config"
-	"github.com/y3owk1n/neru/internal/core/infra/platform"
+	"github.com/y3owk1n/neru/internal/config/loader"
+	"github.com/y3owk1n/neru/internal/ports"
 )
 
-// main is defined in main_os.go files (main_darwin.go / main_other.go)
-// so that platform-specific thread locking can be applied before any goroutines start.
-// This file contains only the shared daemon logic.
-
 type alertProvider struct {
-	system config.AlertProvider
+	system loader.AlertProvider
 }
 
-func newAlertProvider() *alertProvider {
-	sp, err := platform.NewSystemPort()
-	if err != nil {
-		return &alertProvider{}
-	}
-
+func newAlertProvider(sp ports.SystemPort) *alertProvider {
 	return &alertProvider{system: sp}
 }
 
@@ -41,29 +34,34 @@ func (p *alertProvider) ShowAlert(ctx context.Context, title, message string) er
 
 // LaunchDaemon is called by the CLI to launch the daemon.
 func LaunchDaemon(configPath string) {
+	// Create system port early for startup notice and alerts.
+	systemPort, sysPortErr := platform.NewSystemPort()
+
+	// On non-macOS, print a brief startup notice directing to 'neru doctor'
+	// for the full platform capability report. Uses the system port's
+	// lightweight PlatformLabel() (no I/O or live probes) as the primary
+	// source, falling back to CurrentOS() when the port is unavailable.
 	if !platform.IsDarwin() {
-		fmt.Fprintf(
-			os.Stderr,
-			"⚠️  WARNING: Neru is running on %s, which is not yet fully supported.\n",
-			platform.CurrentOS(),
-		)
-		fmt.Fprintf(
-			os.Stderr,
-			"   Most features (hotkeys, overlays, accessibility, notifications) are stubs\n",
-		)
-		fmt.Fprintf(os.Stderr, "   and will not function. Only macOS is currently supported.\n")
-		fmt.Fprintf(
-			os.Stderr,
-			"   See docs/ARCHITECTURE.md for the contribution guide.\n\n",
-		)
+		if sysPortErr != nil {
+			fmt.Fprintf(os.Stderr, "%s\n\n", sysPortErr.Error())
+		} else {
+			printPlatformStartupNotice(systemPort.PlatformLabel())
+		}
 	}
 
-	service := config.NewService(
+	service := loader.NewService(
 		config.DefaultConfig(),
 		configPath,
 		zap.NewNop(),
-		newAlertProvider(),
+		newAlertProvider(systemPort),
 	)
+
+	// The display backend is a limit the platform column cannot say, so the
+	// root that knows the backend hands the loader the words it cannot honor.
+	if platform.CurrentProfile().DisplayServer == platform.DisplayServerX11 {
+		service = service.WithBackendInert(config.X11InertWords)
+	}
+
 	configResult := service.LoadWithValidation(configPath)
 
 	// If there's a validation error, show alert and exit
@@ -79,7 +77,9 @@ func LaunchDaemon(configPath string) {
 
 	app, appErr := app.New(
 		app.WithConfig(configResult.Config),
+		app.WithWrittenConfig(configResult.Written),
 		app.WithConfigPath(configResult.ConfigPath),
+		app.WithConfigWarnings(configResult.Warnings),
 	)
 	if appErr != nil {
 		fmt.Fprintf(os.Stderr, "Error creating app: %v\n", appErr)
@@ -93,12 +93,27 @@ func LaunchDaemon(configPath string) {
 	}
 }
 
+// printPlatformStartupNotice prints a compact startup notice on non-macOS.
+// Uses the system port's lightweight PlatformLabel() (no I/O, no live probes)
+// as the primary source, falling back to CurrentOS() when unavailable.
+func printPlatformStartupNotice(platformLabel string) {
+	if platformLabel == "" {
+		platformLabel = string(platform.CurrentOS())
+	}
+
+	fmt.Fprintf(
+		os.Stderr,
+		"Neru on %s is in beta. Run 'neru doctor' to see what is supported.\n\n",
+		platformLabel,
+	)
+}
+
 // handleConfigValidationError shows a validation error and exits.
 // Always displays a native alert (on supported platforms) in addition to printing to stderr.
 func handleConfigValidationError(result *config.LoadResult) {
 	errMsg := result.ValidationError.Error()
 	cfgPath := result.ConfigPath
-	fmt.Fprintf(os.Stderr, "⚠️  Configuration validation failed: %v\n", result.ValidationError)
+	fmt.Fprintf(os.Stderr, "Configuration validation failed: %v\n", result.ValidationError)
 	fmt.Fprintf(os.Stderr, "Config file: %s\n", cfgPath)
 	fmt.Fprintf(os.Stderr, "Please fix the configuration and relaunch Neru.\n")
 
@@ -109,7 +124,7 @@ func handleConfigValidationError(result *config.LoadResult) {
 }
 
 func handleConfigOnboarding(
-	service *config.Service,
+	service *loader.Service,
 	configResult *config.LoadResult,
 ) *config.LoadResult {
 	defaultPath, err := config.DefaultConfigPath()

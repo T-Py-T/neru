@@ -1,35 +1,38 @@
-package modes_test
+package modes
 
 import (
 	"testing"
 
-	"github.com/y3owk1n/neru/internal/app/modes"
-	"github.com/y3owk1n/neru/internal/core/domain"
+	"go.uber.org/zap"
+
+	"github.com/y3owk1n/neru/internal/domain"
+	"github.com/y3owk1n/neru/internal/domain/state"
 )
 
-// Compile-time interface compliance check.
-var _ modes.Mode = (*modes.ScrollMode)(nil)
+// TestScrollMode_HandleKey_DoesNothing covers the one dispatch path in the
+// package with no journey behind it. Scroll is driven entirely by hotkeys,
+// which the dispatcher answers before any mode is reached, so an unbound key
+// arriving at the mode must do nothing at all.
+//
+// A dropped no-op is invisible by construction — no test can tell "does
+// nothing" from "is not there". What this catches is the key being routed
+// somewhere it should not go: the handler here has no components wired, so
+// reaching another mode's key handling panics on a nil field.
+func TestScrollMode_HandleKey_DoesNothing(t *testing.T) {
+	appState := state.NewAppState()
+	appState.SetMode(domain.ModeScroll)
 
-func TestScrollMode_ModeType(t *testing.T) {
-	handler := &modes.Handler{}
-	mode := modes.NewScrollMode(handler)
-
-	if mode.ModeType() != domain.ModeScroll {
-		t.Errorf("Expected ModeScroll, got %v", mode.ModeType())
+	handler := newHandlerWithState(handlerState{
+		appState: appState,
+		logger:   zap.NewNop(),
+	})
+	handler.modes = map[domain.Mode]Mode{
+		domain.ModeScroll: NewScrollMode(&handler.handlerState),
 	}
-}
 
-func TestScrollMode_InterfaceCompliance(t *testing.T) {
-	handler := &modes.Handler{}
-	mode := modes.NewScrollMode(handler)
+	handler.handleModeSpecificKey("x")
 
-	if mode == nil {
-		t.Fatal("Expected NewScrollMode to return a non-nil mode")
-	}
-
-	// Keep a runtime assertion in addition to the compile-time check above.
-	var interfaceMode modes.Mode = mode
-	if interfaceMode.ModeType() != domain.ModeScroll {
-		t.Errorf("Expected ModeScroll, got %v", interfaceMode.ModeType())
+	if got := appState.CurrentMode(); got != domain.ModeScroll {
+		t.Fatalf("mode after an unbound key = %v, want %v", got, domain.ModeScroll)
 	}
 }

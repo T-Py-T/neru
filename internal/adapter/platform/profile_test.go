@@ -1,0 +1,166 @@
+package platform
+
+import "testing"
+
+func TestProfileFor(t *testing.T) {
+	tests := []struct {
+		name              string
+		target            OS
+		wantPrimary       string
+		wantDisplay       DisplayServer
+		wantAccess        string
+		wantAccessBuild   BuildMode
+		wantHotkeys       string
+		wantHotkeysBuild  BuildMode
+		wantKeyboard      string
+		wantKeyboardBuild BuildMode
+		wantOverlay       string
+		wantOverlayBuild  BuildMode
+		wantNotify        string
+		wantNotifyBuild   BuildMode
+	}{
+		{
+			name:              "darwin",
+			target:            Darwin,
+			wantPrimary:       "cmd",
+			wantDisplay:       DisplayServerCocoa,
+			wantAccess:        "axuielement",
+			wantAccessBuild:   BuildModeCGORequired,
+			wantHotkeys:       "cgeventtap-hotkeys",
+			wantHotkeysBuild:  BuildModeCGORequired,
+			wantKeyboard:      "quartz-event-tap",
+			wantKeyboardBuild: BuildModeCGORequired,
+			wantOverlay:       "cocoa-overlay-window",
+			wantOverlayBuild:  BuildModeCGORequired,
+			wantNotify:        "usernotifications/nsalert",
+			wantNotifyBuild:   BuildModeCGORequired,
+		},
+		{
+			name:              "linux",
+			target:            Linux,
+			wantPrimary:       defaultPrimaryModifier,
+			wantDisplay:       DisplayServerUnknown,
+			wantAccess:        "at-spi",
+			wantAccessBuild:   BuildModePureGo,
+			wantHotkeys:       backendPlanNameX11OrCompositorSpecific,
+			wantHotkeysBuild:  BuildModeBackendDependent,
+			wantKeyboard:      backendPlanNameX11OrCompositorSpecific,
+			wantKeyboardBuild: BuildModeBackendDependent,
+			wantOverlay:       "x11 window or wayland layer-shell",
+			wantOverlayBuild:  BuildModeBackendDependent,
+			wantNotify:        "freedesktop notifications",
+			wantNotifyBuild:   BuildModePureGo,
+		},
+		{
+			name:              "windows",
+			target:            Windows,
+			wantPrimary:       defaultPrimaryModifier,
+			wantDisplay:       DisplayServerWin32,
+			wantAccess:        "uia",
+			wantAccessBuild:   BuildModePureGo,
+			wantHotkeys:       "RegisterHotKey",
+			wantHotkeysBuild:  BuildModePureGo,
+			wantKeyboard:      "low-level keyboard hook",
+			wantKeyboardBuild: BuildModePureGo,
+			wantOverlay:       "layered win32 window",
+			wantOverlayBuild:  BuildModePureGo,
+			wantNotify:        "tray balloon tips",
+			wantNotifyBuild:   BuildModePureGo,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			var got Profile
+			if testCase.target == Linux {
+				// Use linuxProfile directly so the test does not depend on
+				// ambient environment variables (DISPLAY, XDG_CURRENT_DESKTOP, …).
+				// Which display server the running session gets is covered by
+				// TestProfileFor_LinuxReportsTheStackTheDaemonDrives.
+				got = linuxProfile(testCase.wantDisplay)
+			} else {
+				got = ProfileFor(testCase.target)
+			}
+
+			if got.PrimaryModifier != testCase.wantPrimary {
+				t.Fatalf("PrimaryModifier = %q, want %q", got.PrimaryModifier, testCase.wantPrimary)
+			}
+
+			if got.DisplayServer != testCase.wantDisplay {
+				t.Fatalf("DisplayServer = %q, want %q", got.DisplayServer, testCase.wantDisplay)
+			}
+
+			if got.Accessibility.Name != testCase.wantAccess {
+				t.Fatalf(
+					"Accessibility.Name = %q, want %q",
+					got.Accessibility.Name,
+					testCase.wantAccess,
+				)
+			}
+
+			if got.Accessibility.BuildMode != testCase.wantAccessBuild {
+				t.Fatalf(
+					"Accessibility.BuildMode = %q, want %q",
+					got.Accessibility.BuildMode,
+					testCase.wantAccessBuild,
+				)
+			}
+
+			if got.Hotkeys.Name != testCase.wantHotkeys {
+				t.Fatalf("Hotkeys.Name = %q, want %q", got.Hotkeys.Name, testCase.wantHotkeys)
+			}
+
+			if got.Hotkeys.BuildMode != testCase.wantHotkeysBuild {
+				t.Fatalf(
+					"Hotkeys.BuildMode = %q, want %q",
+					got.Hotkeys.BuildMode,
+					testCase.wantHotkeysBuild,
+				)
+			}
+
+			if got.KeyboardCapture.Name != testCase.wantKeyboard {
+				t.Fatalf(
+					"KeyboardCapture.Name = %q, want %q",
+					got.KeyboardCapture.Name,
+					testCase.wantKeyboard,
+				)
+			}
+
+			if got.KeyboardCapture.BuildMode != testCase.wantKeyboardBuild {
+				t.Fatalf(
+					"KeyboardCapture.BuildMode = %q, want %q",
+					got.KeyboardCapture.BuildMode,
+					testCase.wantKeyboardBuild,
+				)
+			}
+
+			if got.Overlay.Name != testCase.wantOverlay {
+				t.Fatalf("Overlay.Name = %q, want %q", got.Overlay.Name, testCase.wantOverlay)
+			}
+
+			if got.Overlay.BuildMode != testCase.wantOverlayBuild {
+				t.Fatalf(
+					"Overlay.BuildMode = %q, want %q",
+					got.Overlay.BuildMode,
+					testCase.wantOverlayBuild,
+				)
+			}
+
+			if got.Notifications.Name != testCase.wantNotify {
+				t.Fatalf(
+					"Notifications.Name = %q, want %q",
+					got.Notifications.Name,
+					testCase.wantNotify,
+				)
+			}
+
+			if got.Notifications.BuildMode != testCase.wantNotifyBuild {
+				t.Fatalf(
+					"Notifications.BuildMode = %q, want %q",
+					got.Notifications.BuildMode,
+					testCase.wantNotifyBuild,
+				)
+			}
+		})
+	}
+}

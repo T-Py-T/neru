@@ -5,9 +5,8 @@ import (
 	"image"
 	"time"
 
-	"github.com/y3owk1n/neru/internal/core/domain"
-	"github.com/y3owk1n/neru/internal/core/infra/eventtap"
-	"github.com/y3owk1n/neru/internal/ui/overlay"
+	"github.com/y3owk1n/neru/internal/app/services/stickyindicator"
+	"github.com/y3owk1n/neru/internal/domain"
 )
 
 const (
@@ -18,34 +17,26 @@ const (
 // startIndicatorPolling starts a goroutine that polls the cursor position and
 // updates the mode indicator and sticky modifiers indicator overlays.
 // It is shared by all navigation modes.
-func (h *Handler) startIndicatorPolling(mode domain.Mode) {
+func (h *handlerState) startIndicatorPolling(mode domain.Mode) {
 	// If polling is already active, do not start another goroutine.
 	if h.indicatorTicker != nil || h.indicatorStopCh != nil {
 		return
 	}
-	// Only start polling if at least one of mode indicator or sticky modifiers
-	// indicator is enabled for this mode.
-	if h.config == nil || (!h.modeIndicatorEnabled(mode) && !h.stickyModifiersEnabled()) {
+
+	// All callers hold h.mu, so state methods are callable directly.
+	if h.config == nil || !h.shouldPollCursorOverlays(mode) {
 		return
 	}
 	// Disable exclusive keyboard so scroll events pass through to applications
-	// when indicator overlays are shown, but only if uinput scroll is active
-	if m := overlay.Get(); m != nil && eventtap.IsUinputScrollAvailable() {
-		m.SetKeyboardCaptureEnabled(false)
-	}
-	// Ensure the mode indicator overlay covers the correct screen before
-	// the goroutine starts drawing. Scroll and hints modes already call
-	// overlayManager.ResizeToActiveScreen() which covers this, but grid
-	// and recursive-grid modes manage their own windows and skip that
-	// call, so the mode indicator overlay could still be sized for a
-	// different monitor.
-	if ind := h.overlayManager.ModeIndicatorOverlay(); ind != nil {
-		ind.ResizeToActiveScreen()
-	}
+	// when indicator overlays are shown, but only if uinput scroll is active.
+	// Skip when an evdev keyboard grab owns the keyboard: there the overlay
+	// must stay keyboard-passive, and the evdev path already keeps it that way.
+	setOverlayKeyboardCapture(h, false)
 
-	if stickyInd := h.overlayManager.StickyModifiersOverlay(); stickyInd != nil {
-		stickyInd.ResizeToActiveScreen()
-	}
+	// Size the indicators before the goroutine draws. Grid and recursive-grid
+	// manage their own windows and skip the manager's resize, so these could
+	// still be sized for a different monitor.
+	h.resizeIndicators()
 
 	stopCh := make(chan struct{})
 	doneCh := make(chan struct{})
@@ -54,145 +45,223 @@ func (h *Handler) startIndicatorPolling(mode domain.Mode) {
 	h.indicatorDoneCh = doneCh
 
 	h.indicatorTicker = ticker
-	go func() {
-		defer close(doneCh)
-		// Create a cancellable context bound to the stop channel.
-		ctx, cancel := context.WithCancel(h.ctx)
-		defer cancel()
-		// Monitor stopCh to cancel context immediately if the polling operation hangs.
-		go func() {
-			select {
-			case <-stopCh:
-				cancel()
-			case <-ctx.Done():
-			}
-		}()
 
-		for {
+	go h.outer.runIndicatorPolling(stopCh, doneCh, ticker)
+}
+
+// runIndicatorPolling is the polling loop. It exits when stopCh closes.
+func (h *Handler) runIndicatorPolling(
+	stopCh chan struct{},
+	doneCh chan struct{},
+	ticker *time.Ticker,
+) {
+	defer close(doneCh)
+
+	ctx, cancel := context.WithCancel(h.ctx)
+	defer cancel()
+
+	// Cancel the context as soon as stop is signaled so a hung call unblocks.
+	go func() {
+		select {
+		case <-stopCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	for {
+		select {
+		case <-stopCh:
+			return
+		case <-ticker.C:
+			// Re-check stopCh before doing any work to shrink the window
+			// where a draw can be dispatched after stop is signaled.
 			select {
 			case <-stopCh:
 				return
-			case <-ticker.C:
-				// Re-check stopCh before doing any work to minimize the
-				// window where a draw can be dispatched after stop is
-				// signaled.
-				select {
-				case <-stopCh:
-					return
-				default:
-				}
-				// Use a timeout for the individual call to prevent hanging.
-				reqCtx, reqCancel := context.WithTimeout(ctx, indicatorPollTimeout)
-				cursorX, cursorY, err := h.modeIndicatorService.GetCursorPosition(reqCtx)
-
-				reqCancel()
-
-				if err != nil {
-					continue
-				}
-
-				// Use TryLock to avoid deadlocking with stopIndicatorPolling,
-				// which is called while h.mu is held (e.g. exitModeLocked →
-				// performCommonCleanup → stopIndicatorPolling blocks on
-				// indicatorDoneCh). If the lock is contended, skip this tick.
-				if !h.mu.TryLock() {
-					continue
-				}
-				showModeInd := h.shouldShowModeIndicator(h.appState.CurrentMode())
-				stickyEnabled := h.stickyModifiersEnabled()
-				stickyPoint := h.stickyIndicatorAnchorLocked(image.Pt(cursorX, cursorY))
-
-				cursorPt := image.Pt(cursorX, cursorY)
-
-				if !cursorPt.In(h.screenBounds) && h.system != nil {
-					boundsCtx, boundsCancel := context.WithTimeout(ctx, indicatorPollTimeout)
-					newBounds, boundsErr := h.system.ScreenBounds(boundsCtx)
-
-					boundsCancel()
-
-					if boundsErr == nil && newBounds != h.screenBounds {
-						h.screenBounds = newBounds
-						// Must unlock before resizing overlays — the resize
-						// dispatches to the main queue and we must not hold
-						// h.mu across that call.
-						h.mu.Unlock()
-
-						if ind := h.overlayManager.ModeIndicatorOverlay(); ind != nil {
-							ind.ResizeToActiveScreen()
-						}
-
-						if stickyInd := h.overlayManager.StickyModifiersOverlay(); stickyInd != nil {
-							stickyInd.ResizeToActiveScreen()
-						}
-						// Skip the draw this tick so the next tick draws with
-						// a fully-updated h.screenBounds. The mode indicator
-						// and sticky modifier overlays use small windows that
-						// are positioned dynamically each tick, so this skip
-						// is mostly defensive against the display change
-						// coinciding with a draw dispatch.
-						continue
-					}
-				}
-
-				h.mu.Unlock()
-
-				// The small indicator overlays (mode indicator, sticky modifiers)
-				// take absolute Quartz coordinates. The native side clamps the
-				// window frame to the active display to prevent the
-				// multi-monitor flicker.
-
-				// Mode indicator: show and draw when enabled, hide otherwise.
-				if showModeInd {
-					if ind := h.overlayManager.ModeIndicatorOverlay(); ind != nil {
-						ind.Show()
-					}
-
-					h.modeIndicatorService.UpdateIndicatorPosition(cursorX, cursorY)
-				} else if ind := h.overlayManager.ModeIndicatorOverlay(); ind != nil {
-					ind.Clear()
-					ind.Hide()
-				}
-
-				// Sticky modifiers indicator: show and draw when modifiers
-				// are active, hide otherwise.
-				if stickyEnabled {
-					if h.stickyModifiers() != 0 {
-						if stickyInd := h.overlayManager.StickyModifiersOverlay(); stickyInd != nil {
-							stickyInd.Show()
-						}
-
-						h.drawStickyModifiersIndicator(stickyPoint.X, stickyPoint.Y)
-					} else if stickyInd := h.overlayManager.StickyModifiersOverlay(); stickyInd != nil {
-						if h.stickyIndicatorService != nil {
-							h.stickyIndicatorService.UpdateIndicatorPosition(
-								stickyPoint.X,
-								stickyPoint.Y,
-								"",
-							)
-						}
-
-						stickyInd.Clear()
-						stickyInd.Hide()
-					}
-				}
-
-				// Flush both indicator draws atomically to avoid intermediate
-				// buffer states appearing between the mode indicator and sticky
-				// modifiers draws. The overlay backend batches the buffer
-				// modifications and only sends them on Flush().
-				h.overlayManager.Flush()
+			default:
 			}
+
+			h.pollIndicatorsOnce(ctx)
 		}
-	}()
+	}
+}
+
+// indicatorSnapshot is what one tick decides to draw, read under h.mu.
+type indicatorSnapshot struct {
+	showModeIndicator  bool
+	stickyEnabled      bool
+	stickyActive       bool
+	stickySymbols      string
+	showVirtualPointer bool
+	stickyPoint        image.Point
+}
+
+// indicatorTickPlan is what one tick decided to do. It is computed under h.mu
+// and executed by pollIndicatorsOnce after the lock is released, so a draw is
+// never made while the handler's lock is held.
+type indicatorTickPlan struct {
+	// resizeIndicators means the screen bounds changed under the cursor:
+	// resize the indicator overlays instead of drawing, and let the next tick
+	// work from the updated bounds.
+	resizeIndicators bool
+
+	snap indicatorSnapshot
+}
+
+// pollIndicatorsOnce runs one tick: read the cursor, compute a plan under the
+// lock, then execute it with the lock released. Skipped entirely when the lock
+// is contended.
+func (h *Handler) pollIndicatorsOnce(ctx context.Context) {
+	reqCtx, reqCancel := context.WithTimeout(ctx, indicatorPollTimeout)
+	cursorX, cursorY, err := h.modeIndicatorService.GetCursorPosition(reqCtx)
+
+	reqCancel()
+
+	if err != nil {
+		return
+	}
+
+	plan, ok := h.planIndicatorTick(ctx, cursorX, cursorY)
+	if !ok {
+		return
+	}
+
+	if plan.resizeIndicators {
+		h.resizeIndicators()
+
+		return
+	}
+
+	h.drawIndicators(plan.snap, cursorX, cursorY)
+
+	// Re-hide the system cursor if macOS revealed it (e.g. right-click menu,
+	// Mission Control). Rate-limited to ~2 Hz.
+	h.rehideSystemCursor()
+
+	// Flush atomically so no intermediate state shows between overlay updates.
+	if h.overlayPort != nil {
+		h.overlayPort.Flush()
+	}
+}
+
+// planIndicatorTick computes what this tick should do. It takes and releases
+// h.mu itself; the caller executes the returned plan with the lock free.
+//
+// TryLock, not Lock: stopIndicatorPolling runs while h.mu is held and blocks
+// on indicatorDoneCh, so waiting here would deadlock. A contended tick is just
+// skipped, reported as ok == false.
+func (h *Handler) planIndicatorTick(
+	ctx context.Context,
+	cursorX, cursorY int,
+) (indicatorTickPlan, bool) {
+	if !h.mu.TryLock() {
+		return indicatorTickPlan{}, false
+	}
+	defer h.mu.Unlock()
+
+	if !image.Pt(cursorX, cursorY).In(h.screenBounds) && h.system != nil &&
+		h.adoptChangedScreenBounds(ctx) {
+		return indicatorTickPlan{resizeIndicators: true}, true
+	}
+
+	return indicatorTickPlan{snap: h.snapshotIndicators(cursorX, cursorY)}, true
+}
+
+// snapshotIndicators reads everything one tick's draw needs. Caller must hold
+// h.mu.
+func (h *handlerState) snapshotIndicators(cursorX, cursorY int) indicatorSnapshot {
+	snap := indicatorSnapshot{
+		showModeIndicator:  h.modeIndicatorEnabled(h.appState.CurrentMode()),
+		stickyEnabled:      h.stickyModifiersEnabled(),
+		showVirtualPointer: h.shouldShowCursorFollowingVirtualPointer(),
+	}
+
+	// Active means there is something to show: modifiers held, and symbols to
+	// draw for them. Deciding it here keeps the draw reading one flag.
+	if mods := h.stickyModifiers(); mods != 0 {
+		snap.stickySymbols = stickyindicator.ModifierSymbolsString(mods)
+		snap.stickyActive = snap.stickySymbols != ""
+	}
+
+	snap.stickyPoint = h.stickyIndicatorAnchor(image.Pt(cursorX, cursorY))
+
+	return snap
+}
+
+// adoptChangedScreenBounds re-reads the screen bounds and records them when
+// they changed, reporting whether they did. Caller must hold h.mu; the overlay
+// resize that must follow happens after the lock is released.
+func (h *handlerState) adoptChangedScreenBounds(ctx context.Context) bool {
+	boundsCtx, boundsCancel := context.WithTimeout(ctx, indicatorPollTimeout)
+	newBounds, boundsErr := h.system.ScreenBounds(boundsCtx)
+
+	boundsCancel()
+
+	if boundsErr != nil || newBounds == h.screenBounds {
+		return false
+	}
+
+	h.setScreenBounds(newBounds)
+
+	return true
+}
+
+// resizeIndicators sizes each indicator to the active screen.
+//
+// The polling goroutine calls it with h.mu released, from the plan a tick
+// computed. startIndicatorPolling calls it once before the goroutine starts,
+// under the lock every mode activation already holds, as it always has: the
+// resize dispatches to the main queue on macOS and is a no-op where an
+// indicator has no window of its own.
+func (h *handlerState) resizeIndicators() {
+	h.modeIndicatorService.ResizeToActiveScreen()
+	h.stickyIndicatorService.ResizeToActiveScreen()
+	h.virtualPointerService.ResizeToActiveScreen()
+}
+
+// drawIndicators shows, draws or hides each indicator from one snapshot. It
+// runs with h.mu released — everything it needs is in the snapshot. The
+// indicators take absolute global coordinates; the backend clamps them to the
+// active display.
+func (h *Handler) drawIndicators(snap indicatorSnapshot, cursorX, cursorY int) {
+	if snap.showModeIndicator {
+		h.modeIndicatorService.Show()
+		h.modeIndicatorService.UpdateIndicatorPosition(cursorX, cursorY)
+	} else {
+		h.modeIndicatorService.Hide()
+	}
+
+	if snap.stickyEnabled {
+		if snap.stickyActive {
+			h.stickyIndicatorService.Show()
+			h.stickyIndicatorService.UpdateIndicatorPosition(
+				snap.stickyPoint.X,
+				snap.stickyPoint.Y,
+				snap.stickySymbols,
+			)
+		} else {
+			h.stickyIndicatorService.Hide()
+		}
+	}
+
+	if snap.showVirtualPointer {
+		h.virtualPointerService.Show()
+		h.virtualPointerService.UpdateIndicatorPosition(cursorX, cursorY)
+	} else {
+		h.virtualPointerService.Hide()
+	}
 }
 
 // stopIndicatorPolling stops the indicator polling goroutine and cleans up
 // both mode indicator and sticky modifiers indicator overlays.
-func (h *Handler) stopIndicatorPolling() {
-	// Restore keyboard capture if uinput scroll was active.
-	if m := overlay.Get(); m != nil && eventtap.IsUinputScrollAvailable() {
-		m.SetKeyboardCaptureEnabled(true)
-	}
+func (h *handlerState) stopIndicatorPolling() {
+	// Restore keyboard capture if uinput scroll was active. Never re-enable it
+	// while an evdev keyboard grab owns the keyboard: on wlroots compositors the
+	// overlay's exclusive keyboard grab deactivates the focused app's toplevel,
+	// so a hints refresh (which stops indicator polling before rescanning) would
+	// re-read the wrong focused window and clear the hints.
+	setOverlayKeyboardCapture(h, true)
 
 	// Signal stop first.
 	if h.indicatorStopCh != nil {
@@ -205,17 +274,16 @@ func (h *Handler) stopIndicatorPolling() {
 		<-h.indicatorDoneCh
 		h.indicatorDoneCh = nil
 	}
-	// Clear and hide the mode indicator overlay AFTER the goroutine has fully
-	// stopped. This ensures any late draw dispatched by the last tick is
-	// overridden, preventing the indicator from persisting on screen.
-	if ind := h.overlayManager.ModeIndicatorOverlay(); ind != nil {
-		ind.Clear()
-		ind.Hide()
-	}
-	// Also clear and hide the sticky modifiers indicator.
-	if stickyInd := h.overlayManager.StickyModifiersOverlay(); stickyInd != nil {
-		stickyInd.Clear()
-		stickyInd.Hide()
+	// Hide the indicators AFTER the goroutine has fully stopped, so a late
+	// draw dispatched by the last tick cannot put one back on screen.
+	h.modeIndicatorService.Hide()
+	h.stickyIndicatorService.Hide()
+
+	// The virtual pointer stands in for the system cursor rather than for a
+	// mode, so it outlives polling whenever the cursor is still hidden.
+	// All callers hold h.mu, so state methods are callable directly.
+	if !h.shouldShowCursorFollowingVirtualPointer() {
+		h.hideCursorFollowingVirtualPointer()
 	}
 	// Clean up resources after loop has exited.
 	if h.indicatorTicker != nil {
@@ -224,7 +292,7 @@ func (h *Handler) stopIndicatorPolling() {
 	}
 }
 
-func (h *Handler) modeIndicatorEnabled(mode domain.Mode) bool {
+func (h *handlerState) modeIndicatorEnabled(mode domain.Mode) bool {
 	if h.config == nil {
 		return false
 	}
@@ -240,41 +308,49 @@ func (h *Handler) modeIndicatorEnabled(mode domain.Mode) bool {
 		return h.config.ModeIndicator.Grid.Enabled
 	case domain.ModeRecursiveGrid:
 		return h.config.ModeIndicator.RecursiveGrid.Enabled
+	case domain.ModeBisect:
+		return h.config.ModeIndicator.Bisect.Enabled
 	case domain.ModeMonitorSelect:
 		return h.config.ModeIndicator.MonitorSelect.Enabled
+	case domain.ModeCustom:
+		// A declared mode has no enabled flag: its indicator is shown when it
+		// was given text, and an undeclared name reads the zero value.
+		return h.config.Modes[h.appState.CustomModeName()].Indicator != ""
 	default:
 		return false
 	}
 }
 
-func (h *Handler) shouldShowModeIndicator(mode domain.Mode) bool {
-	return h.modeIndicatorEnabled(mode)
-}
-
-func (h *Handler) stickyIndicatorAnchorLocked(cursorPoint image.Point) image.Point {
-	switch h.appState.CurrentMode() {
-	case domain.ModeGrid:
-		if h.grid == nil || h.grid.Context == nil || h.grid.Context.CursorFollowSelection() {
-			return cursorPoint
-		}
-
-		if selectionPoint, ok := h.grid.Context.SelectionPoint(); ok {
-			return selectionPoint
-		}
-	case domain.ModeRecursiveGrid:
-		if h.recursiveGrid == nil || h.recursiveGrid.Context == nil ||
-			h.recursiveGrid.Context.CursorFollowSelection() {
-			return cursorPoint
-		}
-
-		if selectionPoint, ok := h.recursiveGrid.Context.SelectionPoint(); ok {
-			return selectionPoint
-		}
-	case domain.ModeIdle:
-	case domain.ModeHints:
-	case domain.ModeMonitorSelect:
-	case domain.ModeScroll:
+// stickyIndicatorAnchor reports where the sticky-modifier indicator should
+// sit. A mode that tracks a selection anchors it there rather than to the
+// cursor, so the indicator follows what the user is aiming at; every other
+// mode, and a mode whose cursor is already on its selection, anchors to the
+// cursor.
+func (h *handlerState) stickyIndicatorAnchor(cursorPoint image.Point) image.Point {
+	tracker, ok := activeModeExtension[selectionTracker](h)
+	if !ok {
+		return cursorPoint
 	}
 
-	return cursorPoint
+	anchor, anchored := tracker.SelectionAnchor()
+	if !anchored {
+		return cursorPoint
+	}
+
+	return anchor
+}
+
+// setOverlayKeyboardCapture asks the overlay to hold or release the keyboard.
+//
+// What confines this to Linux is the gate, not the overlay: only the evdev
+// event tap reports that the overlay holds the keyboard, and only there does
+// releasing it matter — an evdev grab deactivates the focused toplevel, so the
+// poller has to let go before reading which window is focused. Everywhere else
+// the gate is closed, and an overlay with no grab to release is a no-op anyway.
+func setOverlayKeyboardCapture(h *handlerState, enabled bool) {
+	if h.overlayPort == nil || !h.allowsOverlayKeyboardPassthrough() {
+		return
+	}
+
+	h.overlayPort.SetKeyboardCaptureEnabled(enabled)
 }

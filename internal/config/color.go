@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"regexp"
 
-	derrors "github.com/y3owk1n/neru/internal/core/errors"
+	"github.com/y3owk1n/neru/internal/derrors"
 )
 
 var (
@@ -12,7 +12,7 @@ var (
 	solidColorRegex = regexp.MustCompile(`^#([A-Fa-f0-9]{3}|[A-Fa-f0-9]{6})$`)
 )
 
-// Color represents a color that can be specified as either a single value
+// Color is a color that can be specified as either a single value
 // (same for both light/dark themes) or as separate light and dark values.
 type Color struct {
 	Light string `json:"light" toml:"light"`
@@ -153,7 +153,7 @@ func (c *Color) Validate(fieldName string) error {
 }
 
 // ValidateSolidColor checks if the color value is a valid solid hex color.
-// Unlike ValidateColor, this rejects alpha-bearing #AARRGGBB inputs.
+// Unlike Color.Validate, this rejects alpha-bearing #AARRGGBB inputs.
 func ValidateSolidColor(color, fieldName string) error {
 	if color == "" {
 		return nil

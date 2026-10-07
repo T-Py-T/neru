@@ -8,7 +8,8 @@ import (
 	"go.uber.org/zap"
 
 	configpkg "github.com/y3owk1n/neru/internal/config"
-	"github.com/y3owk1n/neru/internal/core/domain"
+	"github.com/y3owk1n/neru/internal/domain"
+	"github.com/y3owk1n/neru/internal/domain/modecmd"
 )
 
 // passthroughHintRefreshDelay is the delay before refreshing hints after a
@@ -17,52 +18,116 @@ import (
 // AX elements.
 const passthroughHintRefreshDelay = 300 * time.Millisecond
 
-func (h *Handler) syncModifierPassthrough(mode domain.Mode) {
-	enabled := h.config != nil &&
-		mode != domain.ModeIdle &&
-		h.config.General.PassthroughUnboundedKeys
-
-	// Resolve the focused app bundle ID once so both the blacklist and the
-	// intercepted modifier key list use a consistent snapshot. The query is
-	// only needed for hints mode — other modes have no per-app overrides.
-	var bundleID string
-	if enabled && mode == domain.ModeHints && h.config.Hints.HasAppHotkeyOverrides() {
-		bundleID = h.focusedBundleID()
-	}
-
-	if h.setPassthroughCallback != nil {
-		h.setPassthroughCallback(h.passthroughCallbackFor(mode, enabled))
-	}
-
-	if h.setModifierPassthrough != nil {
-		blacklist := []string(nil)
-		if enabled {
-			blacklist = append(blacklist, h.config.General.PassthroughUnboundedKeysBlacklist...)
-
-			// Hotkeys for the current mode must also be blacklisted
-			// so the event tap consumes them instead of passing them through.
-			hotkeys := h.config.HotkeysForModeAndApp(domain.ModeString(mode), bundleID)
-			for key := range hotkeys {
-				blacklist = append(blacklist, configpkg.CanonicalHotkeyForPlatform(key))
-			}
-		}
-
-		h.setModifierPassthrough(enabled, blacklist)
-	}
-
-	if h.setInterceptedModifierKeys == nil {
+// syncModifierPassthrough tells the event tap which keys the active mode
+// answers to, so it consumes those and passes the rest through.
+//
+// Both lists it builds are the keys of the keymap in force, read rather than
+// merged: this runs on the triggers that settle one — a mode change, a
+// configuration replacement, a hints refresh after the focused app changed, and
+// a focused-app change under an open mode — so there is nothing here to
+// invalidate. Every caller passes the mode that is active, which is what makes
+// the settled keymap the right one to read.
+//
+// Caller must hold h.mu.
+func (h *handlerState) syncModifierPassthrough(mode domain.Mode) {
+	if !h.hasEventTap() {
 		return
 	}
 
-	keys := []string(nil)
+	enabled := h.passthroughEnabledFor(mode)
+
+	h.setPassthroughCallback(h.passthroughCallbackFor(mode, enabled))
+
+	// The keymaps are only consulted when passthrough is on: with it off the tap
+	// consumes everything anyway, and a mode that is not open binds nothing.
+	keymap := configpkg.Keymap{}
+	globalHotkeys := configpkg.Keymap{}
+	blacklist := []string(nil)
+
 	if enabled {
-		keys = h.modeModifierKeys(mode, bundleID)
+		keymap, globalHotkeys = h.settledKeymaps()
+
+		blacklist = append(blacklist, h.config.General.PassthroughUnboundedKeysBlacklist...)
+
+		// The keys the mode binds must also be blacklisted so the event tap
+		// consumes them instead of passing them through. So must the global
+		// chords the mode falls back to, and for the same reason: passed through,
+		// the tap would hand the user's own hotkey to the application in front of
+		// them and the fallback would never see the key at all.
+		for _, key := range append(keymap.Keys(), globalHotkeys.Keys()...) {
+			blacklist = append(blacklist, configpkg.CanonicalHotkeyForPlatform(key))
+		}
 	}
 
-	h.setInterceptedModifierKeys(keys)
+	h.setModifierPassthrough(enabled, blacklist)
+
+	h.setInterceptedModifierKeys(modeModifierKeys(keymap, globalHotkeys))
 }
 
-func (h *Handler) passthroughCallbackFor(mode domain.Mode, enabled bool) func() {
+// passthroughEnabledFor reports whether the event tap should hand unbound
+// modifier chords to the focused application while mode is active. Idle counts
+// as off: a mode that is not open binds nothing, so there would be nothing to
+// hold back.
+//
+// Caller must hold h.mu.
+func (h *handlerState) passthroughEnabledFor(mode domain.Mode) bool {
+	return h.config != nil &&
+		mode != domain.ModeIdle &&
+		h.config.General.PassthroughUnboundedKeys
+}
+
+// RefreshPassthroughForFocusedAppChange re-synchronizes the event tap with the
+// bindings the application the user just switched to puts in force, so the keys
+// the tap consumes and the keys the mode is bound to keep describing the same
+// set while a mode stays open across an application switch.
+//
+// The keymap can settle lazily because a keystroke reads it, so the read is the
+// trigger (ADR 0005). Passthrough cannot: the blacklist is what decides whether
+// the next chord reaches Neru at all, so waiting for a keystroke means waiting
+// for the keystroke that already went to the other application. This has to be
+// pushed, and it is pushed from a goroutine the app layer starts
+// (`handleAppActivation`, `app/lifecycle.go`) — never inline from the watcher
+// callback, which on macOS runs on the main queue, where taking h.mu is
+// forbidden (internal/app/modes/AGENTS.md). What the goroutine buys is only
+// that the handler is reached off the main queue: this still queues behind
+// whatever holds h.mu, so it lands as soon as the handler is free rather than
+// in step with the focus change.
+//
+// It reads the published cell rather than taking the application as an
+// argument, which is what makes two of these racing harmless: whichever runs
+// last reads the newest publication and the other is a no-op against an
+// unchanged keymap. Reading it is also all it will ever do: settling a keymap
+// with nothing published asks the platform, and that call is the unbounded
+// cross-process one ADR 0005 keeps off h.mu for everything the user is not
+// waiting on. Nobody waits on a focus change, so this returns instead.
+func (h *Handler) RefreshPassthroughForFocusedAppChange() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	mode := h.appState.CurrentMode()
+
+	// Nothing to move unless all three hold: something has to have announced
+	// the application, the tap has to be routing chords by the lists at all,
+	// and the active mode has to bind something the focused application can
+	// change — the last is the reasoning keymapInputs applies to the keymap.
+	// With any of them missing, the state set when the mode opened still
+	// describes what is bound.
+	if _, published := h.focusedApp.published(); !published {
+		return
+	}
+
+	// The last of the three asks about both tables in force, not just the mode's
+	// own: a global chord the mode falls back to is on the blacklist too, and an
+	// [[app_configs]] entry can rebind one, so the focused application moving can
+	// move that half as well.
+	if !h.passthroughEnabledFor(mode) || !h.focusedAppCanChangeWhatIsBound(mode) {
+		return
+	}
+
+	h.syncModifierPassthrough(mode)
+}
+
+func (h *handlerState) passthroughCallbackFor(mode domain.Mode, enabled bool) func() {
 	if !enabled {
 		return nil
 	}
@@ -70,41 +135,44 @@ func (h *Handler) passthroughCallbackFor(mode domain.Mode, enabled bool) func() 
 	session := h.modeSession
 
 	return func() {
-		h.handlePassthrough(mode, session)
+		h.outer.handlePassthrough(mode, session)
 	}
 }
 
 const initialCapacity = 16
 
-func (h *Handler) modeModifierKeys(mode domain.Mode, bundleID string) []string {
-	if h.config == nil || mode == domain.ModeIdle {
-		return nil
-	}
-
+// modeModifierKeys is the modifier chords the given keymaps bind, in the form
+// the platform canonicalizes them to: the event tap intercepts these instead of
+// passing them through to the focused application.
+//
+// It takes both tables in force while a mode is open — the mode's own, and the
+// global chords it falls back to — because the tap asks a single question about a
+// chord, so the two reach it as one list. A chord both tables bind is one entry,
+// which is also the answer either way.
+func modeModifierKeys(mode, global configpkg.Keymap) []string {
 	keys := make([]string, 0, initialCapacity)
 	seen := make(map[string]struct{}, initialCapacity)
 
-	appendKey := func(key string) {
-		trimmed := strings.TrimSpace(key)
-		if trimmed == "" || !configpkg.HasPassthroughModifier(trimmed) {
-			return
+	for _, keymap := range []configpkg.Keymap{mode, global} {
+		for _, key := range keymap.Keys() {
+			trimmed := strings.TrimSpace(key)
+			if trimmed == "" || !configpkg.HasPassthroughModifier(trimmed) {
+				continue
+			}
+
+			normalized := configpkg.CanonicalHotkeyForPlatform(trimmed)
+			if _, exists := seen[normalized]; exists {
+				continue
+			}
+
+			seen[normalized] = struct{}{}
+
+			keys = append(keys, normalized)
 		}
-
-		normalized := configpkg.CanonicalHotkeyForPlatform(trimmed)
-		if _, exists := seen[normalized]; exists {
-			return
-		}
-
-		seen[normalized] = struct{}{}
-
-		keys = append(keys, normalized)
 	}
 
-	// Append hotkey keys for the current mode so the event tap
-	// intercepts them instead of passing them through to macOS.
-	hotkeys := h.config.HotkeysForModeAndApp(domain.ModeString(mode), bundleID)
-	for key := range hotkeys {
-		appendKey(key)
+	if len(keys) == 0 {
+		return nil
 	}
 
 	slices.Sort(keys)
@@ -120,10 +188,10 @@ func (h *Handler) handlePassthrough(mode domain.Mode, session uint64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	h.handlePassthroughLocked(mode, session)
+	h.passthroughTick(mode, session)
 }
 
-// handlePassthroughLocked is called when a modifier shortcut was passed through
+// passthroughTick is called when a modifier shortcut was passed through
 // to macOS while a mode was active. The mode/session arguments identify the
 // originating activation so stale callbacks can be ignored safely. Only hints
 // mode needs a refresh because its labels point at AX elements that may have
@@ -132,7 +200,7 @@ func (h *Handler) handlePassthrough(mode domain.Mode, session uint64) {
 // OS does with the shortcut.
 //
 // Caller must hold h.mu.
-func (h *Handler) handlePassthroughLocked(mode domain.Mode, session uint64) {
+func (h *handlerState) passthroughTick(mode domain.Mode, session uint64) {
 	if h.modeSession != session || h.appState.CurrentMode() != mode {
 		return
 	}
@@ -143,7 +211,7 @@ func (h *Handler) handlePassthroughLocked(mode domain.Mode, session uint64) {
 		h.logger.Debug("Exiting mode after passthrough",
 			zap.String("mode", domain.ModeString(mode)),
 			zap.Uint64("session", session))
-		h.exitModeLocked()
+		h.exitMode()
 
 		return
 	}
@@ -164,8 +232,8 @@ func (h *Handler) handlePassthroughLocked(mode domain.Mode, session uint64) {
 	timerSession := h.modeSession
 
 	timer = time.AfterFunc(passthroughHintRefreshDelay, func() {
-		h.mu.Lock()
-		defer h.mu.Unlock()
+		h.outer.mu.Lock()
+		defer h.outer.mu.Unlock()
 
 		// Guard against stale timer: if the user exited hints mode while we
 		// were waiting, or if hints was re-entered (new session), do not
@@ -185,16 +253,20 @@ func (h *Handler) handlePassthroughLocked(mode domain.Mode, session uint64) {
 		filterTextContains := h.hints.Context.FilterTextContains()
 		startWithSearch := h.hints.Context.StartWithSearch()
 		strategyOverride := h.hints.Context.StrategyOverride()
+		captureScopeOverride := h.hints.Context.CaptureScopeOverride()
 		labelDirectionOverride := h.hints.Context.LabelDirectionOverride()
-		h.activateHintModeInternal(
-			nil,
-			nil,
-			filterRoles,
-			filterTextContains,
-			&startWithSearch,
-			&strategyOverride,
-			&labelDirectionOverride,
-		)
+		splitWord := h.hints.Context.SplitWord()
+		h.activateHintModeInternal(modecmd.Activation{
+			Mode:               domain.ModeHints,
+			FilterRoles:        filterRoles,
+			FilterTextContains: filterTextContains,
+			Search:             &startWithSearch,
+			Strategy:           &strategyOverride,
+			CaptureScope:       &captureScopeOverride,
+			LabelDirection:     &labelDirectionOverride,
+			SplitWord:          &splitWord,
+			// OnExit is left nil to preserve the stored steps across refresh.
+		})
 	})
 	h.refreshHintsTimer = timer
 }

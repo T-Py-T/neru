@@ -5,16 +5,14 @@ package app
 import (
 	"time"
 
-	"go.uber.org/zap"
-
-	"github.com/y3owk1n/neru/internal/core/infra/platform/windows"
+	"github.com/y3owk1n/neru/internal/adapter/platform/windows"
 )
 
 const themePollInterval = 2 * time.Second
 
 // setupThemeObserver starts polling the Windows registry for theme changes.
 // Windows does not fire a notification when AppsUseLightTheme changes, so we
-// poll the registry every themePollInterval and fire handleThemeChange when
+// poll the registry every themePollInterval and fire HandleThemeChange when
 // the dark/light state flips. The goroutine exits when the app context is
 // canceled, so no separate stop mechanism is needed.
 func (a *App) setupThemeObserver() {
@@ -34,15 +32,12 @@ func (a *App) setupThemeObserver() {
 			currentDark := windows.AppsUseDarkTheme()
 			if currentDark != wasDark {
 				wasDark = currentDark
-				a.logger.Debug("Windows theme change detected via registry poll",
-					zap.Bool("is_dark", currentDark))
-				a.handleThemeChange(currentDark)
+				a.HandleThemeChange(currentDark)
 			}
 		}
 	}()
 }
 
-// stopThemeObserver is a no-op on Windows. The poll goroutine is stopped by
-// app context cancellation (a.cancel is called before stopThemeObserver in
-// Cleanup, so <-a.ctx.Done() fires before this runs).
-func (a *App) stopThemeObserver() {}
+// No teardown closure is registered on Windows: the poll goroutine is stopped
+// by app context cancellation (a.cancel runs before stopThemeObserver in
+// Cleanup, so <-a.ctx.Done() fires first).

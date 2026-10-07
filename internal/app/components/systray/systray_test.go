@@ -1,13 +1,15 @@
 package systray_test
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
 	"go.uber.org/zap/zaptest"
 
 	"github.com/y3owk1n/neru/internal/app/components/systray"
-	"github.com/y3owk1n/neru/internal/core/domain"
+	"github.com/y3owk1n/neru/internal/domain"
+	portmocks "github.com/y3owk1n/neru/internal/ports/mocks"
 )
 
 // mockApp implements AppInterface for testing.
@@ -27,6 +29,7 @@ type mockApp struct {
 func (m *mockApp) HintsEnabled() bool         { return m.hintsEnabled }
 func (m *mockApp) GridEnabled() bool          { return m.gridEnabled }
 func (m *mockApp) RecursiveGridEnabled() bool { return m.recursiveGridEnabled }
+func (m *mockApp) BisectEnabled() bool        { return true }
 func (m *mockApp) IsEnabled() bool            { return m.isEnabled }
 func (m *mockApp) SetEnabled(enabled bool) {
 	m.isEnabled = enabled
@@ -80,7 +83,7 @@ func TestNewComponent(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	mockApp := &mockApp{}
 
-	component := systray.NewComponent(mockApp, nil, logger)
+	component := systray.NewComponent(mockApp, &portmocks.MockSystrayPort{}, nil, logger)
 
 	if component == nil {
 		t.Fatal("NewComponent returned nil")
@@ -94,23 +97,99 @@ func TestComponent_OnReady(t *testing.T) {
 		gridEnabled:  true,
 	}
 
-	component := systray.NewComponent(mockApp, nil, logger)
+	tray := &portmocks.MockSystrayPort{}
+	component := systray.NewComponent(mockApp, tray, nil, logger)
 
-	// OnReady should not panic and set up menu items
-	// Note: We can't easily test systray.Run in unit tests
-	// as it requires a GUI environment
 	component.OnReady()
 
-	// Test completed without panic - menu items are initialized internally
+	// Before ports.SystrayPort existed this test could only assert "did not
+	// panic", because the menu was built against a process-global tray. The
+	// mock lets it assert what the user actually sees.
+	if tray.Tooltip() == "" {
+		t.Error("OnReady() set no tooltip on the tray")
+	}
+
+	items := tray.Items()
+	if len(items) == 0 {
+		t.Fatal("OnReady() created no menu items")
+	}
+
+	// Spot-check entries the menu must always carry, whatever else changes.
+	for _, want := range []string{"Help", "Config", "Activate Modes"} {
+		if tray.FindItem(want) == nil {
+			var titles []string
+			for _, item := range items {
+				if title := item.Title(); title != "" {
+					titles = append(titles, title)
+				}
+			}
+
+			t.Errorf("OnReady() built no %q item; got %v", want, titles)
+		}
+	}
+}
+
+// trayIconAtReady builds the menu for one enabled state and returns the icon
+// the tray was left showing.
+func trayIconAtReady(t *testing.T, enabled bool) []byte {
+	t.Helper()
+
+	tray := &portmocks.MockSystrayPort{}
+	component := systray.NewComponent(
+		&mockApp{isEnabled: enabled},
+		tray,
+		nil,
+		zaptest.NewLogger(t),
+	)
+
+	component.OnReady()
+
+	t.Cleanup(component.OnExit)
+
+	icon, _ := tray.Icon()
+
+	return icon
+}
+
+// TestComponent_OnReady_ShowsADistinctIconWhilePaused pins the one place a
+// user can see that Neru is paused without pressing a key. Every platform owes
+// two tray icons — macOS a second template glyph, the tray hosts that render
+// bytes literally a greyed tile — and showing one icon for both states makes the
+// state invisible.
+func TestComponent_OnReady_ShowsADistinctIconWhilePaused(t *testing.T) {
+	running := trayIconAtReady(t, true)
+	paused := trayIconAtReady(t, false)
+
+	if len(running) == 0 {
+		t.Fatal("the tray was left with no icon while running")
+	}
+
+	if len(paused) == 0 {
+		t.Fatal("the tray was left with no icon while paused")
+	}
+
+	if bytes.Equal(running, paused) {
+		t.Error("the tray shows the same icon running and paused; the paused state is invisible")
+	}
 }
 
 func TestComponent_OnExit(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	mockApp := &mockApp{}
 
-	component := systray.NewComponent(mockApp, nil, logger)
+	tray := &portmocks.MockSystrayPort{}
+	component := systray.NewComponent(mockApp, tray, nil, logger)
 
-	// OnExit should not panic; cleanup is owned by the daemon host, not the
-	// systray component.
+	component.OnReady()
+
+	// Shutdown runs OnExit and Close on paths that can overlap, so both must
+	// tolerate being called more than once. A panic or a double-close here
+	// fails the test.
 	component.OnExit()
+	component.OnExit()
+	component.Close()
+
+	if tray.FindItem("Help") == nil {
+		t.Error("OnExit() should not tear down the menu the tray still owns")
+	}
 }

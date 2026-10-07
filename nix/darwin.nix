@@ -6,8 +6,13 @@
 }:
 let
   cfg = config.services.neru;
+  tomlFormat = pkgs.formats.toml {};
   configFile =
-    if cfg.configFile != null then cfg.configFile else pkgs.writeText "config.toml" cfg.config;
+    if cfg.configFile != null
+    then cfg.configFile
+    else if cfg.settings != {}
+	then tomlFormat.generate "config.toml" cfg.settings
+    else pkgs.writeText "config.toml" cfg.config;
   effectiveEnv = {
     PATH = "/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
   }
@@ -27,6 +32,13 @@ in
         type = lib.types.nullOr lib.types.path;
         default = null;
         description = "Path to existing config.toml configuration file. Takes precedence over config option.";
+      };
+	  settings = lib.mkOption {
+        inherit (tomlFormat) type;
+        default = {};
+        description = ''
+          Configuration of neru in nix programming language
+        '';
       };
       launchd = {
         enable = lib.mkEnableOption "the launchd agent managing the Neru process" // {
@@ -73,14 +85,42 @@ in
           EnvironmentVariables = effectiveEnv;
           KeepAlive = cfg.launchd.keepAlive;
           RunAtLoad = true;
-          StandardOutPath = "/tmp/neru.log";
-          StandardErrorPath = "/tmp/neru.err.log";
+          # Neither stream is redirected. This agent is installed system-wide
+          # and runs for whichever user logs in, so no per-user log path can be
+          # written here at build time, and a shared one (/tmp) would put the
+          # daemon's output where every local user can read it. Neru writes its
+          # own rotated log to ~/Library/Logs/neru/app.log regardless; for a
+          # single-user machine that also wants crash output captured, use the
+          # home-manager module, which can name the user's own log directory.
           ProcessType = "Interactive";
           LimitLoadToSessionType = "Aqua";
           Nice = -10;
           ThrottleInterval = 10;
         };
       };
+
+	  assertions = [
+        # Fail if user set more than one configuration source
+        {
+          assertion =
+            (lib.count (x: x) [
+              (cfg.settings != {})
+              (cfg.configFile != null)
+              (cfg.config != builtins.readFile ../configs/default-config.toml)
+            ])
+            <= 1;
+
+          message = ''
+            services.neru: only one of the following options may be set:
+              - services.neru.settings
+              - services.neru.config
+              - services.neru.configFile
+
+            Please choose a single configuration source.
+          '';
+        }
+      ];
+
     }
   );
 }

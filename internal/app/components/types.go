@@ -1,72 +1,78 @@
 package components
 
 import (
-	"strings"
-
 	"go.uber.org/zap"
 
+	"github.com/y3owk1n/neru/internal/app/components/bisect"
 	"github.com/y3owk1n/neru/internal/app/components/grid"
 	"github.com/y3owk1n/neru/internal/app/components/hints"
-	"github.com/y3owk1n/neru/internal/app/components/modeindicator"
 	"github.com/y3owk1n/neru/internal/app/components/recursivegrid"
 	"github.com/y3owk1n/neru/internal/app/components/scroll"
-	"github.com/y3owk1n/neru/internal/app/components/stickyindicator"
 	"github.com/y3owk1n/neru/internal/config"
-	domainGrid "github.com/y3owk1n/neru/internal/core/domain/grid"
-	domainRecursiveGrid "github.com/y3owk1n/neru/internal/core/domain/recursivegrid"
+	domainBisect "github.com/y3owk1n/neru/internal/domain/bisect"
+	domainGrid "github.com/y3owk1n/neru/internal/domain/grid"
+	domainRecursiveGrid "github.com/y3owk1n/neru/internal/domain/recursivegrid"
 )
 
 // HintsComponent encapsulates all hints-related functionality.
+//
+// It names no overlay at all: what a hints session keeps is state, and the
+// surface it ends up on is reached through ports.OverlayPort.
 type HintsComponent struct {
-	Overlay *hints.Overlay
 	Context *hints.Context
-	Style   hints.StyleMode
-	Theme   config.ThemeProvider
-}
-
-// UpdateConfig updates the hints component with new configuration.
-func (h *HintsComponent) UpdateConfig(cfg *config.Config, _ *zap.Logger) {
-	if h.Overlay != nil && cfg.Hints.Enabled {
-		h.Style = hints.BuildStyle(cfg.Hints, h.Theme)
-		h.Overlay.SetConfig(cfg.Hints)
-	}
 }
 
 // GridComponent encapsulates all grid-related functionality.
 type GridComponent struct {
-	Overlay *grid.Overlay
 	Manager *domainGrid.Manager
 	Router  *domainGrid.Router
 	Context *grid.Context
-	Style   grid.Style
-	Theme   config.ThemeProvider
 }
 
-// UpdateConfig updates the grid component with new configuration.
-func (g *GridComponent) UpdateConfig(config *config.Config, logger *zap.Logger) {
-	if config.Grid.Enabled {
-		g.Style = grid.BuildStyle(config.Grid, g.Theme)
-		if g.Overlay != nil {
-			g.Overlay.SetConfig(config.Grid)
-		}
-
+// UpdateConfig rebuilds the grid's domain state — the grid itself and its
+// subgrid keys — when the configuration that defines them changes. Appearance
+// is not its business; the overlay resolves that.
+//
+// It runs under the mode handler's `h.mu` (`modes.Handler.UpdateConfig`),
+// because the manager it writes is the one a keystroke reads under that same
+// lock and carries none of its own (#1277). So it must stay pure: no overlay,
+// service or port call belongs here.
+func (g *GridComponent) UpdateConfig(cfg *config.Config, logger *zap.Logger) {
+	if cfg.Grid.Enabled {
 		if g.Manager != nil {
 			// Recreate grid if characters or labels changed
 			oldGrid := g.Manager.Grid()
-			if oldGrid != nil && config.Grid.Characters != "" {
-				charactersChanged := strings.ToUpper(config.Grid.Characters) != oldGrid.Characters()
-				rowLabelsChanged := strings.ToUpper(config.Grid.RowLabels) != oldGrid.RowLabels()
-				colLabelsChanged := strings.ToUpper(config.Grid.ColLabels) != oldGrid.ColLabels()
+			if oldGrid != nil && cfg.Grid.Characters != "" {
+				// The config arrives with its labels already resolved to the
+				// ones in use (config.ResolveGridLabels), and the grid stores
+				// the same resolved form, so this is a plain comparison. It
+				// used to infer the labels here, which is the only place that
+				// rule existed — and getting it wrong rebuilt the grid on every
+				// reload, discarding the user's in-flight coordinate input.
+				// Each side asked of the grid rather than compared as written,
+				// which is the same rule one step further on: the grid drops a
+				// character a set repeats, so a set that gained only a repeat is
+				// the set already in use, and comparing the strings would rebuild
+				// on every reload for the rest of that config's life.
+				characters := cfg.GridCharacters()
+				newCharacters := domainGrid.ResolveCharacters(characters)
+				newRowLabels := string(domainGrid.DistinctKeys(cfg.Grid.RowLabels))
+				newColLabels := string(domainGrid.DistinctKeys(cfg.Grid.ColLabels))
 
-				if charactersChanged || rowLabelsChanged || colLabelsChanged {
+				charactersChanged := newCharacters != oldGrid.Characters()
+				rowLabelsChanged := newRowLabels != oldGrid.RowLabels()
+				colLabelsChanged := newColLabels != oldGrid.ColLabels()
+				maxLabelLengthChanged := cfg.Grid.MaxLabelLength != oldGrid.MaxLabelLength()
+
+				if charactersChanged || rowLabelsChanged || colLabelsChanged ||
+					maxLabelLengthChanged {
 					logger.Debug("Recreating grid due to config changes",
-						zap.Bool("charactersChanged", charactersChanged),
-						zap.Bool("rowLabelsChanged", rowLabelsChanged),
-						zap.Bool("colLabelsChanged", colLabelsChanged))
-					newGrid := domainGrid.NewGridWithLabels(
-						config.Grid.Characters,
-						config.Grid.RowLabels,
-						config.Grid.ColLabels,
+						zap.Bool("characters_changed", charactersChanged),
+						zap.Bool("row_labels_changed", rowLabelsChanged),
+						zap.Bool("col_labels_changed", colLabelsChanged),
+						zap.Bool("max_label_length_changed", maxLabelLengthChanged))
+					newGrid := domainGrid.NewGridWithOptions(
+						cfg.GridOptions(),
 						oldGrid.Bounds(),
 						logger,
 					)
@@ -74,13 +80,10 @@ func (g *GridComponent) UpdateConfig(config *config.Config, logger *zap.Logger) 
 				}
 			}
 
-			// Update manager subgrid keys if they changed
-			subKeys := config.Grid.SublayerKeys
-			if subKeys == "" {
-				subKeys = config.Grid.Characters
-			}
-
-			g.Manager.UpdateSubKeys(subKeys)
+			// Update manager subgrid keys if they changed. They arrive resolved
+			// to the ones the overlay draws (config.ResolveSublayerKeys), so
+			// there is nothing to infer here.
+			g.Manager.UpdateSubKeys(cfg.Grid.SublayerKeys)
 		}
 	}
 }
@@ -90,44 +93,23 @@ type ScrollComponent struct {
 	Context *scroll.Context
 }
 
-// UpdateConfig updates the scroll component with new configuration.
+// UpdateConfig updates the scroll component with new configuration. There is
+// nothing to derive today; it is called anyway so that whatever lands here
+// lands under the mode handler's `h.mu` (`modes.Handler.UpdateConfig`) by
+// construction rather than by someone noticing, the way the grid's did not
+// (#1277). The same rule applies: stay pure — no overlay, service or port call.
 func (s *ScrollComponent) UpdateConfig(_ *config.Config, _ *zap.Logger) {
-}
-
-// ModeIndicatorComponent encapsulates the shared mode indicator overlay.
-type ModeIndicatorComponent struct {
-	Overlay *modeindicator.Overlay
-}
-
-// UpdateConfig updates the mode indicator component with new configuration.
-func (m *ModeIndicatorComponent) UpdateConfig(cfg *config.Config, _ *zap.Logger) {
-	if m.Overlay != nil {
-		m.Overlay.SetConfig(cfg.ModeIndicator)
-	}
-}
-
-// StickyIndicatorComponent encapsulates the sticky modifiers indicator overlay.
-type StickyIndicatorComponent struct {
-	Overlay *stickyindicator.Overlay
-}
-
-// UpdateConfig updates the sticky indicator component with new configuration.
-func (s *StickyIndicatorComponent) UpdateConfig(cfg *config.Config, _ *zap.Logger) {
-	if s.Overlay != nil {
-		s.Overlay.SetConfig(cfg.StickyModifiers.UI)
-	}
 }
 
 // RecursiveGridComponent encapsulates all recursive-grid-related functionality.
 type RecursiveGridComponent struct {
 	Manager *domainRecursiveGrid.Manager
-	Overlay *recursivegrid.Overlay
 	Context *recursivegrid.Context
 }
 
-// UpdateConfig updates the recursive-grid component with new configuration.
-func (q *RecursiveGridComponent) UpdateConfig(cfg *config.Config, _ *zap.Logger) {
-	if cfg.RecursiveGrid.Enabled && q.Overlay != nil {
-		q.Overlay.SetConfig(cfg.RecursiveGrid)
-	}
+// BisectComponent holds one bisect session: the region and the session
+// context. Region is nil between sessions.
+type BisectComponent struct {
+	Region  *domainBisect.Region
+	Context *bisect.Context
 }

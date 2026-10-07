@@ -1,0 +1,288 @@
+// XKB translation for evdev key codes: mapping captured codes to key names in
+// the reference layout, and to modifier names in the active one.
+//
+// These are methods on the capture rather than on a reader, because the answer
+// belongs to the devices and their keymap and not to whoever is reading them.
+// Both readers of `/dev/input` need it and must agree: the in-mode event tap
+// (evdev_session_cgo.go) and the passive global-hotkey listener
+// (global_hotkey_cgo.go). One naming for one physical key is what lets a chord a
+// user wrote once match in both — the listener naming keys by raw scan code while
+// the tap named them by keymap meant a `[hotkeys]` binding answered a different
+// physical key inside a mode than out of it on any layout that is not us.
+
+//go:build linux && cgo
+
+package linux
+
+/*
+#include <stdlib.h>
+#include "../../platform/linux/evdev.h"
+#include "../../platform/linux/wayland_keymap.h"
+*/
+import "C"
+
+import (
+	"sync/atomic"
+	"unsafe"
+
+	"go.uber.org/zap"
+)
+
+// waylandKeyboardLayouts is the last layout list a Wayland capture published,
+// for neru doctor, which asks from a goroutine the capture does not run on.
+var waylandKeyboardLayouts atomic.Pointer[KeyboardLayouts]
+
+// keyName resolves a scan code to the name Neru's bindings match against. It
+// applies the live modifiers in the reference layout, which is the first
+// ASCII-capable layout of the compositor's keymap. On a us,ru keymap with
+// Russian active, the key left of W still matches a binding written q. It falls
+// back to the built-in scan-code table when there is no keymap to ask.
+//
+// The fallback is a real answer rather than a failure: it is the name the code
+// carries on a us layout, which is what the table holds.
+func (capture *waylandEvdevCapture) keyName(code uint16) string {
+	if capture == nil || capture.xkbState == nil {
+		return evdevKeyName(code)
+	}
+
+	capture.applyRequestedLayout()
+
+	var buf [64]C.char
+	if C.neru_xkb_state_key_get_command_name(
+		(*C.neru_xkb_state)(capture.xkbState),
+		C.uint16_t(code),
+		&buf[0],
+		C.size_t(len(buf)),
+	) == 0 {
+		return C.GoString(&buf[0])
+	}
+
+	return evdevKeyName(code)
+}
+
+// applyRequestedLayout hands the layout general.kb_layout_to_use forces to the
+// xkb state when it changed since the last call. It runs on the capture's own
+// goroutine, before every key it names, and costs one atomic load when nothing
+// changed.
+func (capture *waylandEvdevCapture) applyRequestedLayout() {
+	requested := requestedKeyboardLayout.Load()
+	if requested == capture.appliedLayout {
+		return
+	}
+
+	capture.appliedLayout = requested
+
+	var name string
+	if requested != nil {
+		name = *requested
+	}
+
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+
+	state := (*C.neru_xkb_state)(capture.xkbState)
+	if C.neru_xkb_state_set_reference_layout(state, cName) == 0 && capture.logger != nil {
+		capture.logger.Warn(
+			"Configured keyboard layout is not in the compositor's keymap; using automatic selection",
+			zap.String("layout_id", name),
+			zap.Int("layouts", int(C.neru_xkb_state_layout_count(state))),
+		)
+	}
+
+	waylandKeyboardLayouts.Store(capture.keyboardLayouts())
+}
+
+// keyboardLayouts lists the keymap's layouts by XKB name and names the
+// reference one.
+func (capture *waylandEvdevCapture) keyboardLayouts() *KeyboardLayouts {
+	state := (*C.neru_xkb_state)(capture.xkbState)
+	layouts := &KeyboardLayouts{Unmatched: C.neru_xkb_state_reference_found(state) == 0}
+
+	for layout := range int(C.neru_xkb_state_layout_count(state)) {
+		name := C.neru_xkb_state_layout_name(state, C.int(layout))
+		if name == nil {
+			continue
+		}
+
+		layouts.Names = append(layouts.Names, C.GoString(name))
+		if int(C.neru_xkb_state_reference_index(state)) == layout {
+			layouts.Reference = C.GoString(name)
+		}
+	}
+
+	return layouts
+}
+
+// liveKeyName resolves a scan code in the layout the keyboard state is in.
+// modifierName uses it because an XKB remap such as ctrl:swapcaps belongs to
+// the layout that carries it.
+func (capture *waylandEvdevCapture) liveKeyName(code uint16) string {
+	var buf [64]C.char
+	if C.neru_xkb_state_key_get_name(
+		(*C.neru_xkb_state)(capture.xkbState),
+		C.uint16_t(code),
+		&buf[0],
+		C.size_t(len(buf)),
+	) != 0 {
+		return ""
+	}
+
+	return C.GoString(&buf[0])
+}
+
+// xkbKeysymName names a state-resolved keysym by the rule keyName applies to a
+// scan code, without needing a keymap: the character it types, else the folded
+// keysym name. It exists so that rule can be pinned from a test.
+func xkbKeysymName(keysym uint32) string {
+	var buf [64]C.char
+	if C.neru_xkb_keysym_name(C.uint32_t(keysym), &buf[0], C.size_t(len(buf))) != 0 {
+		return ""
+	}
+
+	return C.GoString(&buf[0])
+}
+
+// modifierName returns the canonical evdev modifier name for the given scan code
+// as resolved by the XKB keymap, or empty string when the key is not a modifier.
+// When XKB remaps a physical modifier to a different function (e.g. ctrl:swapcaps
+// makes Caps Lock act as Control), this returns the remapped modifier name so the
+// reader tracks the correct modifier.
+func (capture *waylandEvdevCapture) modifierName(code uint16) string {
+	if capture == nil || capture.xkbState == nil {
+		return evdevModifierName(code)
+	}
+
+	key := capture.liveKeyName(code)
+	if key == "" {
+		return evdevModifierName(code)
+	}
+
+	switch key {
+	case "Shift_L", "Shift_R":
+		return evdevModifierShift
+	case "Control_L", "Control_R":
+		return evdevModifierCtrl
+	case "Alt_L", "Alt_R":
+		return evdevModifierAlt
+	case "Meta_L", "Meta_R", "Super_L", "Super_R", "Hyper_L", "Hyper_R":
+		return evdevModifierCmd
+	}
+
+	return ""
+}
+
+// feedKey tells xkb_state a key went down or up, so its idea of the lock
+// modifiers and the layout group keeps up with the keyboard. A reader that
+// resolves names without feeding them gets the names the layout had when the
+// state was built and never learns of a change.
+func (capture *waylandEvdevCapture) feedKey(code uint16, isDown bool) {
+	if capture == nil || capture.xkbState == nil {
+		return
+	}
+
+	down := C.int(0)
+	if isDown {
+		down = C.int(1)
+	}
+
+	C.neru_xkb_state_key((*C.neru_xkb_state)(capture.xkbState), C.uint16_t(code), down)
+}
+
+// pollKeymap asks the compositor connection behind the xkb state for anything
+// it sent since the last call, without blocking, and rebuilds the state when
+// the keymap was replaced or the connection is gone. It is what keeps the
+// names the proxy resolves following a layout the user changes mid-session,
+// now that the state is built once rather than at every mode start.
+//
+// It reports whether the state is fresh. A fresh state has no key history: the
+// caller, which knows what is held, feeds that back in.
+func (capture *waylandEvdevCapture) pollKeymap() bool {
+	// A state that never came up already said so once; asking again every
+	// two seconds would say it again every two seconds.
+	if capture == nil || capture.xkbState == nil {
+		return false
+	}
+
+	// A layout forced by a config reload reaches the state here even when no
+	// key is pressed, so neru doctor shows it.
+	capture.applyRequestedLayout()
+
+	switch C.neru_xkb_state_dispatch((*C.neru_xkb_state)(capture.xkbState)) {
+	case 0:
+		return false
+	case 1:
+		// The new keymap may lack the forced layout, or number it differently.
+		capture.appliedLayout = nil
+		capture.applyRequestedLayout()
+
+		// The state under the keymap is fresh, so its lock modifiers are not:
+		// read them off the devices again.
+		capture.syncLeds()
+	default:
+		capture.refreshXkbState()
+	}
+
+	return true
+}
+
+// refreshXkbState rebuilds xkb_state from the compositor's keymap, then syncs
+// lock modifiers from the devices' LEDs. It runs once when the proxy starts
+// and again whenever pollKeymap finds the connection gone.
+func (capture *waylandEvdevCapture) refreshXkbState() {
+	if capture == nil {
+		return
+	}
+
+	if capture.xkbState != nil {
+		C.neru_xkb_state_destroy((*C.neru_xkb_state)(capture.xkbState))
+	}
+
+	xkb := C.neru_xkb_state_create()
+	capture.xkbState = unsafe.Pointer(xkb)
+	capture.appliedLayout = nil
+
+	// A failed rebuild leaves no layouts, so neru doctor must not keep showing
+	// the last keymap's.
+	waylandKeyboardLayouts.Store(nil)
+
+	if xkb == nil {
+		if capture.logger != nil {
+			capture.logger.Error(
+				"Failed to initialize Wayland xkb_state; XKB options will be ignored, " +
+					"falling back to hardcoded evdev key names",
+			)
+		}
+
+		return
+	}
+
+	capture.applyRequestedLayout()
+	capture.syncLeds()
+}
+
+// syncLeds sets the xkb state's lock modifiers from the devices' LEDs, which
+// are the kernel's word on NumLock and CapsLock at a moment the state has no
+// key history for.
+func (capture *waylandEvdevCapture) syncLeds() {
+	if capture == nil || capture.xkbState == nil {
+		return
+	}
+
+	numLock := C.int(0)
+	capsLock := C.int(0)
+
+	capture.deviceMu.Lock()
+	for _, file := range capture.files {
+		fd := C.int(file.Fd())
+		if C.neru_evdev_led_is_on(fd, C.uint(0)) != 0 {
+			numLock = 1
+		}
+
+		if C.neru_evdev_led_is_on(fd, C.uint(1)) != 0 {
+			capsLock = 1
+		}
+	}
+	capture.deviceMu.Unlock()
+
+	C.neru_xkb_state_sync_leds((*C.neru_xkb_state)(capture.xkbState), numLock, capsLock)
+}

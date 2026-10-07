@@ -1,0 +1,59 @@
+#ifndef LIBEI_CLIENT_H
+#define LIBEI_CLIENT_H
+
+// libei input-injection client for Wayland compositors that do not implement
+// zwlr_virtual_pointer_v1 (notably KWin/KDE Plasma). Input is delivered through
+// the org.freedesktop.portal.RemoteDesktop portal: liboeffis runs the portal
+// session and hands back an EIS socket, then libei emits pointer/button/scroll/
+// keyboard events on it. Screen enumeration and overlays still go through the
+// wlroots client; this wrapper only covers input.
+
+typedef struct NeruEiClient NeruEiClient;
+
+// Establish a RemoteDesktop portal session and a libei sender context, blocking
+// until the absolute-pointer device is ready or timeout_ms elapses. The portal
+// shows a consent dialog the user must approve. Returns NULL on denial,
+// timeout, or any setup failure.
+//
+// liboeffis exposes no restore token, so the session this opens cannot be
+// reused after a restart and the dialog appears on every start. It is the
+// fallback for a session the Go-side portal handshake could not open; the
+// reusable path is neru_ei_connect_fd.
+NeruEiClient *neru_ei_connect(int timeout_ms);
+
+// Attach a libei sender context to an EIS socket the caller already obtained
+// from org.freedesktop.portal.RemoteDesktop.ConnectToEIS, blocking until the
+// absolute-pointer device is ready or timeout_ms elapses. This is the path that
+// can reuse a stored grant, because the Go caller runs the portal handshake and
+// can present a restore token there.
+//
+// Takes ownership of eis_fd unconditionally: on success libei closes it at
+// teardown, and on failure it is closed before returning NULL. Returns NULL on
+// timeout or any setup failure.
+NeruEiClient *neru_ei_connect_fd(int eis_fd, int timeout_ms);
+
+// Tear down the libei context and portal session.
+void neru_ei_disconnect(NeruEiClient *c);
+
+// Move the absolute pointer to global compositor coordinates (logical pixels).
+// Returns 1 on success, 0 otherwise.
+int neru_ei_move_abs(NeruEiClient *c, int x, int y);
+
+// Press (pressed != 0) or release a pointer button. The button code is an
+// evdev code (e.g. 0x110 for BTN_LEFT). Returns 1 on success, 0 otherwise.
+int neru_ei_button(NeruEiClient *c, int button, int pressed);
+
+// Emit a scroll event. axis: 0 = vertical, 1 = horizontal. delta is the scroll
+// distance in logical pixels (positive = down/right), and is a double because
+// ei_device_scroll_delta is pixel-precise: a fraction of a wheel notch is a
+// legal delta, which is what an animated scroll sends. Returns 1 on success.
+int neru_ei_scroll(NeruEiClient *c, int axis, double delta);
+
+// Press or release a keyboard key (evdev keycode). Returns 1 on success, 0 when
+// no keyboard device is available on the granted session.
+int neru_ei_key(NeruEiClient *c, int keycode, int pressed);
+
+// Whether the granted session exposes a keyboard device.
+int neru_ei_has_keyboard(NeruEiClient *c);
+
+#endif /* LIBEI_CLIENT_H */

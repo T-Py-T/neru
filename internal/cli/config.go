@@ -1,13 +1,11 @@
 package cli
 
 import (
-	"encoding/json"
-
 	"github.com/spf13/cobra"
 
-	"github.com/y3owk1n/neru/internal/core/domain"
-	derrors "github.com/y3owk1n/neru/internal/core/errors"
-	"github.com/y3owk1n/neru/internal/core/infra/ipc"
+	"github.com/y3owk1n/neru/internal/adapter/ipc"
+	"github.com/y3owk1n/neru/internal/derrors"
+	"github.com/y3owk1n/neru/internal/domain"
 )
 
 var configCmd = &cobra.Command{
@@ -18,6 +16,8 @@ var configCmd = &cobra.Command{
 Subcommands:
   dump       Print the currently active configuration as JSON
   reload     Reload configuration from disk without restarting
+  set        Set a config value at runtime (no restart needed)
+  reset      Reset a config field to its default value
   init       Create a default configuration file to get started
   validate   Check a configuration file for errors
 
@@ -56,19 +56,7 @@ var configDumpCmd = &cobra.Command{
 			return derrors.New(derrors.CodeIPCFailed, ipcResponse.Message)
 		}
 
-		// Marshal pretty JSON
-		ipcResponseData, ipcResponseDataErr := json.MarshalIndent(ipcResponse.Data, "", "  ")
-		if ipcResponseDataErr != nil {
-			return derrors.Wrap(
-				ipcResponseDataErr,
-				derrors.CodeSerializationFailed,
-				"failed to marshal config",
-			)
-		}
-
-		cmd.Println(string(ipcResponseData))
-
-		return nil
+		return formatter.PrintJSON(cmd, ipcResponse.Data)
 	},
 }
 
@@ -87,5 +75,7 @@ var configReloadCmd = &cobra.Command{
 func init() {
 	configCmd.AddCommand(configDumpCmd)
 	configCmd.AddCommand(configReloadCmd)
+	configCmd.AddCommand(configSetCmd)
+	configCmd.AddCommand(configResetCmd)
 	RootCmd.AddCommand(configCmd)
 }

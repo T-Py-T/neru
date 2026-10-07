@@ -3,12 +3,14 @@
   fetchurl,
   gitUpdater,
   installShellFiles,
+  makeWrapper,
   stdenv,
   versionCheckHook,
   lib,
   buildGoModule,
   pkg-config,
   cairo,
+  libei,
   libxkbcommon,
   wayland,
   wayland-protocols,
@@ -19,12 +21,28 @@
   libxrender,
   libxtst,
   libxi,
+  fontconfig,
+  # tesseract backs the `vision` hint strategy on Linux. It is a required
+  # dependency rather than an optional one: neru links libtesseract dynamically,
+  # so a missing library stops the daemon before any neru code runs, whatever
+  # hints.strategy is set to. The language data ships in the same derivation, at
+  # $out/share/tessdata, and the wrapper below is what points neru at it — a Nix
+  # store path is not somewhere the runtime search of /usr/share could find.
+  tesseract,
+  # pipewire is how KDE Plasma sessions read the screen. KWin implements no
+  # screencopy protocol, so capture there goes through xdg-desktop-portal's
+  # ScreenCast session and its frames arrive over PipeWire. Like tesseract it is
+  # required rather than optional: neru links libpipewire-0.3 dynamically, so a
+  # missing library stops the daemon before any neru code runs, whatever desktop
+  # it was started on.
+  pipewire,
   version ? "main",
   useZip ? false,
   commitHash ? null,
   writableTmpDirAsHomeHook,
   nix-update-script,
   unzip,
+  apple-sdk_15 ? null,
 }:
 if useZip then
   let
@@ -35,23 +53,19 @@ if useZip then
       {
         "aarch64-darwin" = {
           url = "https://github.com/y3owk1n/neru/releases/download/v${version}/neru-darwin-arm64.zip";
-          # run `nix hash convert --hash-algo sha256 (nix-prefetch-url https://github.com/y3owk1n/neru/releases/download/v1.46.0/neru-darwin-arm64.zip)`
-          sha256 = "sha256-n4QLaefoJOLCTiXBy8rzsSeMZZPAsisLkowmfjnzsps=";
+          sha256 = "sha256-vdg/KTOSKMcZdK19+mLwkx3n9ba3lMGuVIz9pKKxt7U=";
         };
         "x86_64-darwin" = {
           url = "https://github.com/y3owk1n/neru/releases/download/v${version}/neru-darwin-amd64.zip";
-          # run `nix hash convert --hash-algo sha256 (nix-prefetch-url https://github.com/y3owk1n/neru/releases/download/v1.46.0/neru-darwin-amd64.zip)`
-          sha256 = "sha256-pmao594PjrPKSD64pdLVJr5DNzwkLzf1tP0GttC7Umo=";
+          sha256 = "sha256-DDxIuaOToj62/1ogC0uFMptcmqJEjtFHqJBDxMPyrPw=";
         };
         "aarch64-linux" = {
           url = "https://github.com/y3owk1n/neru/releases/download/v${version}/neru-linux-arm64.zip";
-          # run `nix hash convert --hash-algo sha256 (nix-prefetch-url https://github.com/y3owk1n/neru/releases/download/v1.46.0/neru-linux-arm64.zip)`
-          sha256 = "sha256-XEHywgzuYpancmazP3+K3gIRvGBrTObRXwgsOuAcSuI=";
+          sha256 = "sha256-ff8kY8O09AkuYRIc/7lHfcRh0s367tY9K5co+azQvac=";
         };
         "x86_64-linux" = {
           url = "https://github.com/y3owk1n/neru/releases/download/v${version}/neru-linux-amd64.zip";
-          # run `nix hash convert --hash-algo sha256 (nix-prefetch-url https://github.com/y3owk1n/neru/releases/download/v1.46.0/neru-linux-amd64.zip)`
-          sha256 = "sha256-R/XRX4cXr2x/fmSE3BZarQY0G4BNChZuDO99D2CK5sw=";
+          sha256 = "sha256-7fRxwu0VXj6MP7v0wP3IsOUe8NtSfjS01QqWlhq6LpU=";
         };
       }
       .${stdenv.hostPlatform.system} or (throw "Unsupported system: ${stdenv.hostPlatform.system}");
@@ -77,10 +91,12 @@ if useZip then
     ]
     ++ lib.optionals stdenv.hostPlatform.isLinux [
       autoPatchelfHook
+      makeWrapper
     ];
 
     buildInputs = lib.optionals stdenv.hostPlatform.isLinux [
       cairo
+      libei
       libxkbcommon
       wayland
       wayland-protocols
@@ -91,6 +107,9 @@ if useZip then
       libxrender
       libxtst
       libxi
+      fontconfig
+      tesseract
+      pipewire
     ];
 
     installPhase = ''
@@ -128,6 +147,12 @@ if useZip then
               --fish <($out/Applications/Neru.app/Contents/MacOS/neru completion fish) \
               --zsh <($out/Applications/Neru.app/Contents/MacOS/neru completion zsh)
       fi
+    ''
+    + lib.optionalString stdenv.hostPlatform.isLinux ''
+      # --set-default, so a user who exports their own TESSDATA_PREFIX (a
+      # tessdata_fast checkout, another language) keeps it.
+      wrapProgram $out/bin/neru \
+        --set-default TESSDATA_PREFIX ${tesseract}/share/tessdata
     '';
 
     doInstallCheck = true;
@@ -161,20 +186,20 @@ else
 
     src = lib.cleanSource ../.;
 
-    # run the following command to get the sha256 hash
-    # `nix-shell -p go --run 'go mod vendor'`
-    # `nix hash path vendor`
-    # `rm -rf vendor`
-    vendorHash = "sha256-R0IF4hIpInFjgcc8J6F3mZ0btSN4Q73aPtxq4uYixMo=";
+    # scripts/update-nix-hashes.sh writes this, and the four zip hashes above.
+    # The nix-hashes workflow runs it after every push to main.
+    vendorHash = "sha256-PMFbAkmnrkcnR/oxeE/WLixblVX/i6jWRu6ceZu5yvc=";
 
     ldflags = [
       "-s"
       "-w"
-      "-X github.com/y3owk1n/neru/internal/cli.Version=${finalAttrs.version}"
+      "-X github.com/y3owk1n/neru/internal/buildinfo.Version=${finalAttrs.version}"
     ]
     ++ lib.optionals (commitHash != null) [
-      "-X github.com/y3owk1n/neru/internal/cli.GitCommit=${commitHash}"
+      "-X github.com/y3owk1n/neru/internal/buildinfo.GitCommit=${commitHash}"
     ];
+
+    subPackages = [ "cmd/neru" ];
 
     nativeBuildInputs = [
       installShellFiles
@@ -182,27 +207,50 @@ else
     ]
     ++ lib.optionals stdenv.hostPlatform.isLinux [
       pkg-config
+      makeWrapper
     ];
 
-    buildInputs = lib.optionals stdenv.hostPlatform.isLinux [
-      cairo
-      libxkbcommon
-      wayland
-      wayland-protocols
-      libx11
-      libxext
-      libxfixes
-      libxrandr
-      libxrender
-      libxtst
-      libxi
-    ];
+    buildInputs =
+      lib.optionals stdenv.hostPlatform.isLinux [
+        cairo
+        libei
+        libxkbcommon
+        wayland
+        wayland-protocols
+        libx11
+        libxext
+        libxfixes
+        libxrandr
+        libxrender
+        libxtst
+        libxi
+        fontconfig
+        tesseract
+        pipewire
+      ]
+      ++ lib.optionals stdenv.hostPlatform.isDarwin [
+        apple-sdk_15
+      ];
 
-    subPackages = [ "cmd/neru" ];
+    # pipewire's libspa-0.2.pc carries `-fno-strict-overflow` in its Cflags, and
+    # libpipewire-0.3 pulls it in via Requires. cgo refuses any pkg-config flag
+    # outside its allowlist, and that one is not on it, so the linux adapter
+    # fails to build until cgo is told the flag is safe.
+    env = lib.optionalAttrs stdenv.hostPlatform.isLinux {
+      CGO_CFLAGS_ALLOW = "-fno-strict-overflow";
+    };
 
-    # Allow Go to use any available toolchain
+    # Build with the toolchain nixpkgs ships, never a downloaded one. go.mod
+    # carries a `toolchain` line pointing at a Go patch release newer than
+    # nixpkgs has, so that everyone building with a network — contributors, CI,
+    # the release workflow — picks up the fixed standard library. This sandbox
+    # has no network, so honouring that line would fail the build outright
+    # rather than silently fall back. `local` ignores it and uses the nixpkgs
+    # Go, which still satisfies the `go` directive (the actual floor). Nix
+    # builds therefore track nixpkgs' Go patch level, as they always have, and
+    # pick the fixed standard library up when nixpkgs does.
     preBuild = ''
-      export GOTOOLCHAIN=auto
+      export GOTOOLCHAIN=local
     '';
 
     postInstall = ''
@@ -218,6 +266,13 @@ else
       	--zsh <($out/bin/neru completion zsh)
       fi
     ''
+    + lib.optionalString stdenv.hostPlatform.isLinux ''
+      # tesseract resolves its language data at run time, and it lives in a
+      # store path no filesystem search would find. --set-default, so a user who
+      # exports their own TESSDATA_PREFIX keeps it.
+      wrapProgram $out/bin/neru \
+        --set-default TESSDATA_PREFIX ${tesseract}/share/tessdata
+    ''
     + lib.optionalString stdenv.hostPlatform.isDarwin ''
       # Create a simple .app bundle on the fly for macOS source builds.
       mkdir -p $out/Applications/Neru.app/Contents/{MacOS,Resources}
@@ -225,6 +280,7 @@ else
       cp $out/bin/neru $out/Applications/Neru.app/Contents/MacOS/neru
 
       cp ${finalAttrs.src}/resources/icon.icns $out/Applications/Neru.app/Contents/Resources/icon.icns
+      cp ${finalAttrs.src}/resources/Neru.entitlements $out/Applications/Neru.app/Contents/Resources/Neru.entitlements
 
       SRC_PLIST=${finalAttrs.src}/resources/Info.plist.template
 

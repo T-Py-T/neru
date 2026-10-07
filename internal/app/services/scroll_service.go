@@ -5,13 +5,15 @@ import (
 	"sync"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/y3owk1n/neru/internal/config"
-	derrors "github.com/y3owk1n/neru/internal/core/errors"
-	"github.com/y3owk1n/neru/internal/core/ports"
+	"github.com/y3owk1n/neru/internal/derrors"
+	"github.com/y3owk1n/neru/internal/domain/action"
+	"github.com/y3owk1n/neru/internal/ports"
 )
 
-// ScrollDirection represents the direction of a scrolling operation.
+// ScrollDirection is the direction of a scrolling operation.
 type ScrollDirection int
 
 const (
@@ -25,7 +27,7 @@ const (
 	ScrollDirectionRight
 )
 
-// ScrollAmount represents the magnitude of a scrolling operation.
+// ScrollAmount is the magnitude of a scrolling operation.
 type ScrollAmount int
 
 const (
@@ -37,9 +39,13 @@ const (
 	ScrollAmountEnd
 )
 
-// ScrollService orchestrates scrolling operations.
+// ScrollService orchestrates scrolling operations. Scrolling never draws, so
+// this deliberately does not embed BaseService — the overlay dependency it
+// would carry has no use here, and a nil one would panic through a promoted
+// method.
 type ScrollService struct {
-	BaseService
+	accessibility ports.AccessibilityPort
+	system        ports.SystemPort
 
 	mu     sync.RWMutex
 	config config.ScrollConfig
@@ -49,7 +55,6 @@ type ScrollService struct {
 // NewScrollService creates a new scroll service.
 func NewScrollService(
 	accessibility ports.AccessibilityPort,
-	overlay ports.OverlayPort,
 	system ports.SystemPort,
 	config config.ScrollConfig,
 	logger *zap.Logger,
@@ -59,43 +64,74 @@ func NewScrollService(
 	}
 
 	return &ScrollService{
-		BaseService: NewBaseService(accessibility, overlay, system),
-		config:      config,
-		logger:      logger.Named("service.scroll"),
+		accessibility: accessibility,
+		system:        system,
+		config:        config,
+		logger:        logger.Named("service.scroll"),
 	}
 }
 
 // Scroll performs a scrolling operation in the specified direction and magnitude.
 // If stepOverride is > 0, it overrides the configured scroll step for this invocation.
+// modifiers are presented as held for the duration of the scroll, which is what
+// turns a scroll into a zoom in the applications that read one.
 func (s *ScrollService) Scroll(
 	ctx context.Context,
 	direction ScrollDirection,
 	amount ScrollAmount,
 	stepOverride int,
+	modifiers action.Modifiers,
 ) error {
 	deltaX, deltaY := s.calculateDelta(ctx, direction, amount, stepOverride)
 
-	s.logger.Debug("Scrolling",
-		zap.Int("dir", int(direction)),
-		zap.Int("amount", int(amount)),
-		zap.Int("deltaX", deltaX),
-		zap.Int("deltaY", deltaY))
+	// A scroll anchors to the window under the cursor: finish any in-flight
+	// cursor animation first (ports.CursorSettler), so a scroll fired
+	// mid-animation targets the window the user aimed for instead of one the
+	// cursor happens to be gliding over.
+	if settler, ok := s.system.(ports.CursorSettler); ok {
+		err := settler.SettleCursor(ctx)
+		if err != nil {
+			// Debug because this runs once per scroll keypress.
+			s.logger.Debug("Failed to settle cursor animation", zap.Error(err))
+		}
+	}
 
-	scrollErr := s.accessibility.Scroll(ctx, deltaX, deltaY)
+	// This runs per keypress in scroll mode and modifiers.String() allocates,
+	// so the fields are built only when debug is on.
+	if ce := s.logger.Check(zapcore.DebugLevel, "Scrolling"); ce != nil {
+		ce.Write(
+			zap.Int("direction", int(direction)),
+			zap.Int("amount", int(amount)),
+			zap.Int("delta_x", deltaX),
+			zap.Int("delta_y", deltaY),
+			zap.String("modifiers", modifiers.String()))
+	}
+
+	scrollErr := s.accessibility.Scroll(ctx, deltaX, deltaY, modifiers)
 	if scrollErr != nil {
+		// A backend that cannot present the requested modifiers refuses with
+		// CodeNotSupported; keep that code so the reply can say so rather than
+		// reporting a generic failure.
+		if derrors.IsNotSupported(scrollErr) {
+			return scrollErr
+		}
+
 		return derrors.WrapActionFailed(scrollErr, "scroll")
 	}
 
 	return nil
 }
 
-// Hide hides the scroll overlay.
-func (s *ScrollService) Hide(ctx context.Context) error {
-	return s.HideOverlay(ctx, "hide scroll")
+// Health checks the health of the service's dependencies. Scrolling never
+// draws, so there is no overlay to report on.
+func (s *ScrollService) Health(ctx context.Context) map[string]error {
+	return map[string]error{
+		"accessibility": s.accessibility.Health(ctx),
+	}
 }
 
 // UpdateConfig updates the scroll configuration.
-// This allows changing scroll behavior at runtime.
+// Scroll behavior can therefore change without a restart.
 func (s *ScrollService) UpdateConfig(config config.ScrollConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -18,6 +18,7 @@ const (
 	cliTestAction    = "action"
 	cliTestStatus    = "status"
 	cliTestLeftClick = "left_click"
+	cliTestRecursive = "recursive_grid"
 )
 
 // Helper to get command by name from RootCmd.
@@ -58,56 +59,6 @@ func getSubCmd(parentName, childName string) *cobra.Command {
 	return nil
 }
 
-func TestBuildSimpleCommand(t *testing.T) {
-	cmd := cli.BuildSimpleCommand("test", "short desc", "long desc", cliTestAction)
-
-	if cmd.Use != "test" {
-		t.Errorf("expected Use='test', got %q", cmd.Use)
-	}
-
-	if cmd.Short != "short desc" {
-		t.Errorf("expected Short='short desc', got %q", cmd.Short)
-	}
-
-	if cmd.Long != "long desc" {
-		t.Errorf("expected Long='long desc', got %q", cmd.Long)
-	}
-
-	// Test that PreRunE and RunE are set
-	if cmd.PreRunE == nil {
-		t.Error("PreRunE should be set")
-	}
-
-	if cmd.RunE == nil {
-		t.Error("RunE should be set")
-	}
-}
-
-func TestBuildActionCommand(t *testing.T) {
-	cmd := cli.BuildActionCommand("test", "short desc", "long desc", []string{"arg1"}, true)
-
-	if cmd.Use != "test" {
-		t.Errorf("expected Use='test', got %q", cmd.Use)
-	}
-
-	if cmd.Short != "short desc" {
-		t.Errorf("expected Short='short desc', got %q", cmd.Short)
-	}
-
-	if cmd.Long != "long desc" {
-		t.Errorf("expected Long='long desc', got %q", cmd.Long)
-	}
-
-	// Test that PreRunE and RunE are set
-	if cmd.PreRunE == nil {
-		t.Error("PreRunE should be set")
-	}
-
-	if cmd.RunE == nil {
-		t.Error("RunE should be set")
-	}
-}
-
 func TestCommandInitialization(t *testing.T) {
 	// Test that global commands are properly initialized
 	expectedCommands := map[string]bool{
@@ -118,8 +69,11 @@ func TestCommandInitialization(t *testing.T) {
 		cliTestGrid:                      false,
 		"scroll":                         false,
 		cliTestAction:                    false,
+		"run <step> [step...]":           false,
+		"macro <name> [arg...]":          false,
 		cliTestStatus:                    false,
 		"doctor":                         false,
+		cliTestRoles:                     false,
 		"launch":                         false,
 		"docs":                           false,
 		"config":                         false,
@@ -128,7 +82,9 @@ func TestCommandInitialization(t *testing.T) {
 		"toggle-cursor-follow-selection": false,
 		"toggle-scroll-invert":           false,
 		"recursive_grid":                 false,
+		"bisect":                         false,
 		"monitor_select":                 false,
+		"mode <name>":                    false,
 	}
 
 	for _, cmd := range cli.RootCmd.Commands() {
@@ -154,6 +110,15 @@ func TestCommandInitialization(t *testing.T) {
 		"right_click":         false,
 		"mouse_up":            false,
 		"mouse_down":          false,
+		"left_mouse_down":     false,
+		"left_mouse_up":       false,
+		"left_mouse_toggle":   false,
+		"right_mouse_down":    false,
+		"right_mouse_up":      false,
+		"right_mouse_toggle":  false,
+		"middle_mouse_down":   false,
+		"middle_mouse_up":     false,
+		"middle_mouse_toggle": false,
 		"middle_click":        false,
 		"move_mouse":          false,
 		"move_mouse_relative": false,
@@ -172,7 +137,11 @@ func TestCommandInitialization(t *testing.T) {
 		"page_up":             false,
 		"page_down":           false,
 		"move_monitor":        false,
+		"move_cell":           false,
+		"bisect":              false,
 		"cycle_hint":          false,
+		"hide_cursor":         false,
+		"show_cursor":         false,
 	}
 
 	for _, cmd := range cli.ActionCmd.Commands() {
@@ -230,6 +199,8 @@ func TestCommandExecutionWithoutDaemon(t *testing.T) {
 		{"action_page_up", getActionCmd("page_up"), true},
 		{"action_page_down", getActionCmd("page_down"), true},
 		{"action_move_monitor", getActionCmd("move_monitor"), true},
+		{"action_hide_cursor", getActionCmd("hide_cursor"), true},
+		{"action_show_cursor", getActionCmd("show_cursor"), true},
 		{cliTestStatus, getCmd(cliTestStatus), true},
 		{
 			"doctor",
@@ -296,5 +267,111 @@ func TestLaunchCommandExecution(t *testing.T) {
 	err := launchCmd.RunE(launchCmd, []string{})
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildClickActionCommand_HasButtonPhaseFlags(t *testing.T) {
+	cmd := cli.BuildClickActionCommand("test", "short desc", "long desc", []string{"left_click"})
+
+	for _, flagName := range []string{"state", "toggle", "modifier", "selection", "bare"} {
+		if cmd.Flags().Lookup(flagName) == nil {
+			t.Errorf("BuildClickActionCommand() missing --%s flag", flagName)
+		}
+	}
+}
+
+// TestBuildScrollActionCommand_HasModifierFlag pins the CLI half of issue
+// #1448. The scroll subcommands are built here rather than by
+// BuildActionCommand, so registering --modifier on the latter left every
+// documented `neru action scroll_up --modifier ctrl` failing with "unknown
+// flag" while the same string worked from a config binding.
+func TestBuildScrollActionCommand_HasModifierFlag(t *testing.T) {
+	for _, supportSteps := range []bool{true, false} {
+		cmd := cli.BuildScrollActionCommand("scroll_up", "short desc", "long desc", supportSteps)
+
+		for _, flagName := range []string{"modifier", "selection", "bare"} {
+			if cmd.Flags().Lookup(flagName) == nil {
+				t.Errorf(
+					"BuildScrollActionCommand(supportSteps=%v) missing --%s flag",
+					supportSteps,
+					flagName,
+				)
+			}
+		}
+	}
+}
+
+func TestBuildActionCommand_HasNoButtonPhaseFlags(t *testing.T) {
+	cmd := cli.BuildActionCommand("test", "short desc", "long desc", []string{"arg1"}, true)
+
+	for _, flagName := range []string{"state", "toggle"} {
+		if cmd.Flags().Lookup(flagName) != nil {
+			t.Errorf("BuildActionCommand() should not define --%s", flagName)
+		}
+	}
+}
+
+func TestClickActionCommands_HaveButtonPhaseFlags(t *testing.T) {
+	clickCommands := map[string]bool{
+		"left_click":   false,
+		"right_click":  false,
+		"middle_click": false,
+	}
+
+	for _, cmd := range cli.ActionCmd.Commands() {
+		if _, ok := clickCommands[cmd.Use]; !ok {
+			continue
+		}
+
+		clickCommands[cmd.Use] = true
+
+		if cmd.Flags().Lookup("state") == nil {
+			t.Errorf("action %s is missing the --state flag", cmd.Use)
+		}
+
+		if cmd.Flags().Lookup("toggle") == nil {
+			t.Errorf("action %s is missing the --toggle flag", cmd.Use)
+		}
+	}
+
+	for name, found := range clickCommands {
+		if !found {
+			t.Errorf("click action %s not registered on ActionCmd", name)
+		}
+	}
+}
+
+// TestButtonPhaseAliasCommands_AreHiddenAndComplete pins that every press,
+// release, and toggle action name is reachable from the CLI (so a string that
+// works in a config also works in a terminal) without cluttering help output.
+func TestButtonPhaseAliasCommands_AreHiddenAndComplete(t *testing.T) {
+	wantHidden := map[string]bool{
+		"left_mouse_down":     false,
+		"left_mouse_up":       false,
+		"left_mouse_toggle":   false,
+		"right_mouse_down":    false,
+		"right_mouse_up":      false,
+		"right_mouse_toggle":  false,
+		"middle_mouse_down":   false,
+		"middle_mouse_up":     false,
+		"middle_mouse_toggle": false,
+	}
+
+	for _, cmd := range cli.ActionCmd.Commands() {
+		if _, ok := wantHidden[cmd.Use]; !ok {
+			continue
+		}
+
+		wantHidden[cmd.Use] = true
+
+		if !cmd.Hidden {
+			t.Errorf("action %s should be hidden so help output steers users to the flags", cmd.Use)
+		}
+	}
+
+	for name, found := range wantHidden {
+		if !found {
+			t.Errorf("action %s not registered on ActionCmd", name)
+		}
 	}
 }

@@ -1,20 +1,26 @@
 package hints
 
 import (
-	domainHint "github.com/y3owk1n/neru/internal/core/domain/hint"
+	domainHint "github.com/y3owk1n/neru/internal/domain/hint"
 )
 
 // baseContext provides common functionality for mode component contexts.
 // It contains shared state fields used across different mode contexts.
 type baseContext struct {
 	pendingAction          *string
+	pendingModifier        *string
+	onExit                 []string
 	repeat                 bool
 	cursorFollowSelection  bool
 	filterRoles            []string
 	filterTextContains     []string
 	startWithSearch        bool
 	strategyOverride       string
+	captureScopeOverride   string
+	activeStrategy         string
+	activeCaptureScope     string
 	labelDirectionOverride string
+	splitWord              bool
 }
 
 // SetPendingAction sets the action to execute when mode selection is complete.
@@ -25,6 +31,27 @@ func (c *baseContext) SetPendingAction(action *string) {
 // PendingAction returns the pending action to execute.
 func (c *baseContext) PendingAction() *string {
 	return c.pendingAction
+}
+
+// SetOnExit sets the action steps to run when the pending action is fulfilled
+// and the mode exits back to idle through the action path.
+func (c *baseContext) SetOnExit(onExit []string) {
+	c.onExit = onExit
+}
+
+// OnExit returns the action steps to run once the pending action is fulfilled.
+func (c *baseContext) OnExit() []string {
+	return c.onExit
+}
+
+// SetPendingModifier sets the modifier keys to apply when the pending action fires.
+func (c *baseContext) SetPendingModifier(modifier *string) {
+	c.pendingModifier = modifier
+}
+
+// PendingModifier returns the modifier keys to apply when the pending action fires.
+func (c *baseContext) PendingModifier() *string {
+	return c.pendingModifier
 }
 
 // SetRepeat sets whether the mode should re-activate after performing the action.
@@ -57,13 +84,19 @@ func (c *baseContext) ToggleCursorFollowSelection() bool {
 // Reset resets the base context to its initial state.
 func (c *baseContext) Reset() {
 	c.pendingAction = nil
+	c.pendingModifier = nil
+	c.onExit = nil
 	c.repeat = false
 	c.cursorFollowSelection = false
 	c.filterRoles = nil
 	c.filterTextContains = nil
 	c.startWithSearch = false
 	c.strategyOverride = ""
+	c.captureScopeOverride = ""
+	c.activeStrategy = ""
+	c.activeCaptureScope = ""
 	c.labelDirectionOverride = ""
+	c.splitWord = false
 }
 
 // SetFilterRoles sets the filter roles for hint mode.
@@ -106,6 +139,35 @@ func (c *baseContext) StrategyOverride() string {
 	return c.strategyOverride
 }
 
+// SetActiveScan records the strategy and capture scope the session's scan
+// used, after configuration, the focused app and the overrides were resolved.
+// An override is empty when the configuration chose the value, so a cycle list
+// reads these instead to find the value in use.
+func (c *baseContext) SetActiveScan(strategy, captureScope string) {
+	c.activeStrategy = strategy
+	c.activeCaptureScope = captureScope
+}
+
+// ActiveStrategy returns the strategy the session's scan ran with.
+func (c *baseContext) ActiveStrategy() string {
+	return c.activeStrategy
+}
+
+// ActiveCaptureScope returns the capture scope the session's scan ran with.
+func (c *baseContext) ActiveCaptureScope() string {
+	return c.activeCaptureScope
+}
+
+// SetCaptureScopeOverride stores the session capture scope override.
+func (c *baseContext) SetCaptureScopeOverride(scope string) {
+	c.captureScopeOverride = scope
+}
+
+// CaptureScopeOverride returns the session capture scope override.
+func (c *baseContext) CaptureScopeOverride() string {
+	return c.captureScopeOverride
+}
+
 // SetLabelDirectionOverride stores the session hint label direction override.
 // An empty string clears the override so the configured direction is used.
 func (c *baseContext) SetLabelDirectionOverride(direction string) {
@@ -117,6 +179,16 @@ func (c *baseContext) LabelDirectionOverride() string {
 	return c.labelDirectionOverride
 }
 
+// SetSplitWord stores the session word splitting preference.
+func (c *baseContext) SetSplitWord(split bool) {
+	c.splitWord = split
+}
+
+// SplitWord returns the session word splitting preference.
+func (c *baseContext) SplitWord() bool {
+	return c.splitWord
+}
+
 // Context holds the state and context for hint mode operations.
 type Context struct {
 	baseContext
@@ -126,13 +198,18 @@ type Context struct {
 	hints       *domainHint.Collection
 	sourceHints *domainHint.Collection
 
-	searchQuery  string
-	searchActive bool
+	searchQuery       string
+	searchActive      bool
+	hideOnEmptySearch bool
+	exitOnUnmatched   bool
 }
 
 // SetManager sets the domain hint manager.
 func (c *Context) SetManager(manager *domainHint.Manager) {
 	c.manager = manager
+	if c.manager != nil {
+		c.manager.SetExitOnUnmatched(c.exitOnUnmatched)
+	}
 }
 
 // Manager returns the domain hint manager.
@@ -180,6 +257,15 @@ func (c *Context) SetVisibleHints(hints *domainHint.Collection) error {
 	return nil
 }
 
+// ClearVisibleHints replaces the visible hints with an empty collection,
+// effectively hiding all hints while preserving the source collection for
+// search cancellation.
+func (c *Context) ClearVisibleHints() error {
+	hints := domainHint.NewCollection(nil)
+
+	return c.SetVisibleHints(hints)
+}
+
 // Hints returns the current hint collection.
 func (c *Context) Hints() *domainHint.Collection {
 	return c.hints
@@ -210,6 +296,31 @@ func (c *Context) SearchActive() bool {
 	return c.searchActive
 }
 
+// SetHideOnEmptySearch sets whether hints should be hidden when the search
+// query is empty.
+func (c *Context) SetHideOnEmptySearch(hide bool) {
+	c.hideOnEmptySearch = hide
+}
+
+// HideOnEmptySearch returns whether hints should be hidden when the search
+// query is empty.
+func (c *Context) HideOnEmptySearch() bool {
+	return c.hideOnEmptySearch
+}
+
+// SetExitOnUnmatched sets whether hint mode should exit when a key matches no hint.
+func (c *Context) SetExitOnUnmatched(exit bool) {
+	c.exitOnUnmatched = exit
+	if c.manager != nil {
+		c.manager.SetExitOnUnmatched(exit)
+	}
+}
+
+// ExitOnUnmatched returns whether hint mode should exit when a key matches no hint.
+func (c *Context) ExitOnUnmatched() bool {
+	return c.exitOnUnmatched
+}
+
 // Reset resets the hints context to its initial state.
 func (c *Context) Reset() error {
 	var err error
@@ -221,6 +332,8 @@ func (c *Context) Reset() error {
 	c.sourceHints = nil
 	c.searchQuery = ""
 	c.searchActive = false
+	c.hideOnEmptySearch = false
+	c.exitOnUnmatched = false
 	c.baseContext.Reset()
 
 	return err

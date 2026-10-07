@@ -1,7 +1,11 @@
-//go:build !darwin && !windows
+//go:build !darwin && !windows && !linux
 
 package app
 
-import "github.com/y3owk1n/neru/internal/config"
+import (
+	"go.uber.org/zap"
 
-func configurePlatformRuntimeConfigProviders(_ *config.Service) {}
+	"github.com/y3owk1n/neru/internal/config/loader"
+)
+
+func configurePlatformRuntimeConfigProviders(_ *loader.Service, _ *zap.Logger) {}

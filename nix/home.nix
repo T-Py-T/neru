@@ -6,6 +6,7 @@
 }:
 let
   cfg = config.services.neru;
+  tomlFormat = pkgs.formats.toml {};
   defaultPath = lib.concatStringsSep ":" (
     [
       "${config.home.homeDirectory}/.nix-profile/bin"
@@ -16,7 +17,7 @@ let
       "/usr/bin"
       "/bin"
     ]
-    ++ lib.optionals pkgs.stdenv.isDarwin [ "/opt/homebrew/bin" ]
+    ++ lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ "/opt/homebrew/bin" ]
   );
   effectiveEnv = {
     PATH = defaultPath;
@@ -56,6 +57,14 @@ in
         default = null;
         description = "Path to existing config.toml configuration file. Takes precedence over config option.";
       };
+	
+	  settings = lib.mkOption {
+        inherit (tomlFormat) type;
+        default = {};
+        description = ''
+          Configuration of neru in nix programming language
+        '';
+      };
 
       launchd = {
         enable = lib.mkOption {
@@ -77,7 +86,8 @@ in
               status will be a non-zero number, for example:
               `-	1	org.nix-community.home.neru`
 
-            If the app fails to launch at all, check `cat /tmp/neru.err.log` for launch errors.
+            If the app fails to launch at all, check
+            `cat ~/Library/Logs/neru/daemon.err.log` for launch errors.
 
             For more detailed service status, run `launchctl print gui/$(id -u)/org.nix-community.home.neru`.
           '';
@@ -139,11 +149,18 @@ in
     home.packages = [ cfg.package ];
 
     # Generate config file - either from text or source file
-    xdg.configFile."neru/config.toml" =
-      if cfg.configFile != null then { source = cfg.configFile; } else { text = cfg.config; };
+	xdg.configFile."neru/config.toml" =
+      if cfg.configFile != null
+      then {source = cfg.configFile;}
+      else if cfg.settings != {}
+      then {
+        source = tomlFormat.generate "config.toml" cfg.settings;
+      }
+      else {text = cfg.config;};
+
 
     # Launch agent for macOS
-    launchd.agents.neru = lib.mkIf pkgs.stdenv.isDarwin {
+    launchd.agents.neru = lib.mkIf pkgs.stdenv.hostPlatform.isDarwin {
       enable = cfg.launchd.enable;
       config = {
         ProgramArguments = [
@@ -155,8 +172,18 @@ in
         EnvironmentVariables = effectiveEnv;
         RunAtLoad = true;
         KeepAlive = cfg.launchd.keepAlive;
-        StandardOutPath = "/tmp/neru.log";
-        StandardErrorPath = "/tmp/neru.err.log";
+        # Standard output is left alone: Neru's own rotated log file already
+        # holds every log line. Standard error goes beside it, in the user's own
+        # log directory rather than a shared one, for a crash or a failure
+        # raised before that file is open.
+        #
+        # launchd creates the file but never the directory holding it, and the
+        # directory is created by Neru itself on its first run — so on a machine
+        # that has never run Neru, the very first spawn has nowhere to redirect
+        # to and launchd drops its stderr. Every spawn after that one is
+        # captured. (`neru services install`, which writes its own agent, closes
+        # that gap by creating the directory before bootstrapping.)
+        StandardErrorPath = "${config.home.homeDirectory}/Library/Logs/neru/daemon.err.log";
         ProcessType = "Interactive";
         LimitLoadToSessionType = "Aqua";
         Nice = -10;
@@ -165,7 +192,7 @@ in
     };
 
     # Systemd user service for Linux
-    systemd.user.services.neru = lib.mkIf (pkgs.stdenv.isLinux && cfg.systemd.enable) {
+    systemd.user.services.neru = lib.mkIf (pkgs.stdenv.hostPlatform.isLinux && cfg.systemd.enable) {
       Unit = {
         Description = "Neru keyboard navigation daemon";
         After = [ "graphical-session.target" ];
@@ -182,5 +209,28 @@ in
         WantedBy = [ "graphical-session.target" ];
       };
     };
+
+	assertions = [
+      # Fail if user set more than one configuration source
+      {
+        assertion =
+          (lib.count (x: x) [
+            (cfg.settings != {})
+            (cfg.configFile != null)
+            (cfg.config != builtins.readFile ../configs/default-config.toml)
+          ])
+          <= 1;
+
+        message = ''
+          services.neru: only one of the following options may be set:
+            - services.neru.settings
+            - services.neru.config
+            - services.neru.configFile
+
+          Please choose a single configuration source.
+        '';
+      }
+    ];
+
   };
 }

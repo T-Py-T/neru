@@ -32,19 +32,22 @@
 <!-- If your PR touches OS-specific code, verify the following. Check N/A if not applicable. -->
 
 - [ ] OS-specific files use correct build tags (e.g., `//go:build darwin`)
-- [ ] No darwin imports from untagged (shared) code — [The One Rule](docs/ARCHITECTURE.md#the-one-rule)
+- [ ] No darwin imports from untagged (shared) code — [The One Rule](https://github.com/y3owk1n/neru/blob/main/docs/contributing/architecture.md#the-one-rule)
 - [ ] Stub implementations added for other platforms (returning `CodeNotSupported`)
 - [ ] N/A — This PR does not touch platform-specific code
 
 ## General Checklist
 
 - [ ] Code formatted (`just fmt`)
-- [ ] Linters pass (`just lint`)
-- [ ] Tests pass (`just test`)
-- [ ] Build succeeds (`just build`)
+- [ ] `just ci` passes — the same checks CI runs, on your host only (format
+      check, lint, vet, build, a CGO-off type-check of the Linux and Windows
+      builds, tests including a unit `-race` pass, vulnerability scan); CI
+      runs them on macOS, Linux and Windows
 - [ ] Tests added/updated for new or changed functionality
 - [ ] Documentation updated (if applicable)
-- [ ] Commit messages follow [conventional commits](https://www.conventionalcommits.org/)
+- [ ] PR title is a [conventional commit](https://www.conventionalcommits.org/)
+      subject written for users — this PR squash-merges, so the title is what
+      Release Please ships in the changelog, not the commits on the branch
 
 ## Screenshots / Recordings
 

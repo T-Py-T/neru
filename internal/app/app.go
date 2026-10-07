@@ -1,46 +1,145 @@
 package app
 
 import (
+	"context"
+	"io"
+	"sync"
+
 	"go.uber.org/zap"
+
+	"github.com/y3owk1n/neru/internal/app/components"
+	"github.com/y3owk1n/neru/internal/app/heldmotion"
+	"github.com/y3owk1n/neru/internal/app/ipcctrl"
+	"github.com/y3owk1n/neru/internal/app/keybinding"
+	"github.com/y3owk1n/neru/internal/app/modes"
+	"github.com/y3owk1n/neru/internal/app/sequence"
+	"github.com/y3owk1n/neru/internal/app/services"
+	"github.com/y3owk1n/neru/internal/config"
+	"github.com/y3owk1n/neru/internal/config/loader"
+	"github.com/y3owk1n/neru/internal/domain"
+	"github.com/y3owk1n/neru/internal/domain/state"
+	"github.com/y3owk1n/neru/internal/ports"
 )
 
-// ActivateMode activates the specified mode.
-func (a *App) ActivateMode(mode Mode) {
-	a.modes.ActivateMode(mode)
+// Mode is the current mode of the application.
+type Mode = domain.Mode
+
+// Mode constants from domain package.
+const (
+	ModeIdle   = domain.ModeIdle
+	ModeHints  = domain.ModeHints
+	ModeGrid   = domain.ModeGrid
+	ModeScroll = domain.ModeScroll
+)
+
+// SystrayComponent is the interface for systray functionality.
+type SystrayComponent interface {
+	OnReady()
+	OnExit()
+	Close()
 }
 
-// IsFocusedAppExcluded checks if the focused app is excluded.
-func (a *App) IsFocusedAppExcluded() bool {
-	excluded, excludedErr := a.actionService.IsFocusedAppExcluded(a.ctx)
-	if excludedErr != nil {
-		a.logger.Warn("Failed to check exclusion", zap.Error(excludedErr))
+// App is the main application instance containing all state and dependencies.
+type App struct {
+	ctx    context.Context //nolint:containedctx // Root context for all App operations
+	cancel context.CancelFunc
+	config *config.Config
+	// writtenConfig is config before the loader settled its derived values,
+	// handed to the config service so a later `neru config set` derives from
+	// what the user wrote rather than from what was derived for them.
+	writtenConfig *config.Config
+	// configWarnings are what the launch-time load found wrong but loadable,
+	// logged once the logger exists (WithConfigWarnings).
+	configWarnings []string
+	ConfigPath     string
+	logger         *zap.Logger
 
-		return false
-	}
+	systemPort    ports.SystemPort
+	motion        *heldmotion.Controller
+	accessibility ports.AccessibilityPort
 
-	return excluded
-}
+	appState    *state.AppState
+	cursorState *state.CursorState
 
-// ExitMode exits the current mode.
-func (a *App) ExitMode() { a.modes.ExitMode() }
+	// Core services
+	//
+	// overlayManager is the backend the composition root built the port over.
+	// Only the composition root names it — construction in phase 1, the port in
+	// phase 3, its render components in phase 4 — and everything the running
+	// app says to the overlay goes through overlayPort instead.
+	overlayManager OverlayManager
+	// overlayPort is the one contract the app has with the overlay: frames for
+	// transitions, calls for updates, and the configuration and theme changes
+	// the overlay resolves its own Styles from (ADR 0003).
+	overlayPort   ports.OverlayPort
+	hotkeyManager HotkeyService
+	hotkeys       *keybinding.Binder
+	eventTap      ports.EventTapPort
+	textInput     ports.TextInputPort
+	keyFeed       ports.KeyFeedPort
+	ipcServer     ports.IPCPort
+	appWatcher    Watcher
 
-// SetModeHints sets the mode to hints.
-// SetModeHints switches the application to hints mode.
-func (a *App) SetModeHints() { a.modes.SetModeHints() }
+	modes *modes.Handler
 
-// SetModeGrid switches the application to grid mode.
-func (a *App) SetModeGrid() { a.modes.SetModeGrid() }
+	// sequenceExecutor runs action sequences. It is built during initialization
+	// from the App's own components; see newSequenceExecutor.
+	sequenceExecutor *sequence.Executor
 
-// SetModeRecursiveGrid switches the application to recursive-grid mode.
-func (a *App) SetModeRecursiveGrid() { a.modes.SetModeRecursiveGrid() }
+	// axClient is stored so it can be closed during Cleanup.
+	// On Linux this resets AT-SPI accessibility status and releases the
+	// D-Bus connection; on other platforms it is a no-op.
+	axClient io.Closer
 
-// SetModeScroll switches the application to scroll mode.
-func (a *App) SetModeScroll() { a.modes.SetModeScroll() }
+	// Control channels
+	stopChan    chan struct{}
+	stopOnce    sync.Once
+	cleanupOnce sync.Once
 
-// SetModeIdle switches the application to idle mode.
-func (a *App) SetModeIdle() { a.modes.SetModeIdle() }
+	// configMu serializes access to config-dependent component state between
+	// concurrent writers (theme change observer, IPC config reload, systray reload).
+	configMu sync.RWMutex
 
-// HandleKeyPress delegates key press handling to the mode handler.
-func (a *App) HandleKeyPress(key string) {
-	a.modes.HandleKeyPress(key)
+	// enabledMu orders a pause or resume with its effects on the mode handler
+	// and the hotkey binder, so a stop racing a start cannot exit a mode the
+	// start allowed. It is taken before modes.Handler's lock and never under it.
+	enabledMu sync.Mutex
+
+	// New Architecture Services
+	hintService   *services.HintService
+	gridService   *services.GridService
+	actionService *services.ActionService
+	scrollService *services.ScrollService
+	// indicators owns one service per indicator: mode, sticky modifiers,
+	// virtual pointer.
+	indicators    indicatorServices
+	configService *loader.Service
+
+	// Feature components
+	hintsComponent         *components.HintsComponent
+	gridComponent          *components.GridComponent
+	scrollComponent        *components.ScrollComponent
+	recursiveGridComponent *components.RecursiveGridComponent
+	bisectComponent        *components.BisectComponent
+	systrayComponent       SystrayComponent
+
+	// Lifecycle management
+	gcCancel         context.CancelFunc
+	gcAggressiveMode bool
+
+	// Per-instance observer teardown and hooks, assigned by the platform
+	// setup functions and consumed by the shared entry points in
+	// observers.go. Closures keep platform types off this struct.
+	//
+	// observerMu guards the three: Run assigns them after the IPC server is
+	// already accepting a reload, and the reload path reads postReloadVerify.
+	observerMu        sync.Mutex
+	themeObserverStop func()
+	sleepObserverStop func()
+	postReloadVerify  func()
+
+	// State subscriptions
+	screenShareSubscriptionID uint64
+
+	ipcController *ipcctrl.Controller
 }

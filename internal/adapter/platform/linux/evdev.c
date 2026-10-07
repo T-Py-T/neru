@@ -1,0 +1,511 @@
+#include "evdev.h"
+
+#include <errno.h>
+#include <fcntl.h>
+#include <linux/input.h>
+#include <linux/uinput.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+
+/* Every uinput device Neru creates carries this vendor id, so the keyboard
+ * proxy can tell its own output from a keyboard whatever the device is named. */
+#define NERU_UINPUT_VENDOR 0x1234
+
+int neru_evdev_grab(int fd, int grab) { return ioctl(fd, EVIOCGRAB, grab); }
+
+/* Revoke fd: every read on it, including one already blocked, returns ENODEV,
+ * and the fd stays a dead descriptor until its owner closes it, so the number
+ * cannot be reused under a reader that still holds it. The argument must be
+ * NULL; the kernel refuses anything else. */
+int neru_evdev_revoke(int fd) { return ioctl(fd, EVIOCREVOKE, NULL); }
+
+int neru_evdev_key_down(int fd, unsigned int keycode) {
+	unsigned long key_bits[(KEY_MAX + 8 * sizeof(unsigned long)) / (8 * sizeof(unsigned long))];
+	memset(key_bits, 0, sizeof(key_bits));
+
+	if (ioctl(fd, EVIOCGKEY(sizeof(key_bits)), key_bits) < 0) {
+		return 0;
+	}
+
+	return (key_bits[keycode / (8 * sizeof(unsigned long))] >> (keycode % (8 * sizeof(unsigned long)))) & 1UL;
+}
+
+int neru_evdev_is_keyboard(int fd) {
+	unsigned long key_bits[(KEY_MAX + 8 * sizeof(unsigned long)) / (8 * sizeof(unsigned long))];
+	memset(key_bits, 0, sizeof(key_bits));
+
+	if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(key_bits)), key_bits) < 0) {
+		return 0;
+	}
+
+#define NERU_TEST_KEY(bits, key)                                                                                       \
+	((bits[(key) / (8 * sizeof(unsigned long))] >> ((key) % (8 * sizeof(unsigned long)))) & 1UL)
+
+	return NERU_TEST_KEY(key_bits, KEY_Q) && NERU_TEST_KEY(key_bits, KEY_W) && NERU_TEST_KEY(key_bits, KEY_E) &&
+	       NERU_TEST_KEY(key_bits, KEY_R) && NERU_TEST_KEY(key_bits, KEY_SPACE) && NERU_TEST_KEY(key_bits, KEY_ENTER);
+}
+
+int neru_evdev_get_name(int fd, char *name, size_t name_size) {
+	int r = ioctl(fd, EVIOCGNAME(name_size), name);
+	if (r < 0)
+		return -1;
+	return r;
+}
+
+int neru_evdev_led_is_on(int fd, unsigned int led) {
+	unsigned long led_bits[(LED_MAX + 8 * sizeof(unsigned long)) / (8 * sizeof(unsigned long))];
+	memset(led_bits, 0, sizeof(led_bits));
+
+	if (ioctl(fd, EVIOCGLED(sizeof(led_bits)), led_bits) < 0) {
+		return 0;
+	}
+
+	int idx = led / (8 * (int)sizeof(unsigned long));
+	int bit = led % (8 * (int)sizeof(unsigned long));
+	return (led_bits[idx] >> bit) & 1UL;
+}
+
+int neru_evdev_is_neru_device(int fd) {
+	struct input_id id;
+	if (ioctl(fd, EVIOCGID, &id) < 0) {
+		return 0;
+	}
+	return id.bustype == BUS_VIRTUAL && id.vendor == NERU_UINPUT_VENDOR;
+}
+
+int neru_evdev_get_bustype(int fd) {
+	struct input_id id;
+	if (ioctl(fd, EVIOCGID, &id) < 0) {
+		return -1;
+	}
+	return id.bustype;
+}
+
+ssize_t neru_evdev_read_event(int fd, struct input_event *event) {
+	ssize_t n;
+	do {
+		n = read(fd, event, sizeof(struct input_event));
+	} while (n < 0 && errno == EINTR);
+	return n;
+}
+
+int neru_evdev_get_pressed_keys(int fd, unsigned int *out_keys, int max_keys) {
+	unsigned long key_bits[(KEY_MAX + 8 * sizeof(unsigned long)) / (8 * sizeof(unsigned long))];
+	memset(key_bits, 0, sizeof(key_bits));
+
+	if (ioctl(fd, EVIOCGKEY(sizeof(key_bits)), key_bits) < 0) {
+		return -1;
+	}
+
+	int count = 0;
+	for (unsigned int i = 0; i < KEY_MAX; i++) {
+		int idx = i / (8 * (int)sizeof(unsigned long));
+		int bit = i % (8 * (int)sizeof(unsigned long));
+		if ((key_bits[idx] >> bit) & 1UL) {
+			if (count < max_keys) {
+				out_keys[count] = i;
+			}
+			count++;
+		}
+	}
+	return count;
+}
+
+/* Close fd without disturbing the errno the caller is about to report. */
+static void neru_uinput_fail(int fd) {
+	int saved = errno;
+	close(fd);
+	errno = saved;
+}
+
+/* On failure errno describes the /dev/uinput open (or the ioctl that
+ * refused), so the Go side can tell "permission denied" from "no such
+ * device" instead of reporting a bare "unavailable". */
+int neru_uinput_create_scroll(int *out_fd) {
+	int fd = open("/dev/uinput", O_RDWR);
+	if (fd < 0) {
+		int open_errno = errno;
+		fd = open("/dev/input/uinput", O_RDWR);
+		if (fd < 0) {
+			errno = open_errno;
+			return 0;
+		}
+	}
+
+	if (ioctl(fd, UI_SET_EVBIT, EV_REL) < 0) {
+		neru_uinput_fail(fd);
+		return 0;
+	}
+	if (ioctl(fd, UI_SET_RELBIT, REL_WHEEL) < 0) {
+		neru_uinput_fail(fd);
+		return 0;
+	}
+	if (ioctl(fd, UI_SET_RELBIT, REL_HWHEEL) < 0) {
+		neru_uinput_fail(fd);
+		return 0;
+	}
+	if (ioctl(fd, UI_SET_RELBIT, REL_WHEEL_HI_RES) < 0) {
+		neru_uinput_fail(fd);
+		return 0;
+	}
+	if (ioctl(fd, UI_SET_RELBIT, REL_HWHEEL_HI_RES) < 0) {
+		neru_uinput_fail(fd);
+		return 0;
+	}
+
+	struct uinput_setup usetup;
+	memset(&usetup, 0, sizeof(usetup));
+	usetup.id.bustype = BUS_USB;
+	usetup.id.vendor = NERU_UINPUT_VENDOR;
+	usetup.id.product = 0x5678;
+	strcpy(usetup.name, "neru-scroll");
+	if (ioctl(fd, UI_DEV_SETUP, &usetup) < 0) {
+		neru_uinput_fail(fd);
+		return 0;
+	}
+	if (ioctl(fd, UI_DEV_CREATE) < 0) {
+		neru_uinput_fail(fd);
+		return 0;
+	}
+
+	*out_fd = fd;
+	return 1;
+}
+
+/* Create the scroll wheel the way the scroll path does, then tear it down
+ * again. Opening the node alone is not the question `neru doctor` asks: the
+ * UI_SET_* and UI_DEV_CREATE ioctls can refuse on a node that opened. On
+ * failure errno is the same one neru_uinput_create_scroll leaves. */
+int neru_uinput_probe_scroll(void) {
+	int fd;
+	if (!neru_uinput_create_scroll(&fd)) {
+		return 0;
+	}
+	ioctl(fd, UI_DEV_DESTROY);
+	close(fd);
+	return 1;
+}
+
+int neru_uinput_scroll(int fd, int axis, int value) {
+	struct input_event ev;
+	memset(&ev, 0, sizeof(ev));
+
+	ev.type = EV_REL;
+	ev.code = (axis == 0) ? REL_WHEEL_HI_RES : REL_HWHEEL_HI_RES;
+	ev.value = value * 120;
+	ssize_t w1 = write(fd, &ev, sizeof(ev));
+
+	memset(&ev, 0, sizeof(ev));
+	ev.type = EV_REL;
+	ev.code = (axis == 0) ? REL_WHEEL : REL_HWHEEL;
+	ev.value = value;
+	ssize_t w2 = write(fd, &ev, sizeof(ev));
+
+	memset(&ev, 0, sizeof(ev));
+	ev.type = EV_SYN;
+	ev.code = SYN_REPORT;
+	ev.value = 0;
+	ssize_t w3 = write(fd, &ev, sizeof(ev));
+
+	return (w1 == sizeof(ev) && w2 == sizeof(ev) && w3 == sizeof(ev)) ? 1 : 0;
+}
+
+int neru_uinput_scroll_batch(int fd, int axis, int *values, int count) {
+	if (fd < 0 || !values || count <= 0)
+		return 0;
+
+	size_t event_size = sizeof(struct input_event);
+	size_t total = (size_t)count * 3 * event_size;
+	struct input_event *events = (struct input_event *)malloc(total);
+	if (!events)
+		return 0;
+
+	int rel_code = (axis == 0) ? REL_WHEEL : REL_HWHEEL;
+	int rel_hi_code = (axis == 0) ? REL_WHEEL_HI_RES : REL_HWHEEL_HI_RES;
+
+	for (int i = 0; i < count; i++) {
+		int base = i * 3;
+		int v = values[i];
+
+		memset(&events[base], 0, event_size);
+		events[base].type = EV_REL;
+		events[base].code = rel_hi_code;
+		events[base].value = v * 120;
+
+		memset(&events[base + 1], 0, event_size);
+		events[base + 1].type = EV_REL;
+		events[base + 1].code = rel_code;
+		events[base + 1].value = v;
+
+		memset(&events[base + 2], 0, event_size);
+		events[base + 2].type = EV_SYN;
+		events[base + 2].code = SYN_REPORT;
+		events[base + 2].value = 0;
+	}
+
+	ssize_t written = write(fd, events, total);
+	free(events);
+	return (written == (ssize_t)total) ? 1 : 0;
+}
+
+int neru_uinput_create_keyboard(int *out_fd) {
+	int fd = open("/dev/uinput", O_RDWR);
+	if (fd < 0) {
+		fd = open("/dev/input/uinput", O_RDWR);
+	}
+	if (fd < 0) {
+		return 0;
+	}
+
+	if (ioctl(fd, UI_SET_EVBIT, EV_KEY) < 0 || ioctl(fd, UI_SET_EVBIT, EV_SYN) < 0) {
+		close(fd);
+		return 0;
+	}
+
+	// Advertise the full keyboard keycode range so any code a feed sequence
+	// emits (letters, digits, function keys, modifiers, punctuation) is a
+	// valid event on this device. KEY_MAX bounds the evdev keycode space.
+	for (int code = 1; code < KEY_MAX; code++) {
+		if (ioctl(fd, UI_SET_KEYBIT, code) < 0) {
+			close(fd);
+			return 0;
+		}
+	}
+
+	struct uinput_setup usetup;
+	memset(&usetup, 0, sizeof(usetup));
+	// BUS_VIRTUAL marks this device as synthetic so Neru's own evdev capture
+	// (isUinputVirtualDevice) skips it — otherwise EVIOCGRAB would grab our
+	// injected keys and loop them straight back into the event tap.
+	usetup.id.bustype = BUS_VIRTUAL;
+	usetup.id.vendor = NERU_UINPUT_VENDOR;
+	usetup.id.product = 0x5679;
+	strcpy(usetup.name, "neru-keyboard");
+	if (ioctl(fd, UI_DEV_SETUP, &usetup) < 0) {
+		close(fd);
+		return 0;
+	}
+	if (ioctl(fd, UI_DEV_CREATE) < 0) {
+		close(fd);
+		return 0;
+	}
+
+	*out_fd = fd;
+	return 1;
+}
+
+int neru_uinput_key(int fd, int keycode, int pressed) {
+	if (fd < 0)
+		return 0;
+
+	// Emit the key event and its SYN_REPORT in a single write so the pair is
+	// submitted atomically. If they were separate writes, a key-down could land
+	// while its SYN failed, leaving the event buffered until a later SYN
+	// committed it — latching the key even though this call reported failure.
+	struct input_event ev[2];
+	memset(ev, 0, sizeof(ev));
+
+	ev[0].type = EV_KEY;
+	ev[0].code = (unsigned short)keycode;
+	ev[0].value = pressed ? 1 : 0;
+
+	ev[1].type = EV_SYN;
+	ev[1].code = SYN_REPORT;
+	ev[1].value = 0;
+
+	ssize_t written = write(fd, ev, sizeof(ev));
+	return (written == (ssize_t)sizeof(ev)) ? 1 : 0;
+}
+
+static int neru_evdev_has_event_type(int fd, int type) {
+	unsigned long ev_bits[(EV_MAX + 8 * sizeof(unsigned long)) / (8 * sizeof(unsigned long))];
+	memset(ev_bits, 0, sizeof(ev_bits));
+
+	if (ioctl(fd, EVIOCGBIT(0, sizeof(ev_bits)), ev_bits) < 0) {
+		return 0;
+	}
+
+	return NERU_TEST_KEY(ev_bits, type);
+}
+
+/* The absolute axes fd advertises, as the EVIOCGBIT(EV_ABS) bitmap. bits_size
+ * is in bytes and must cover ABS_CNT, one word. Which axes make a node a touch surface
+ * is decided by the caller (hasPointerAxes): a keyboard's volume knob is an
+ * absolute axis too, and a bare EV_ABS test would turn such a keyboard away. */
+int neru_evdev_get_abs_bits(int fd, unsigned long *bits, size_t bits_size) {
+	memset(bits, 0, bits_size);
+	return ioctl(fd, EVIOCGBIT(EV_ABS, bits_size), bits) < 0 ? -1 : 0;
+}
+
+/* A node that reports relative axes is a keyboard with a pointer on it: a
+ * receiver that exposes its mouse and keyboard on one node, or a remapper's
+ * output device, which advertises mouse motion and buttons so a key can move
+ * the pointer (kanata, keyd). Its motion is re-emitted on the pointer proxy. */
+int neru_evdev_has_rel_axes(int fd) { return neru_evdev_has_event_type(fd, EV_REL); }
+
+/* The keys the kernel reports down on fd, as the EVIOCGKEY bitmap. bits_size
+ * is in bytes and must cover KEY_MAX. */
+int neru_evdev_get_key_state(int fd, unsigned long *bits, size_t bits_size) {
+	memset(bits, 0, bits_size);
+	return ioctl(fd, EVIOCGKEY(bits_size), bits) < 0 ? -1 : 0;
+}
+
+/* Every key code a keyboard can carry, and none of the button codes: the
+ * BTN_* block (BTN_MISC up to KEY_OK) and BTN_TRIGGER_HAPPY* would make udev
+ * class the device as a joystick or a pointer and libinput treat it
+ * accordingly. Advertising the full keyboard range rather than the union of
+ * the grabbed devices means a keyboard plugged in later needs no new device. */
+static int neru_uinput_proxy_is_keyboard_code(int code) {
+	if (code >= BTN_MISC && code < KEY_OK)
+		return 0;
+	if (code >= BTN_TRIGGER_HAPPY)
+		return 0;
+	return 1;
+}
+
+/* On failure errno describes the /dev/uinput open or the ioctl that refused,
+ * as neru_uinput_create_scroll leaves it. */
+int neru_uinput_create_proxy_keyboard(int *out_fd) {
+	/* Blocking on purpose: a write to uinput never waits, and the LED relay
+	 * reads this fd for the compositor's LED changes, which it waits on. */
+	int fd = open("/dev/uinput", O_RDWR);
+	if (fd < 0) {
+		int open_errno = errno;
+		fd = open("/dev/input/uinput", O_RDWR);
+		if (fd < 0) {
+			errno = open_errno;
+			return 0;
+		}
+	}
+
+	if (ioctl(fd, UI_SET_EVBIT, EV_KEY) < 0 || ioctl(fd, UI_SET_EVBIT, EV_SYN) < 0 ||
+	    ioctl(fd, UI_SET_EVBIT, EV_MSC) < 0 || ioctl(fd, UI_SET_MSCBIT, MSC_SCAN) < 0 ||
+	    ioctl(fd, UI_SET_EVBIT, EV_LED) < 0) {
+		neru_uinput_fail(fd);
+		return 0;
+	}
+
+	for (int code = 1; code < KEY_MAX; code++) {
+		if (!neru_uinput_proxy_is_keyboard_code(code))
+			continue;
+		if (ioctl(fd, UI_SET_KEYBIT, code) < 0) {
+			neru_uinput_fail(fd);
+			return 0;
+		}
+	}
+
+	static const int leds[] = {LED_NUML, LED_CAPSL, LED_SCROLLL, LED_COMPOSE, LED_KANA};
+	for (size_t i = 0; i < sizeof(leds) / sizeof(leds[0]); i++) {
+		if (ioctl(fd, UI_SET_LEDBIT, leds[i]) < 0) {
+			neru_uinput_fail(fd);
+			return 0;
+		}
+	}
+
+	struct uinput_setup usetup;
+	memset(&usetup, 0, sizeof(usetup));
+	/* BUS_VIRTUAL and the neru- prefix are what keep the capture from
+	 * grabbing its own output (isNeruInjectionDevice). */
+	usetup.id.bustype = BUS_VIRTUAL;
+	usetup.id.vendor = NERU_UINPUT_VENDOR;
+	usetup.id.product = 0x567a;
+	strcpy(usetup.name, "neru-keyboard-proxy");
+	if (ioctl(fd, UI_DEV_SETUP, &usetup) < 0 || ioctl(fd, UI_DEV_CREATE) < 0) {
+		neru_uinput_fail(fd);
+		return 0;
+	}
+
+	*out_fd = fd;
+	return 1;
+}
+
+/* The pointer half of the proxy: where the relative motion and the mouse
+ * buttons of a grabbed keyboard that carries them go. Created only once such a
+ * keyboard is grabbed, so a setup without one sees no virtual mouse. Only the
+ * mouse buttons are advertised: BTN_1 or a joystick or gamepad button would
+ * have udev class the device as a joystick (isMouseButton is the Go side of
+ * this range). On failure errno is as neru_uinput_create_proxy_keyboard leaves
+ * it. */
+int neru_uinput_create_proxy_pointer(int *out_fd) {
+	int fd = open("/dev/uinput", O_RDWR);
+	if (fd < 0) {
+		int open_errno = errno;
+		fd = open("/dev/input/uinput", O_RDWR);
+		if (fd < 0) {
+			errno = open_errno;
+			return 0;
+		}
+	}
+
+	if (ioctl(fd, UI_SET_EVBIT, EV_KEY) < 0 || ioctl(fd, UI_SET_EVBIT, EV_SYN) < 0 ||
+	    ioctl(fd, UI_SET_EVBIT, EV_REL) < 0 || ioctl(fd, UI_SET_PROPBIT, INPUT_PROP_POINTER) < 0) {
+		neru_uinput_fail(fd);
+		return 0;
+	}
+
+	for (int code = BTN_LEFT; code <= BTN_TASK; code++) {
+		if (ioctl(fd, UI_SET_KEYBIT, code) < 0) {
+			neru_uinput_fail(fd);
+			return 0;
+		}
+	}
+
+	/* Every relative axis, so whatever motion a grabbed device reports has a
+	 * code here; the kernel drops an event for a code a device does not
+	 * advertise, and a dropped event on a grabbed device reaches nothing. */
+	for (int code = 0; code <= REL_MAX; code++) {
+		if (code == REL_RESERVED)
+			continue;
+		if (ioctl(fd, UI_SET_RELBIT, code) < 0) {
+			neru_uinput_fail(fd);
+			return 0;
+		}
+	}
+
+	struct uinput_setup usetup;
+	memset(&usetup, 0, sizeof(usetup));
+	usetup.id.bustype = BUS_VIRTUAL;
+	usetup.id.vendor = NERU_UINPUT_VENDOR;
+	usetup.id.product = 0x567b;
+	strcpy(usetup.name, "neru-pointer-proxy");
+	if (ioctl(fd, UI_DEV_SETUP, &usetup) < 0 || ioctl(fd, UI_DEV_CREATE) < 0) {
+		neru_uinput_fail(fd);
+		return 0;
+	}
+
+	*out_fd = fd;
+	return 1;
+}
+
+/* The sysfs name ("input12") of the device behind a created uinput fd, so
+ * the proxy can find its own event node and ask whether another process holds
+ * it (openProxyNode). Negative on failure, with errno set. */
+int neru_uinput_get_sysname(int fd, char *name, size_t name_size) { return ioctl(fd, UI_GET_SYSNAME(name_size), name); }
+
+int neru_uinput_destroy(int fd) {
+	if (fd < 0)
+		return -1;
+	ioctl(fd, UI_DEV_DESTROY);
+	return close(fd);
+}
+
+ssize_t neru_evdev_write_event(int fd, const struct input_event *event) {
+	ssize_t n;
+	do {
+		n = write(fd, event, sizeof(struct input_event));
+	} while (n < 0 && errno == EINTR);
+	return n;
+}
+
+ssize_t neru_evdev_write_events(int fd, const struct input_event *events, int count) {
+	if (count <= 0)
+		return 0;
+	size_t total = (size_t)count * sizeof(struct input_event);
+	ssize_t n;
+	do {
+		n = write(fd, events, total);
+	} while (n < 0 && errno == EINTR);
+	return n;
+}

@@ -16,128 +16,160 @@ on:
         secrets:
             upload_token:
                 required: false
+            # TODO: Add these once Developer ID signing is set up
+            # mac_developer_id_cert:
+            #     required: false
+            # mac_developer_id_key:
+            #     required: false
+            # mac_dev_id_keychain_pwd:
+            #     required: false
+            # apple_notary_api_issuer:
+            #     required: false
+            # apple_notary_api_key_id:
+            #     required: false
+            # apple_notary_api_key:
+            #     required: false
+            # apple_team_id:
+            #     required: false
 
 name: publish-artifacts
 
+# Three things below are repeated six times, once per target, so the reasoning
+# lives here instead of six times over:
+#
+#  - Every job attests its zip with actions/attest-build-provenance, so a
+#    download can be traced back to this workflow, this commit and this runner
+#    with `gh attestation verify <file> --repo y3owk1n/neru`. That is the
+#    property the .sha256 files never had: they are produced by the same job and
+#    uploaded with the same token as the binary they describe, so they prove the
+#    download was not corrupted, not that the build was ours. Attestation needs
+#    `id-token: write` (to sign) and `attestations: write` (to store), granted
+#    per job rather than workflow-wide. A reusable workflow can only narrow the
+#    permissions its caller granted, never widen them, so nightly.yml and
+#    release-please.yml must grant the same three on the job that says
+#    `uses: ./.github/workflows/publish-artifacts.yml` — drop them there and
+#    signing here stops silently.
+#
+#  - setup-just is pinned by commit, not by tag: a tag is a movable pointer, and
+#    these jobs later hand the release token to the upload script.
+#    Dependabot's github-actions ecosystem updates a SHA pin that carries a
+#    version comment, so the trailing `# vX.Y.Z` is load-bearing. actions/*,
+#    googleapis/* and golangci/* are deliberately left tag-pinned across this
+#    repo — accepted residual risk, weighed against the update churn.
+#
+#  - The Go toolchain comes from go.mod, as it already does in ci.yml. The
+#    literal that used to sit here drifted: six jobs still said 1.26.4 after the
+#    module had moved on, and nothing failed to say so.
 jobs:
     build-darwin-arm64-artifacts:
-        runs-on: macos-latest
+        runs-on: macos-15
         permissions:
-            contents: write
+            contents: write # upload the release files
+            id-token: write # attest-build-provenance: sign the provenance
+            attestations: write # attest-build-provenance: store it on the repo
         steps:
             - uses: actions/checkout@v7
 
-            - uses: actions/setup-go@v6
+            - uses: actions/setup-go@v7
               with:
-                  go-version: "1.26.4"
+                  go-version-file: "go.mod"
 
-            - uses: extractions/setup-just@v4
+            - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
               with:
                   just-version: "1.54.0"
 
             - name: Build neru darwin arm64 artifact
               run: just release-ci-darwin arm64 ${{ inputs.version_override }}
 
-            - name: Generate man pages
-              run: go run ./cmd/genman build/man
+            - name: Assemble neru-darwin-arm64
+              run: just dist bin/neru-darwin-arm64 build/arm64 "${{ inputs.macos_bundle_version }}" "${{ inputs.macos_short_version }}" "${{ inputs.version_override }}"
 
-            - name: Bundle neru-darwin-arm64
+            - name: Package neru-darwin-arm64
               run: |
-                  mkdir -p build/arm64/Neru.app/Contents/{MacOS,Resources}
-                  cp bin/neru-darwin-arm64 build/arm64/Neru.app/Contents/MacOS/neru
-                  chmod +x build/arm64/Neru.app/Contents/MacOS/neru
-                  cp resources/icon.icns build/arm64/Neru.app/Contents/Resources/icon.icns
-                  mkdir -p build/arm64/share/man/man1
-                  cp build/man/*.1 build/arm64/share/man/man1/
-                  sed \
-                    -e "s/BUNDLE_VERSION/${{ inputs.macos_bundle_version }}/g" \
-                    -e "s/SHORT_VERSION/${{ inputs.macos_short_version }}/g" \
-                    -e "s/BUILD_ID/${{ inputs.version_override }}/g" \
-                    resources/Info.plist.template > build/arm64/Neru.app/Contents/Info.plist
-
-                  # Ad-hoc codesign to preserve accessibility permissions across updates
-                  codesign --force --deep --sign - build/arm64/Neru.app
-
-                  mkdir -p build/arm64/bin
-                  cp bin/neru-darwin-arm64 build/arm64/bin/neru
-                  chmod +x build/arm64/bin/neru
-
                   cd build/arm64
                   zip -r ../../neru-darwin-arm64.zip bin Neru.app share
                   cd ../..
 
+            # `hash  filename` — the format `shasum -c` and `sha256sum -c` read.
+            # The bare digest this used to emit could be fed to neither, so the
+            # checksum a user downloaded had to be eyeballed. The -c line is the
+            # assertion that the file we just wrote really is consumable.
+            #
+            # One file per artifact rather than one SHA256SUMS per release: the
+            # six jobs run on six runners in parallel and upload independently,
+            # so an aggregate would need a seventh job re-downloading all six —
+            # and for the `nightly` tag, which is clobbered on every push to
+            # main, an aggregate left half-updated by one failed leg is worse
+            # than none. Authenticity comes from the attestation either way.
             - name: Generate darwin arm64 checksum
               run: |
-                  shasum -a 256 neru-darwin-arm64.zip | awk '{print $1}' > neru-darwin-arm64.zip.sha256
-                  ls -l neru-darwin-arm64.zip neru-darwin-arm64.zip.sha256
+                  shasum -a 256 neru-darwin-arm64.zip > neru-darwin-arm64.zip.sha256
+                  shasum -a 256 -c neru-darwin-arm64.zip.sha256
+
+            - name: Attest darwin arm64 build provenance
+              uses: actions/attest-build-provenance@v4
+              with:
+                  subject-path: neru-darwin-arm64.zip
 
             - name: Upload darwin arm64 release artifacts
               env:
                   GH_TOKEN: ${{ secrets.upload_token || github.token }}
+              shell: bash
               run: |
-                  gh release upload "${{ inputs.release_tag }}" neru-darwin-arm64.zip neru-darwin-arm64.zip.sha256 --clobber
+                  .github/scripts/upload-release-assets.sh "${{ inputs.release_tag }}" neru-darwin-arm64.zip neru-darwin-arm64.zip.sha256
 
     build-darwin-amd64-artifacts:
         runs-on: macos-15-intel
         permissions:
-            contents: write
+            contents: write # upload the release files
+            id-token: write # attest-build-provenance: sign the provenance
+            attestations: write # attest-build-provenance: store it on the repo
         steps:
             - uses: actions/checkout@v7
 
-            - uses: actions/setup-go@v6
+            - uses: actions/setup-go@v7
               with:
-                  go-version: "1.26.4"
+                  go-version-file: "go.mod"
 
-            - uses: extractions/setup-just@v4
+            - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
               with:
                   just-version: "1.54.0"
 
             - name: Build neru darwin amd64 artifact
               run: just release-ci-darwin amd64 ${{ inputs.version_override }}
 
-            - name: Generate man pages
-              run: go run ./cmd/genman build/man
+            - name: Assemble neru-darwin-amd64
+              run: just dist bin/neru-darwin-amd64 build/amd64 "${{ inputs.macos_bundle_version }}" "${{ inputs.macos_short_version }}" "${{ inputs.version_override }}"
 
-            - name: Bundle neru-darwin-amd64
+            - name: Package neru-darwin-amd64
               run: |
-                  mkdir -p build/amd64/Neru.app/Contents/{MacOS,Resources}
-                  cp bin/neru-darwin-amd64 build/amd64/Neru.app/Contents/MacOS/neru
-                  chmod +x build/amd64/Neru.app/Contents/MacOS/neru
-                  cp resources/icon.icns build/amd64/Neru.app/Contents/Resources/icon.icns
-                  mkdir -p build/amd64/share/man/man1
-                  cp build/man/*.1 build/amd64/share/man/man1/
-                  sed \
-                    -e "s/BUNDLE_VERSION/${{ inputs.macos_bundle_version }}/g" \
-                    -e "s/SHORT_VERSION/${{ inputs.macos_short_version }}/g" \
-                    -e "s/BUILD_ID/${{ inputs.version_override }}/g" \
-                    resources/Info.plist.template > build/amd64/Neru.app/Contents/Info.plist
-
-                  # Ad-hoc codesign to preserve accessibility permissions across updates
-                  codesign --force --deep --sign - build/amd64/Neru.app
-
-                  mkdir -p build/amd64/bin
-                  cp bin/neru-darwin-amd64 build/amd64/bin/neru
-                  chmod +x build/amd64/bin/neru
-
                   cd build/amd64
                   zip -r ../../neru-darwin-amd64.zip bin Neru.app share
                   cd ../..
 
             - name: Generate darwin amd64 checksum
               run: |
-                  shasum -a 256 neru-darwin-amd64.zip | awk '{print $1}' > neru-darwin-amd64.zip.sha256
-                  ls -l neru-darwin-amd64.zip neru-darwin-amd64.zip.sha256
+                  shasum -a 256 neru-darwin-amd64.zip > neru-darwin-amd64.zip.sha256
+                  shasum -a 256 -c neru-darwin-amd64.zip.sha256
+
+            - name: Attest darwin amd64 build provenance
+              uses: actions/attest-build-provenance@v4
+              with:
+                  subject-path: neru-darwin-amd64.zip
 
             - name: Upload darwin amd64 release artifacts
               env:
                   GH_TOKEN: ${{ secrets.upload_token || github.token }}
+              shell: bash
               run: |
-                  gh release upload "${{ inputs.release_tag }}" neru-darwin-amd64.zip neru-darwin-amd64.zip.sha256 --clobber
+                  .github/scripts/upload-release-assets.sh "${{ inputs.release_tag }}" neru-darwin-amd64.zip neru-darwin-amd64.zip.sha256
 
     build-linux-amd64-artifacts:
         runs-on: ubuntu-latest
         permissions:
-            contents: write
+            contents: write # upload the release files
+            id-token: write # attest-build-provenance: sign the provenance
+            attestations: write # attest-build-provenance: store it on the repo
         steps:
             - uses: actions/checkout@v7
 
@@ -150,54 +182,61 @@ jobs:
                     libx11-dev \
                     libxtst-dev \
                     libxrandr-dev \
-                    libxinerama-dev \
+                    libxrender-dev \
+                    libxext-dev \
                     libxfixes-dev \
                     libxkbcommon-dev \
+                    libfontconfig-dev \
                     wayland-protocols \
                     libei-dev \
-                    liboeffis-dev
+                    liboeffis-dev \
+                    libtesseract-dev \
+                    tesseract-ocr-eng \
+                    libpipewire-0.3-dev
 
-            - uses: actions/setup-go@v6
+            - uses: actions/setup-go@v7
               with:
-                  go-version: "1.26.4"
+                  go-version-file: "go.mod"
 
-            - uses: extractions/setup-just@v4
+            - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
               with:
                   just-version: "1.54.0"
 
             - name: Build neru linux amd64 artifact
               run: just release-ci-linux amd64 ${{ inputs.version_override }}
 
-            - name: Generate man pages
-              run: go run ./cmd/genman build/man
+            - name: Assemble neru-linux-amd64
+              run: just dist bin/neru-linux-amd64 build/linux-amd64
 
-            - name: Bundle neru-linux-amd64
+            - name: Package neru-linux-amd64
               run: |
-                  mkdir -p build/linux-amd64/bin
-                  cp bin/neru-linux-amd64 build/linux-amd64/bin/neru
-                  chmod +x build/linux-amd64/bin/neru
-                  mkdir -p build/linux-amd64/share/man/man1
-                  cp build/man/*.1 build/linux-amd64/share/man/man1/
-
                   cd build/linux-amd64
                   zip -r ../../neru-linux-amd64.zip bin share
                   cd ../..
 
             - name: Generate linux amd64 checksum
               run: |
-                  sha256sum neru-linux-amd64.zip | awk '{print $1}' > neru-linux-amd64.zip.sha256
-                  ls -l neru-linux-amd64.zip neru-linux-amd64.zip.sha256
+                  sha256sum neru-linux-amd64.zip > neru-linux-amd64.zip.sha256
+                  sha256sum -c neru-linux-amd64.zip.sha256
+
+            - name: Attest linux amd64 build provenance
+              uses: actions/attest-build-provenance@v4
+              with:
+                  subject-path: neru-linux-amd64.zip
 
             - name: Upload linux amd64 release artifacts
               env:
                   GH_TOKEN: ${{ secrets.upload_token || github.token }}
+              shell: bash
               run: |
-                  gh release upload "${{ inputs.release_tag }}" neru-linux-amd64.zip neru-linux-amd64.zip.sha256 --clobber
+                  .github/scripts/upload-release-assets.sh "${{ inputs.release_tag }}" neru-linux-amd64.zip neru-linux-amd64.zip.sha256
 
     build-linux-arm64-artifacts:
         runs-on: ubuntu-24.04-arm
         permissions:
-            contents: write
+            contents: write # upload the release files
+            id-token: write # attest-build-provenance: sign the provenance
+            attestations: write # attest-build-provenance: store it on the repo
         steps:
             - uses: actions/checkout@v7
 
@@ -210,62 +249,69 @@ jobs:
                     libx11-dev \
                     libxtst-dev \
                     libxrandr-dev \
-                    libxinerama-dev \
+                    libxrender-dev \
+                    libxext-dev \
                     libxfixes-dev \
                     libxkbcommon-dev \
+                    libfontconfig-dev \
                     wayland-protocols \
                     libei-dev \
-                    liboeffis-dev
+                    liboeffis-dev \
+                    libtesseract-dev \
+                    tesseract-ocr-eng \
+                    libpipewire-0.3-dev
 
-            - uses: actions/setup-go@v6
+            - uses: actions/setup-go@v7
               with:
-                  go-version: "1.26.4"
+                  go-version-file: "go.mod"
 
-            - uses: extractions/setup-just@v4
+            - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
               with:
                   just-version: "1.54.0"
 
             - name: Build neru linux arm64 artifact
               run: just release-ci-linux arm64 ${{ inputs.version_override }}
 
-            - name: Generate man pages
-              run: go run ./cmd/genman build/man
+            - name: Assemble neru-linux-arm64
+              run: just dist bin/neru-linux-arm64 build/linux-arm64
 
-            - name: Bundle neru-linux-arm64
+            - name: Package neru-linux-arm64
               run: |
-                  mkdir -p build/linux-arm64/bin
-                  cp bin/neru-linux-arm64 build/linux-arm64/bin/neru
-                  chmod +x build/linux-arm64/bin/neru
-                  mkdir -p build/linux-arm64/share/man/man1
-                  cp build/man/*.1 build/linux-arm64/share/man/man1/
-
                   cd build/linux-arm64
                   zip -r ../../neru-linux-arm64.zip bin share
                   cd ../..
 
             - name: Generate linux arm64 checksum
               run: |
-                  sha256sum neru-linux-arm64.zip | awk '{print $1}' > neru-linux-arm64.zip.sha256
-                  ls -l neru-linux-arm64.zip neru-linux-arm64.zip.sha256
+                  sha256sum neru-linux-arm64.zip > neru-linux-arm64.zip.sha256
+                  sha256sum -c neru-linux-arm64.zip.sha256
+
+            - name: Attest linux arm64 build provenance
+              uses: actions/attest-build-provenance@v4
+              with:
+                  subject-path: neru-linux-arm64.zip
 
             - name: Upload linux arm64 release artifacts
               env:
                   GH_TOKEN: ${{ secrets.upload_token || github.token }}
+              shell: bash
               run: |
-                  gh release upload "${{ inputs.release_tag }}" neru-linux-arm64.zip neru-linux-arm64.zip.sha256 --clobber
+                  .github/scripts/upload-release-assets.sh "${{ inputs.release_tag }}" neru-linux-arm64.zip neru-linux-arm64.zip.sha256
 
     build-windows-amd64-artifacts:
         runs-on: windows-latest
         permissions:
-            contents: write
+            contents: write # upload the release files
+            id-token: write # attest-build-provenance: sign the provenance
+            attestations: write # attest-build-provenance: store it on the repo
         steps:
             - uses: actions/checkout@v7
 
-            - uses: actions/setup-go@v6
+            - uses: actions/setup-go@v7
               with:
-                  go-version: "1.26.4"
+                  go-version-file: "go.mod"
 
-            - uses: extractions/setup-just@v4
+            - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
               with:
                   just-version: "1.54.0"
 
@@ -273,42 +319,56 @@ jobs:
               run: just release-ci-windows amd64 ${{ inputs.version_override }}
               shell: bash
 
-            - name: Generate man pages
-              run: go run ./cmd/genman build/man
+            - name: Assemble neru-windows-amd64
+              run: just dist bin/neru-windows-amd64.exe build/windows-amd64
+              shell: bash
 
-            - name: Bundle neru-windows-amd64
+            - name: Package neru-windows-amd64
               shell: pwsh
-              run: |
-                  New-Item -ItemType Directory -Force -Path build/windows-amd64/bin
-                  Copy-Item bin/neru-windows-amd64.exe build/windows-amd64/bin/neru.exe
-                  New-Item -ItemType Directory -Force -Path build/windows-amd64/share/man/man1
-                  Copy-Item build/man/*.1 build/windows-amd64/share/man/man1/
-                  Compress-Archive -Path build/windows-amd64/* -DestinationPath neru-windows-amd64.zip
+              run: Compress-Archive -Path build/windows-amd64/* -DestinationPath neru-windows-amd64.zip
 
+            # Set-Content would end the line with CRLF, and `sha256sum -c` folds
+            # that CR into the filename and then reports the file as missing —
+            # so the bytes are written explicitly, and the CR check below is the
+            # assertion rather than a hope.
             - name: Generate windows amd64 checksum
               shell: pwsh
               run: |
-                  $hash = (Get-FileHash neru-windows-amd64.zip -Algorithm SHA256).Hash.ToLower()
-                  Set-Content -Path neru-windows-amd64.zip.sha256 -Value $hash
+                  $name = "neru-windows-amd64.zip"
+                  $hash = (Get-FileHash $name -Algorithm SHA256).Hash.ToLower()
+                  $path = Join-Path $PWD "$name.sha256"
+                  [System.IO.File]::WriteAllText($path, "$hash  $name`n")
+                  if ([System.IO.File]::ReadAllBytes($path) -contains 13) {
+                      throw "checksum file contains a CR; sha256sum -c cannot read it"
+                  }
+                  Get-Content $path
+
+            - name: Attest windows amd64 build provenance
+              uses: actions/attest-build-provenance@v4
+              with:
+                  subject-path: neru-windows-amd64.zip
 
             - name: Upload windows amd64 release artifacts
               env:
                   GH_TOKEN: ${{ secrets.upload_token || github.token }}
+              shell: bash
               run: |
-                  gh release upload "${{ inputs.release_tag }}" neru-windows-amd64.zip neru-windows-amd64.zip.sha256 --clobber
+                  .github/scripts/upload-release-assets.sh "${{ inputs.release_tag }}" neru-windows-amd64.zip neru-windows-amd64.zip.sha256
 
     build-windows-arm64-artifacts:
         runs-on: windows-latest
         permissions:
-            contents: write
+            contents: write # upload the release files
+            id-token: write # attest-build-provenance: sign the provenance
+            attestations: write # attest-build-provenance: store it on the repo
         steps:
             - uses: actions/checkout@v7
 
-            - uses: actions/setup-go@v6
+            - uses: actions/setup-go@v7
               with:
-                  go-version: "1.26.4"
+                  go-version-file: "go.mod"
 
-            - uses: extractions/setup-just@v4
+            - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
               with:
                   just-version: "1.54.0"
 
@@ -316,26 +376,34 @@ jobs:
               run: just release-ci-windows arm64 ${{ inputs.version_override }}
               shell: bash
 
-            - name: Generate man pages
-              run: go run ./cmd/genman build/man
+            - name: Assemble neru-windows-arm64
+              run: just dist bin/neru-windows-arm64.exe build/windows-arm64
+              shell: bash
 
-            - name: Bundle neru-windows-arm64
+            - name: Package neru-windows-arm64
               shell: pwsh
-              run: |
-                  New-Item -ItemType Directory -Force -Path build/windows-arm64/bin
-                  Copy-Item bin/neru-windows-arm64.exe build/windows-arm64/bin/neru.exe
-                  New-Item -ItemType Directory -Force -Path build/windows-arm64/share/man/man1
-                  Copy-Item build/man/*.1 build/windows-arm64/share/man/man1/
-                  Compress-Archive -Path build/windows-arm64/* -DestinationPath neru-windows-arm64.zip
+              run: Compress-Archive -Path build/windows-arm64/* -DestinationPath neru-windows-arm64.zip
 
             - name: Generate windows arm64 checksum
               shell: pwsh
               run: |
-                  $hash = (Get-FileHash neru-windows-arm64.zip -Algorithm SHA256).Hash.ToLower()
-                  Set-Content -Path neru-windows-arm64.zip.sha256 -Value $hash
+                  $name = "neru-windows-arm64.zip"
+                  $hash = (Get-FileHash $name -Algorithm SHA256).Hash.ToLower()
+                  $path = Join-Path $PWD "$name.sha256"
+                  [System.IO.File]::WriteAllText($path, "$hash  $name`n")
+                  if ([System.IO.File]::ReadAllBytes($path) -contains 13) {
+                      throw "checksum file contains a CR; sha256sum -c cannot read it"
+                  }
+                  Get-Content $path
+
+            - name: Attest windows arm64 build provenance
+              uses: actions/attest-build-provenance@v4
+              with:
+                  subject-path: neru-windows-arm64.zip
 
             - name: Upload windows arm64 release artifacts
               env:
                   GH_TOKEN: ${{ secrets.upload_token || github.token }}
+              shell: bash
               run: |
-                  gh release upload "${{ inputs.release_tag }}" neru-windows-arm64.zip neru-windows-arm64.zip.sha256 --clobber
+                  .github/scripts/upload-release-assets.sh "${{ inputs.release_tag }}" neru-windows-arm64.zip neru-windows-arm64.zip.sha256

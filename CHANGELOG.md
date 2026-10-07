@@ -1,5 +1,445 @@
 # Changelog
 
+## [1.57.0](https://github.com/y3owk1n/neru/compare/v1.56.0...v1.57.0) (2026-10-04)
+
+
+### Features
+
+* **hints:** add exit-on-unmatched flag to dismiss overlay on unmatched key ([#1718](https://github.com/y3owk1n/neru/issues/1718)) ([1c47ad5](https://github.com/y3owk1n/neru/commit/1c47ad529dca1fc64f3ace01f19bb50b2b3c0d3a))
+
+
+### Bug Fixes
+
+* **accessibility:** skip tccutil reset when access is already granted ([#1721](https://github.com/y3owk1n/neru/issues/1721)) ([547ece3](https://github.com/y3owk1n/neru/commit/547ece320171b172a5c726c8e8b0c4c62441e7ba))
+* **darwin,overlay:** place grid label characters where the font puts them ([#1727](https://github.com/y3owk1n/neru/issues/1727)) ([519a693](https://github.com/y3owk1n/neru/commit/519a69338d092618544cb63f7907c9f1e095f13e))
+* **darwin:** ensure autorelease on posted mouse and key event ([#1730](https://github.com/y3owk1n/neru/issues/1730)) ([a845c1a](https://github.com/y3owk1n/neru/commit/a845c1af4237086f5ab806b23cdbc1713b1732b0))
+* **darwin:** restore overlays on every Space after a fullscreen video ([#1729](https://github.com/y3owk1n/neru/issues/1729)) ([99df1e0](https://github.com/y3owk1n/neru/commit/99df1e0e668504316a973054239415686c92ffd2))
+* **modes:** sort per-mode hotkey lookup with consistent modifier orders ([#1734](https://github.com/y3owk1n/neru/issues/1734)) ([fac8776](https://github.com/y3owk1n/neru/commit/fac8776374d9051986b820482092f5c74e31cf36))
+
+
+### Performance Improvements
+
+* **darwin,overlay:** improve overlay memory and faster activation ([#1726](https://github.com/y3owk1n/neru/issues/1726)) ([cca76da](https://github.com/y3owk1n/neru/commit/cca76da0794fb61656e3b7396f9169b5bd887a39))
+* **windows,overlay:** release hidden overlay surfaces ([#1728](https://github.com/y3owk1n/neru/issues/1728)) ([0388561](https://github.com/y3owk1n/neru/commit/03885619f95f115fdef474dd76eedc053283fef1))
+
+
+### Improvements
+
+* **log:** make daemon logs quieter and consistent ([#1732](https://github.com/y3owk1n/neru/issues/1732)) ([2483fc1](https://github.com/y3owk1n/neru/commit/2483fc11c9ae1c9c3f8bafa453841b6c6afbccce))
+* **log:** readable one-line console logs ([#1731](https://github.com/y3owk1n/neru/issues/1731)) ([8dac12e](https://github.com/y3owk1n/neru/commit/8dac12ebad0f2ee7380ec2791cbafbd9ec06d174))
+
+## [1.56.0](https://github.com/y3owk1n/neru/compare/v1.55.0...v1.56.0) (2026-09-28)
+
+
+### Features
+
+* force the keyboard layout on Linux and Windows, and list layouts in neru doctor ([#1715](https://github.com/y3owk1n/neru/issues/1715)) ([779ef0c](https://github.com/y3owk1n/neru/commit/779ef0c597792c8745dd80422a876e133ea79423))
+
+
+### Bug Fixes
+
+* **linux:** keep Wayland bindings on a Latin layout while another language is active ([#1709](https://github.com/y3owk1n/neru/issues/1709)) ([08c53d9](https://github.com/y3owk1n/neru/commit/08c53d9280ec313d769c87c2682a9a6f5eb5a1fd))
+* **linux:** keep X11 bindings on a Latin layout while another language is active ([#1711](https://github.com/y3owk1n/neru/issues/1711)) ([7ddd0cc](https://github.com/y3owk1n/neru/commit/7ddd0cc049ae0bf60c80cf14fde367fd410e7d03))
+* **linux:** take the keyboard on X11 when a hotkey starts a mode ([#1710](https://github.com/y3owk1n/neru/issues/1710)) ([25cd4c0](https://github.com/y3owk1n/neru/commit/25cd4c0ab71de99f62a83956da0c65154f73d5f4))
+* **windows:** keep punctuation hotkeys working while a non-Latin layout is active ([#1712](https://github.com/y3owk1n/neru/issues/1712)) ([dda2b2a](https://github.com/y3owk1n/neru/commit/dda2b2aba20e3e78f9ae14a5e2d78d1361ae895a))
+* **windows:** post drag motion as relative deltas so WinUI text selects ([#1706](https://github.com/y3owk1n/neru/issues/1706)) ([5556bcf](https://github.com/y3owk1n/neru/commit/5556bcfb681eb8ff1607972ced631cc296c1c8cd))
+* **windows:** run exec commands without a console window ([#1708](https://github.com/y3owk1n/neru/issues/1708)) ([324c051](https://github.com/y3owk1n/neru/commit/324c051bca3c9d637f2ac18dfac0f2f9681d93bc))
+
+## [1.55.0](https://github.com/y3owk1n/neru/compare/v1.54.0...v1.55.0) (2026-09-21)
+
+
+### Features
+
+* **cli:** add ability to cycle `--strategy` and `--capture-scope` ([#1690](https://github.com/y3owk1n/neru/issues/1690)) ([8181c1d](https://github.com/y3owk1n/neru/commit/8181c1d1768d17cb33eb1c5fb6f27e9cfe83ddfa))
+* **modes:** add bisect mode ([#1678](https://github.com/y3owk1n/neru/issues/1678)) ([e67045c](https://github.com/y3owk1n/neru/commit/e67045c75ac683d98b6d0d4bd757851441f7b494))
+* **modes:** repeat a bisect cut with --count in one press ([#1682](https://github.com/y3owk1n/neru/issues/1682)) ([5dbfcee](https://github.com/y3owk1n/neru/commit/5dbfcee5977c37eecc42c988371791e779874c43))
+* **modes:** support `--capture-screen` for grid and recursive grid ([#1686](https://github.com/y3owk1n/neru/issues/1686)) ([6576c70](https://github.com/y3owk1n/neru/commit/6576c70bd77837ebe3d9ec437e61a060a0730b92))
+* **overlay:** scale label fonts down to fit their cells and badges ([#1692](https://github.com/y3owk1n/neru/issues/1692)) ([1f70879](https://github.com/y3owk1n/neru/commit/1f70879fb095143a5c450d707d7f9985f84c914c))
+
+
+### Bug Fixes
+
+* **config:** use arrow key for mouse move in bisect for consistency ([#1681](https://github.com/y3owk1n/neru/issues/1681)) ([7484b67](https://github.com/y3owk1n/neru/commit/7484b67dfeef774519c00503c04d327f9ae7daae))
+* **darwin:** repair overlays pinned to one space after a fullscreen exit ([#1687](https://github.com/y3owk1n/neru/issues/1687)) ([c32e3dc](https://github.com/y3owk1n/neru/commit/c32e3dc4d6a6d52339eff3ee63ae83a5882d2c9b))
+* **lifecycle:** make `neru stop` pause every mode, action and hotkey ([#1689](https://github.com/y3owk1n/neru/issues/1689)) ([570042a](https://github.com/y3owk1n/neru/commit/570042a21ff472c21e768abedc271ac766f8cb2a))
+* **linux:** build on distros whose pipewire emits -fno-strict-overflow ([#1697](https://github.com/y3owk1n/neru/issues/1697)) ([22c3edc](https://github.com/y3owk1n/neru/commit/22c3edca4d2c72bce0a925e620354f348e40578d))
+* **modes:** keep every monitor reachable when displays share a name ([#1676](https://github.com/y3owk1n/neru/issues/1676)) ([f7ccc96](https://github.com/y3owk1n/neru/commit/f7ccc96279eb6c62bf8e6dd570a6efe1c60c041a))
+* **scroll:** release held modifiers around a Wayland scroll ([#1683](https://github.com/y3owk1n/neru/issues/1683)) ([437f35e](https://github.com/y3owk1n/neru/commit/437f35e8025cc83410d585702fbccf6697466a4c))
+* **windows:** keep hints inside the focused window frame ([#1688](https://github.com/y3owk1n/neru/issues/1688)) ([1187d94](https://github.com/y3owk1n/neru/commit/1187d942169cd142f515d5bffd24a29093f13b61))
+
+## [1.54.0](https://github.com/y3owk1n/neru/compare/v1.53.0...v1.54.0) (2026-09-13)
+
+
+### Features
+
+* **hints:** make the contour detector's thresholds configurable ([#1651](https://github.com/y3owk1n/neru/issues/1651)) ([c166699](https://github.com/y3owk1n/neru/commit/c16669967a410902cdd8015bd70bc59637ef2eaf))
+
+
+### Bug Fixes
+
+* **config:** reject NaN and infinite floats in every option ([#1652](https://github.com/y3owk1n/neru/issues/1652)) ([94a6a13](https://github.com/y3owk1n/neru/commit/94a6a13cc859dae369199dada3f25ada461dd7a3))
+* **grid:** plan cell sizes in apparent units on scaled Windows and X11 displays ([#1658](https://github.com/y3owk1n/neru/issues/1658)) ([496313c](https://github.com/y3owk1n/neru/commit/496313cae69f4c26e699abb43d1e81f704034e48))
+* **linux:** make a bare modifier tap reach the compositor while a mode is open ([#1666](https://github.com/y3owk1n/neru/issues/1666)) ([69f3dad](https://github.com/y3owk1n/neru/commit/69f3dad930ba02ed91c9b0e810d7152eaca48acb))
+* **linux:** make a hotkey click on Wayland land where the cursor is, unmodified ([#1656](https://github.com/y3owk1n/neru/issues/1656)) ([2cb6a2a](https://github.com/y3owk1n/neru/commit/2cb6a2ad08f311093266d76f9df27912ff3f9d9e))
+* **linux:** name mode chords with the activation modifier still held ([#1653](https://github.com/y3owk1n/neru/issues/1653)) ([e9a57cb](https://github.com/y3owk1n/neru/commit/e9a57cb47d55dddbb35eb8e2e74fd767d5895873))
+* **overlay:** draw only hint labels and badges bold on Windows and Linux ([#1657](https://github.com/y3owk1n/neru/issues/1657)) ([c976d44](https://github.com/y3owk1n/neru/commit/c976d4415fc436efd0601c744817b9507e5a8bdf))
+* **overlay:** identify the overlay window as `neru-overlay` on every platform ([#1661](https://github.com/y3owk1n/neru/issues/1661)) ([995800b](https://github.com/y3owk1n/neru/commit/995800b394729fced0e1c5c83574606d8265b847))
+* **windows:** keep idle overlays responsive ([#1648](https://github.com/y3owk1n/neru/issues/1648)) ([33f4997](https://github.com/y3owk1n/neru/commit/33f49979730419f98918cc76344d7ce11ea1fbc1))
+* **windows:** post drag motion so a held click selects and drags across a warp ([#1664](https://github.com/y3owk1n/neru/issues/1664)) ([fb832ed](https://github.com/y3owk1n/neru/commit/fb832ede815bf116df73afeaec0b3a6b881c0948))
+* **windows:** scale overlay fonts and geometry to the monitor's DPI ([#1655](https://github.com/y3owk1n/neru/issues/1655)) ([6132dd8](https://github.com/y3owk1n/neru/commit/6132dd80545b2868ad15d0ff84e5db64a7c66e23))
+* **windows:** use Direct2D for the overlay instead of silently falling back to GDI ([#1660](https://github.com/y3owk1n/neru/issues/1660)) ([2695e17](https://github.com/y3owk1n/neru/commit/2695e17f69b310b42df811c13b63c870075bf917))
+
+## [1.53.0](https://github.com/y3owk1n/neru/compare/v1.52.0...v1.53.0) (2026-09-08)
+
+
+### Features
+
+* **hotkeys:** glide the cursor smoothly while a relative-move key is held ([#1626](https://github.com/y3owk1n/neru/issues/1626)) ([89b6f1c](https://github.com/y3owk1n/neru/commit/89b6f1c195c35f7f748d125a5ffe3d597040ee1e))
+* **hotkeys:** repeat a held global hotkey on Linux and Windows ([#1621](https://github.com/y3owk1n/neru/issues/1621)) ([19b40a3](https://github.com/y3owk1n/neru/commit/19b40a32d94a5899ee976fefc742cea27ae414c8))
+* **install:** install, update and remove Neru with one curl or irm command ([#1630](https://github.com/y3owk1n/neru/issues/1630)) ([30fc7f5](https://github.com/y3owk1n/neru/commit/30fc7f5c3d2212bec023f0f03e8fa86c3741a0e6))
+* **linux:** make Wayland mode activation instant with a lifetime keyboard proxy ([#1600](https://github.com/y3owk1n/neru/issues/1600)) ([52fa240](https://github.com/y3owk1n/neru/commit/52fa24021162d4d4fe99a3e712765d3c920013ed))
+* **linux:** support cosmic desktop ([#1636](https://github.com/y3owk1n/neru/issues/1636)) ([f65d3a4](https://github.com/y3owk1n/neru/commit/f65d3a46ecce7e04a1c90d02e3acea2bbf95d0ab))
+* **linux:** support gnome wayland ([#1638](https://github.com/y3owk1n/neru/issues/1638)) ([7e3290b](https://github.com/y3owk1n/neru/commit/7e3290b14fdd2fb3538a888b4c8a38ae6cee028e))
+* **modes:** add support for user declared custom mode ([#1629](https://github.com/y3owk1n/neru/issues/1629)) ([3a3ee0e](https://github.com/y3owk1n/neru/commit/3a3ee0e70d2140b64890a317c55ab65b630a23d0))
+
+
+### Bug Fixes
+
+* **cli:** open the docs on Windows, where the tray already knows how ([#1620](https://github.com/y3owk1n/neru/issues/1620)) ([16a3c90](https://github.com/y3owk1n/neru/commit/16a3c9085e1c497ea690c0843db9902fcb07a64e))
+* **hints:** ask for screen-capture consent before the contour strategy runs ([#1596](https://github.com/y3owk1n/neru/issues/1596)) ([71d1b34](https://github.com/y3owk1n/neru/commit/71d1b34fee6de79eb5290eccc8947a674557f634))
+* **hotkeys:** bind Delete to the backspace key on Linux, as on macOS and Windows ([#1624](https://github.com/y3owk1n/neru/issues/1624)) ([2cbe3ce](https://github.com/y3owk1n/neru/commit/2cbe3ce53380c6f893fc56bfc908177e5526aa1b))
+* **install:** keep the PowerShell window open and respect the execution policy ([#1631](https://github.com/y3owk1n/neru/issues/1631)) ([ed79130](https://github.com/y3owk1n/neru/commit/ed791308f40a6e284eccb2e5441ecdecad80fe57))
+* **install:** notice Nix launch agents and clean up the old installer's systemd unit ([#1632](https://github.com/y3owk1n/neru/issues/1632)) ([212a7d1](https://github.com/y3owk1n/neru/commit/212a7d171afd017b63cb63bbc6e8f1663e5d6784))
+* **linux:** capture Bluetooth keyboards that expose a volume axis ([#1633](https://github.com/y3owk1n/neru/issues/1633)) ([90f1447](https://github.com/y3owk1n/neru/commit/90f14471242f4b9037cddd7d73d6b66debd99929))
+* **linux:** keep the kde focused window current after the tray closes the bus ([#1642](https://github.com/y3owk1n/neru/issues/1642)) ([e092e6d](https://github.com/y3owk1n/neru/commit/e092e6ded72214631c333e4ac4f6d2fcffdd88e9))
+* **linux:** keep the Wayland keyboard alive when a remapper grabs Neru's proxy or starts after it ([#1604](https://github.com/y3owk1n/neru/issues/1604)) ([1e8e7da](https://github.com/y3owk1n/neru/commit/1e8e7da995c17772634b08f9a123d3452be4e25a))
+* **linux:** keep Wayland hotkeys working with a key remapper across its restarts ([#1602](https://github.com/y3owk1n/neru/issues/1602)) ([cffb996](https://github.com/y3owk1n/neru/commit/cffb99652a10ddcaa27c3c20a123d6e80cf7487a))
+* **linux:** name keys by the character they type so Shift+Tab and PageUp bindings fire ([#1599](https://github.com/y3owk1n/neru/issues/1599)) ([1516fb7](https://github.com/y3owk1n/neru/commit/1516fb79754a68d3b4e7c8f5c410ac3386202be0))
+* **linux:** pick the x11-focused window for hints instead of a chromium frame ([#1645](https://github.com/y3owk1n/neru/issues/1645)) ([3029791](https://github.com/y3owk1n/neru/commit/3029791bda8e0012e7363cb5634fb39fe9e5ed03))
+* **linux:** place KDE screen-capture streams that carry no position ([#1635](https://github.com/y3owk1n/neru/issues/1635)) ([66f2f45](https://github.com/y3owk1n/neru/commit/66f2f45eb4885142e22f9bc0a9d244a45b87a4e5))
+* **linux:** recognize labwc and the wlroots desktop tag ([#1637](https://github.com/y3owk1n/neru/issues/1637)) ([61844b7](https://github.com/y3owk1n/neru/commit/61844b78fb813e0c890091cffac3966d262887e7))
+* **linux:** release forwarded keys on the proxy keyboard when it fails open ([#1619](https://github.com/y3owk1n/neru/issues/1619)) ([00715b3](https://github.com/y3owk1n/neru/commit/00715b38a6f71d5dcd6d9cb3e2f1ab4ec3d9973b))
+* **linux:** round a scroll to the nearest notch instead of truncating it ([#1618](https://github.com/y3owk1n/neru/issues/1618)) ([ad4dc5c](https://github.com/y3owk1n/neru/commit/ad4dc5cb67bda4df9d51a10373f28ebf08927436))
+* **linux:** stop a mod hotkey chord opening the desktop launcher on Wayland ([#1634](https://github.com/y3owk1n/neru/issues/1634)) ([cdc0a1e](https://github.com/y3owk1n/neru/commit/cdc0a1eab2721bd784e0120cb52cb64a6fcb450e))
+* **linux:** stop a modifier sticking after a Wayland mode launched from a compositor binding ([#1603](https://github.com/y3owk1n/neru/issues/1603)) ([7831a5b](https://github.com/y3owk1n/neru/commit/7831a5bb1d6bc99f2635b834069fffba61904761))
+* **linux:** track windows already open when neru starts on wlroots ([#1643](https://github.com/y3owk1n/neru/issues/1643)) ([88463d4](https://github.com/y3owk1n/neru/commit/88463d45657202f076cb02449686f0f44ae91109))
+* **linux:** warn once when passthrough_unbounded_keys is set on the X11 backend ([#1625](https://github.com/y3owk1n/neru/issues/1625)) ([4e6659f](https://github.com/y3owk1n/neru/commit/4e6659f58f1126ef5f85b20eaa4cfef9dbb6b4e8))
+* **modes:** click where a held-key glide left the cursor, not on the grid selection ([#1627](https://github.com/y3owk1n/neru/issues/1627)) ([3655957](https://github.com/y3owk1n/neru/commit/3655957dd1cdf70ee74c392361fae1ea68f0567f))
+* **scroll:** apply a sticky modifier to scroll actions ([#1615](https://github.com/y3owk1n/neru/issues/1615)) ([2eb92ff](https://github.com/y3owk1n/neru/commit/2eb92ffa693e109f57a90dcb809fbedd6446e7e0))
+* **windows:** carry the action's modifiers on injected clicks and drags ([#1614](https://github.com/y3owk1n/neru/issues/1614)) ([c331fa2](https://github.com/y3owk1n/neru/commit/c331fa29cf96ed755c90e07084961d23f326f201))
+* **windows:** dispatch keys off the low-level hook thread, as the other taps do ([#1617](https://github.com/y3owk1n/neru/issues/1617)) ([f151a66](https://github.com/y3owk1n/neru/commit/f151a66d43adb84b15110ce2063027cc1bb93d64))
+* **windows:** keep a stopped keyboard hook's WM_QUIT off other message pumps ([#1598](https://github.com/y3owk1n/neru/issues/1598)) ([73730a9](https://github.com/y3owk1n/neru/commit/73730a967f2bf05e3f569aed9fff579664d418e6))
+* **windows:** stop the grid cells reappearing behind an open subgrid ([#1622](https://github.com/y3owk1n/neru/issues/1622)) ([4c8268c](https://github.com/y3owk1n/neru/commit/4c8268c5408d5157a7c81c4bfe0c698ee8065137))
+
+## [1.52.0](https://github.com/y3owk1n/neru/compare/v1.51.0...v1.52.0) (2026-09-04)
+
+
+### Features
+
+* **grid:** allow bounded coarse selection labels ([#1537](https://github.com/y3owk1n/neru/issues/1537)) ([ed456c4](https://github.com/y3owk1n/neru/commit/ed456c4dca166fc3ab24f0e7d7f363ecf33ccfdb))
+* **hints:** add wl-kbptr contour-based hint strategy on Linux ([#1543](https://github.com/y3owk1n/neru/issues/1543)) ([c3aaea9](https://github.com/y3owk1n/neru/commit/c3aaea989d2c800e0cfa5791e9b2e6358a51c70a))
+* **hints:** bring the contour strategy to macOS with a capture scope ([#1550](https://github.com/y3owk1n/neru/issues/1550)) ([3509ed3](https://github.com/y3owk1n/neru/commit/3509ed30d57b2836dc89bb24625242f19c38710a))
+* **windows:** capture the screen with BitBlt so the contour strategy works ([#1575](https://github.com/y3owk1n/neru/issues/1575)) ([52bcf64](https://github.com/y3owk1n/neru/commit/52bcf642c4786ec318d27b72ecffd3938d0716d7))
+* **windows:** draw the virtual-pointer indicator in grid mode ([#1581](https://github.com/y3owk1n/neru/issues/1581)) ([3a1f787](https://github.com/y3owk1n/neru/commit/3a1f787d1ca67d2f10056a07cc8141ba4ac75959))
+* **windows:** grid and recursive-grid transition animation ([#1583](https://github.com/y3owk1n/neru/issues/1583)) ([97587e4](https://github.com/y3owk1n/neru/commit/97587e4a5df232d7866565263d5446fa30d66286))
+* **windows:** horizontal scroll injection ([#1578](https://github.com/y3owk1n/neru/issues/1578)) ([bed6ccf](https://github.com/y3owk1n/neru/commit/bed6ccf2fcf39e73e8d396350cfe47454a1d75aa))
+* **windows:** key feed via SendInput ([#1594](https://github.com/y3owk1n/neru/issues/1594)) ([ceada7a](https://github.com/y3owk1n/neru/commit/ceada7adbe4f1a61bfdabb44e35419202ce430a6))
+* **windows:** modifier passthrough and PostModifierEvent ([#1579](https://github.com/y3owk1n/neru/issues/1579)) ([8ce1292](https://github.com/y3owk1n/neru/commit/8ce1292e9e2a797bef94052991a8c881f3946e4c))
+* **windows:** monitor_select mode ([#1580](https://github.com/y3owk1n/neru/issues/1580)) ([2bd90d7](https://github.com/y3owk1n/neru/commit/2bd90d711dd80577a019345898be202ee9dba3a1))
+* **windows:** native notifications via tray balloon tips ([#1586](https://github.com/y3owk1n/neru/issues/1586)) ([623c0cd](https://github.com/y3owk1n/neru/commit/623c0cd1e2ea59d32ab50b6b68e76d61ab082c9d))
+* **windows:** neru services via Task Scheduler ([#1587](https://github.com/y3owk1n/neru/issues/1587)) ([d396055](https://github.com/y3owk1n/neru/commit/d3960559b51634fd191f12472d999b7c01fe5759))
+* **windows:** publish display changes as screen-parameter events ([#1573](https://github.com/y3owk1n/neru/issues/1573)) ([77a203b](https://github.com/y3owk1n/neru/commit/77a203b8c5f5fd84ff5443681f22c567158f2886))
+* **windows:** publish foreground-window changes through the app watcher ([#1572](https://github.com/y3owk1n/neru/issues/1572)) ([fd20eb4](https://github.com/y3owk1n/neru/commit/fd20eb40eac448c1742b61342aa327f94ec33cfa))
+* **windows:** resolve font families against installed fonts ([#1588](https://github.com/y3owk1n/neru/issues/1588)) ([fc89ada](https://github.com/y3owk1n/neru/commit/fc89adaa097f143726ae1afbbab0183530ce02b9))
+* **windows:** smooth cursor animation, including relative moves ([#1584](https://github.com/y3owk1n/neru/issues/1584)) ([39309dc](https://github.com/y3owk1n/neru/commit/39309dcb43b56ec3c0a0f9204e56c31fbb39300e))
+* **windows:** smooth scroll animation ([#1585](https://github.com/y3owk1n/neru/issues/1585)) ([110d22b](https://github.com/y3owk1n/neru/commit/110d22b8db7eb585481b4bff6fb8beefd8827b84))
+* **windows:** verify the named-pipe server owner before connecting ([#1589](https://github.com/y3owk1n/neru/issues/1589)) ([9a3987b](https://github.com/y3owk1n/neru/commit/9a3987bf4e63dc3dfb3a57d2bf65f6ecfaea183d))
+* **windows:** vision strategy via Windows.Media.Ocr ([#1576](https://github.com/y3owk1n/neru/issues/1576)) ([47bdcf8](https://github.com/y3owk1n/neru/commit/47bdcf856fe2a68233735377ee21432a07c48cc1))
+* **windows:** walk the full UIA tree with a cached FindAll ([#1577](https://github.com/y3owk1n/neru/issues/1577)) ([320448d](https://github.com/y3owk1n/neru/commit/320448dbd85b83e01d320d0e515aeb9ecccd866d))
+
+
+### Bug Fixes
+
+* **app:** guard observer hooks against a config reload racing startup ([#1590](https://github.com/y3owk1n/neru/issues/1590)) ([7ba7e26](https://github.com/y3owk1n/neru/commit/7ba7e26cf26b18f638989abc7747d8aec20a6ecb))
+* **cli:** present the Linux and Windows startup notice as beta status ([#1595](https://github.com/y3owk1n/neru/issues/1595)) ([6518697](https://github.com/y3owk1n/neru/commit/65186971430a9dcd54efda6999c170601962ede4))
+* **linux:** make modified scroll work on hyprland ([#1474](https://github.com/y3owk1n/neru/issues/1474)) ([5792e25](https://github.com/y3owk1n/neru/commit/5792e251db0ce9ff54af09ecaa862195ad9fcdf9))
+* **linux:** report when scrolling falls back from uinput on wayland ([#1570](https://github.com/y3owk1n/neru/issues/1570)) ([2199826](https://github.com/y3owk1n/neru/commit/219982663352bfc6a9105cfd2263205a0c81db42))
+* **linux:** stop wayland scroll sending a second, reversed notch per press ([#1571](https://github.com/y3owk1n/neru/issues/1571)) ([8df1c41](https://github.com/y3owk1n/neru/commit/8df1c41c03bb196218ba8bebe14f80a096151abe))
+* **windows:** keep sticky modifiers out of global hotkey matching ([#1591](https://github.com/y3owk1n/neru/issues/1591)) ([945bf4b](https://github.com/y3owk1n/neru/commit/945bf4b70e1df03fd0b6c43ebd29252a924de3b9))
+* **windows:** prevent overlay flashes when reopening ([#1545](https://github.com/y3owk1n/neru/issues/1545)) ([2611b0f](https://github.com/y3owk1n/neru/commit/2611b0f67399718a78ef6dd5c805bae0873eb70d))
+
+
+### Performance Improvements
+
+* **windows:** draw the overlay through DirectComposition and Direct2D ([#1582](https://github.com/y3owk1n/neru/issues/1582)) ([3fcb25e](https://github.com/y3owk1n/neru/commit/3fcb25e0af5d9b397cb1036aa778df393fe37b78))
+
+## [1.51.0](https://github.com/y3owk1n/neru/compare/v1.50.0...v1.51.0) (2026-08-14)
+
+
+### Features
+
+* **cli:** refuse mode command arguments that were accepted and ignored ([#1200](https://github.com/y3owk1n/neru/issues/1200)) ([17f304e](https://github.com/y3owk1n/neru/commit/17f304eb5377edf68a9e4d9de71ae34a3baa23b4))
+* **config:** catch a mistyped mode flag in a binding when the config loads ([#1201](https://github.com/y3owk1n/neru/issues/1201)) ([9bce87c](https://github.com/y3owk1n/neru/commit/9bce87ce5f13a74e074ca1b0d0cd626fe8982a0c))
+* **config:** declare per-platform support for every option, flag and action ([#1470](https://github.com/y3owk1n/neru/issues/1470)) ([c943b1b](https://github.com/y3owk1n/neru/commit/c943b1ba7696ae9c646bcc9432cad7b167a98422))
+* **config:** let hotkey bindings use the Insert key ([#1390](https://github.com/y3owk1n/neru/issues/1390)) ([6d144e2](https://github.com/y3owk1n/neru/commit/6d144e2f59563afa08e4a4704ab99c2e6c11638b))
+* **hints:** make --debug a read-only probe command of its own ([#1197](https://github.com/y3owk1n/neru/issues/1197)) ([5db952f](https://github.com/y3owk1n/neru/commit/5db952f56be006ee6902ead7f14364fb7fe8c9d3))
+* **linux:** animate smooth scroll on every backend ([#1473](https://github.com/y3owk1n/neru/issues/1473)) ([eb6d00a](https://github.com/y3owk1n/neru/commit/eb6d00a7d5864d7f1d356d78d69cec2b04b291f7))
+* **linux:** capture the screen on KDE through the desktop portal ([#1501](https://github.com/y3owk1n/neru/issues/1501)) ([b9b3265](https://github.com/y3owk1n/neru/commit/b9b3265a8cb2a8bc514dbad190f1492827b5c84b))
+* **linux:** capture the screen on X11 and wlroots compositors ([#1477](https://github.com/y3owk1n/neru/issues/1477)) ([9ed69c4](https://github.com/y3owk1n/neru/commit/9ed69c4e20a5a21fd388cfb5ad25e195ea0cd35a))
+* **linux:** draw the hint search input badge on every overlay backend ([#1476](https://github.com/y3owk1n/neru/issues/1476)) ([b85744d](https://github.com/y3owk1n/neru/commit/b85744d632d14c0d553df3b9f66fe897af7e3117))
+* **linux:** draw the virtual-pointer indicator in grid mode ([#1488](https://github.com/y3owk1n/neru/issues/1488)) ([09292c8](https://github.com/y3owk1n/neru/commit/09292c8d60fec8ba3edde152511ad82d76f1e84d))
+* **linux:** manage the daemon as a systemd user unit ([#1472](https://github.com/y3owk1n/neru/issues/1472)) ([ad4be0b](https://github.com/y3owk1n/neru/commit/ad4be0b67ae742f5945a05fca05a087e4128f433))
+* **linux:** recognise on-screen text for the vision hint strategy ([#1480](https://github.com/y3owk1n/neru/issues/1480)) ([54782e3](https://github.com/y3owk1n/neru/commit/54782e3110013c61f33fe9bb1783a7bf238d2c89))
+* **linux:** show a paused tray icon and announce a no-CGO build ([#1494](https://github.com/y3owk1n/neru/issues/1494)) ([f19319d](https://github.com/y3owk1n/neru/commit/f19319dbf9f3cf81bad9024c8ae329f846c8cd74))
+* **linux:** show notifications and alerts through freedesktop D-Bus ([#1471](https://github.com/y3owk1n/neru/issues/1471)) ([134ad2d](https://github.com/y3owk1n/neru/commit/134ad2de4a7d81c3043464a3fd26c278241f218f))
+* **modes:** refuse mode flags that were accepted and then ignored ([#1198](https://github.com/y3owk1n/neru/issues/1198)) ([1a3d9c0](https://github.com/y3owk1n/neru/commit/1a3d9c0cd3774c87db380154327b67e24798d346))
+* **nix:** add services.neru.settings TOML configuration support ([#1332](https://github.com/y3owk1n/neru/issues/1332)) ([4bc637e](https://github.com/y3owk1n/neru/commit/4bc637e770251276cf1894ee5638d30fb4c67074))
+* **scroll:** honor --modifier on scroll actions ([#1449](https://github.com/y3owk1n/neru/issues/1449)) ([5f01bb2](https://github.com/y3owk1n/neru/commit/5f01bb28cc294d7380124d97dfbca5b9581dd58b))
+* **smooth_cursor:** animate relative cursor moves on Linux ([#1183](https://github.com/y3owk1n/neru/issues/1183)) ([cb00d07](https://github.com/y3owk1n/neru/commit/cb00d079a402fdbbb4a67563502987bbdf21d98a))
+* **smooth_cursor:** animate relative cursor moves with a fixed per-move duration ([#1179](https://github.com/y3owk1n/neru/issues/1179)) ([471235a](https://github.com/y3owk1n/neru/commit/471235a628da983756d38ce39c5f25253cf45b80))
+* **windows:** draw the recursive-grid sub-key preview the way Linux and macOS do ([#1369](https://github.com/y3owk1n/neru/issues/1369)) ([8120f05](https://github.com/y3owk1n/neru/commit/8120f05a468a59ecad6149c58e119ac8e59dcb63))
+
+
+### Bug Fixes
+
+* **accessibility:** stop priming from opening status-bar menus ([#1307](https://github.com/y3owk1n/neru/issues/1307)) ([c8cee2f](https://github.com/y3owk1n/neru/commit/c8cee2fddb3ed61c89cf3f236f4d1ff08e6d10fb))
+* **app:** notice the first application switch after the daemon starts ([#1355](https://github.com/y3owk1n/neru/issues/1355)) ([4506c3c](https://github.com/y3owk1n/neru/commit/4506c3ced9ebeb84a4d8d04d6568845eba51f5eb))
+* **app:** release the overlay after the event tap on shutdown ([#1516](https://github.com/y3owk1n/neru/issues/1516)) ([55019b8](https://github.com/y3owk1n/neru/commit/55019b81af33cd34617dd28404544fa80ad0b5aa))
+* **cli:** open docs on Linux ([#1467](https://github.com/y3owk1n/neru/issues/1467)) ([83cfeb6](https://github.com/y3owk1n/neru/commit/83cfeb65d490dd0610f931fc0baea5d08bff8adb))
+* **cli:** point --role examples in help and docs at role spellings that resolve ([#1381](https://github.com/y3owk1n/neru/issues/1381)) ([04f214e](https://github.com/y3owk1n/neru/commit/04f214e84bfb4c0876617ea072514dd2267474f8))
+* close the log file even when shutdown cannot flush the logger ([#1397](https://github.com/y3owk1n/neru/issues/1397)) ([4bed76b](https://github.com/y3owk1n/neru/commit/4bed76be22e6106b5964ba656d9bf2b5cef0331e))
+* **config:** keep the grid labelled from the characters it is built with ([#1264](https://github.com/y3owk1n/neru/issues/1264)) ([3950c8a](https://github.com/y3owk1n/neru/commit/3950c8aefc2be7ffccb12378b106f65996667684))
+* **config:** name the application whose clickable role is rejected ([#1387](https://github.com/y3owk1n/neru/issues/1387)) ([1cdea36](https://github.com/y3owk1n/neru/commit/1cdea36930c9a1d8fd1d23dd1fbde3c4e5b4d0b0))
+* **config:** reload the grid without racing a mode activation ([#1284](https://github.com/y3owk1n/neru/issues/1284)) ([bab09a2](https://github.com/y3owk1n/neru/commit/bab09a2e2384f0012bb4cd2668d3080b1e121cc8))
+* **config:** report a grid label set that leaves cells unreachable ([#1280](https://github.com/y3owk1n/neru/issues/1280)) ([339ae1f](https://github.com/y3owk1n/neru/commit/339ae1fb63ec4ac241326dcd92258cdf29c45c29))
+* **config:** report an inert held-repeat acceleration setting in config validate ([#1260](https://github.com/y3owk1n/neru/issues/1260)) ([530981e](https://github.com/y3owk1n/neru/commit/530981e1d55e3bcbfeeca1e699999d9ad4c07115))
+* **config:** report every faulty grid label in one validate run ([#1285](https://github.com/y3owk1n/neru/issues/1285)) ([dfdb0c8](https://github.com/y3owk1n/neru/commit/dfdb0c8d47093b0186c113b753355d4fb0219fa2))
+* **config:** update derived values when config set changes their source ([#1274](https://github.com/y3owk1n/neru/issues/1274)) ([76e444d](https://github.com/y3owk1n/neru/commit/76e444d8cf6954267f93226e0c07d89e5ae2ef42))
+* **config:** warn when a clickable role draws nothing on this platform ([#1383](https://github.com/y3owk1n/neru/issues/1383)) ([33646b1](https://github.com/y3owk1n/neru/commit/33646b1e0951c63417f525f35d64f48a98cbe16b))
+* **darwin:** build on Apple clang 15 ([#1306](https://github.com/y3owk1n/neru/issues/1306)) ([5dcf384](https://github.com/y3owk1n/neru/commit/5dcf384d7a0145df0acde5b13b5b733ee23c95a7))
+* **darwin:** repair overlays the WindowServer silently pins to one Space ([#1181](https://github.com/y3owk1n/neru/issues/1181)) ([3129f3a](https://github.com/y3owk1n/neru/commit/3129f3a27004222b096e233acaf17ddc79ce8fb9))
+* **darwin:** stop an unmodified scroll inheriting held modifiers ([#1450](https://github.com/y3owk1n/neru/issues/1450)) ([1458502](https://github.com/y3owk1n/neru/commit/145850216c87998a762dbd35a5f4df71361c2a9a))
+* **darwin:** stop macOS actions firing at a point the cursor has left ([#1420](https://github.com/y3owk1n/neru/issues/1420)) ([40f3643](https://github.com/y3owk1n/neru/commit/40f36436b99900290e885ac9468a95432f97253f))
+* **eventtap:** apply per-app hotkey overrides after switching apps mid-mode ([#1273](https://github.com/y3owk1n/neru/issues/1273)) ([17a34a9](https://github.com/y3owk1n/neru/commit/17a34a9b02454f5cf43c5beb160a1b7d039a1592))
+* **eventtap:** make numpad Enter match Return bindings on macOS and stop numpad Clear firing delete ([#1377](https://github.com/y3owk1n/neru/issues/1377)) ([aba948d](https://github.com/y3owk1n/neru/commit/aba948d6ca4786febd6ea2f97aea4b1731371769))
+* **eventtap:** make PageUp, PageDown, Home and End work on X11 and Windows ([#1382](https://github.com/y3owk1n/neru/issues/1382)) ([cb29a03](https://github.com/y3owk1n/neru/commit/cb29a03bb71a0048d165e6045dbfd27e0794d8c1))
+* **eventtap:** make the Insert key work on X11 and on Windows ([#1403](https://github.com/y3owk1n/neru/issues/1403)) ([0e3b536](https://github.com/y3owk1n/neru/commit/0e3b536b5494bdf1c3034adfaf84fcd83fe05200))
+* **eventtap:** make the keypad navigation keys work on X11 with NumLock off ([#1395](https://github.com/y3owk1n/neru/issues/1395)) ([e028db3](https://github.com/y3owk1n/neru/commit/e028db3acc6d6a388ceb548602a29ed171f4b2d3))
+* **eventtap:** make the keypad work on Linux when the keyboard layout cannot be read ([#1400](https://github.com/y3owk1n/neru/issues/1400)) ([d92ddc1](https://github.com/y3owk1n/neru/commit/d92ddc1d2a67d61655398b6a3d4fd24f1feb7484))
+* **eventtap:** stop the daemon hanging on quit during an app switch ([#1514](https://github.com/y3owk1n/neru/issues/1514)) ([9a835e1](https://github.com/y3owk1n/neru/commit/9a835e139babed7763ac7101166f6be0af2362b6))
+* **grid:** draw the subgrid with the keys it accepts ([#1275](https://github.com/y3owk1n/neru/issues/1275)) ([16564ea](https://github.com/y3owk1n/neru/commit/16564eab743ff095335df19d083e28effe03ec18))
+* **grid:** drop o from the alphabet a misconfigured grid falls back to ([#1282](https://github.com/y3owk1n/neru/issues/1282)) ([ccfc21c](https://github.com/y3owk1n/neru/commit/ccfc21cd2fd596c45598ade313d6a46f16d7526c))
+* **grid:** stop a repeated character drawing cells nothing can select ([#1283](https://github.com/y3owk1n/neru/issues/1283)) ([247c5c1](https://github.com/y3owk1n/neru/commit/247c5c1a6d7348f953f012dd05f83609876c9c8d))
+* **hints:** make search_field and switch produce hints on macOS ([#1378](https://github.com/y3owk1n/neru/issues/1378)) ([43b664a](https://github.com/y3owk1n/neru/commit/43b664ad44025436802e0103b9d6e1fd4a4994ed))
+* **hints:** restore --debug printing elements instead of drawing hints ([#1196](https://github.com/y3owk1n/neru/issues/1196)) ([c9bae53](https://github.com/y3owk1n/neru/commit/c9bae5358762e4521edc929ae90df372dc5d4e54))
+* **hints:** stop a hung app blocking the keyboard when a display changes ([#1248](https://github.com/y3owk1n/neru/issues/1248)) ([e6ff491](https://github.com/y3owk1n/neru/commit/e6ff491f56043dbff23b2b6960f2b46cc3a48933))
+* **hotkeys:** keep global hotkeys working while a mode is active ([#1520](https://github.com/y3owk1n/neru/issues/1520)) ([b910e19](https://github.com/y3owk1n/neru/commit/b910e19c8608b34c8eebd834e4ca4f9ab8b6cdd4))
+* **ipc:** scope the IPC endpoint to the user running the daemon ([#1524](https://github.com/y3owk1n/neru/issues/1524)) ([8075782](https://github.com/y3owk1n/neru/commit/80757825b65be69195e6e6f946548725159e3db7))
+* **linux:** fall back to the generic font when the configured family is not installed ([#1340](https://github.com/y3owk1n/neru/issues/1340)) ([7fcdc3e](https://github.com/y3owk1n/neru/commit/7fcdc3e54934aaa4b2a5bd262626da068da5ec03))
+* **linux:** follow the physical mouse when selecting the active monitor on Hyprland ([#1447](https://github.com/y3owk1n/neru/issues/1447)) ([7b0fc43](https://github.com/y3owk1n/neru/commit/7b0fc43fe8326e47f73d7e230b80fffd86ee373c))
+* **linux:** honour the corner radius on hint boundaries and recursive-grid labels ([#1357](https://github.com/y3owk1n/neru/issues/1357)) ([c067d44](https://github.com/y3owk1n/neru/commit/c067d4488c41982b823c041212cafeac625a0695))
+* **linux:** keep the KDE remote desktop grant across daemon restarts ([#1485](https://github.com/y3owk1n/neru/issues/1485)) ([f3a0d37](https://github.com/y3owk1n/neru/commit/f3a0d37b939ac27932edaf20f2f3024b751660d8))
+* **linux:** let X11 global hotkeys use Backspace ([#1401](https://github.com/y3owk1n/neru/issues/1401)) ([3581735](https://github.com/y3owk1n/neru/commit/3581735465a7fa64f8a81262ecb8b4e418b2f842))
+* **linux:** let X11 global hotkeys use PageUp, PageDown, Home and End ([#1394](https://github.com/y3owk1n/neru/issues/1394)) ([71712a3](https://github.com/y3owk1n/neru/commit/71712a3fa593a7d6fd85a4a69e04a477fd756a19))
+* **linux:** report a hint placement the overlay cannot draw ([#1331](https://github.com/y3owk1n/neru/issues/1331)) ([b1afe4b](https://github.com/y3owk1n/neru/commit/b1afe4bcff5618982393df41093e30c7a7d66c56))
+* **linux:** report focused-window bounds on KWin instead of the active screen ([#1489](https://github.com/y3owk1n/neru/issues/1489)) ([600d5d5](https://github.com/y3owk1n/neru/commit/600d5d5b25b50eae672106df78340ff7e16a6f84))
+* **linux:** report the display server neru is actually driving ([#1435](https://github.com/y3owk1n/neru/issues/1435)) ([097899b](https://github.com/y3owk1n/neru/commit/097899b7adcf6283c3aa561e3fc288961cdc0acc))
+* **linux:** report the notification backend KDE actually has ([#1505](https://github.com/y3owk1n/neru/issues/1505)) ([8a7bf05](https://github.com/y3owk1n/neru/commit/8a7bf0511db42f125ec14555d780367e51c0b9b2))
+* **linux:** report when a no-cgo build cannot run Wayland global hotkeys ([#1432](https://github.com/y3owk1n/neru/issues/1432)) ([f1b6640](https://github.com/y3owk1n/neru/commit/f1b66404ff9b806eb66e4efcea6bba899d8e5777))
+* **linux:** report where the focused window is now on KDE, not where it was ([#1521](https://github.com/y3owk1n/neru/issues/1521)) ([9d98e5f](https://github.com/y3owk1n/neru/commit/9d98e5fbe1d464fd7cd8126c3aeb5734681b8ead))
+* **linux:** show the subgrid instead of a stale frame when a cell is picked ([#1507](https://github.com/y3owk1n/neru/issues/1507)) ([65bec87](https://github.com/y3owk1n/neru/commit/65bec8714bf378cb1ed5b559916fd05efd3ee731))
+* **linux:** stop a modifier Neru injects on X11 latching as a sticky modifier ([#1504](https://github.com/y3owk1n/neru/issues/1504)) ([a174f1e](https://github.com/y3owk1n/neru/commit/a174f1e0d636125c8fb697c9a0ac990c3bd2ac8c))
+* **linux:** stop an X11 click carrying modifiers the user is physically holding ([#1503](https://github.com/y3owk1n/neru/issues/1503)) ([de52958](https://github.com/y3owk1n/neru/commit/de52958462444d6edff40f6c30844880b50cdf11))
+* **linux:** stop an X11 scroll carrying modifiers the user is physically holding ([#1481](https://github.com/y3owk1n/neru/issues/1481)) ([b6c2942](https://github.com/y3owk1n/neru/commit/b6c2942b34859eb3dee6bb4d44ee036233d98732))
+* **linux:** stop hint offsets from installing a KWin script on X11 ([#1437](https://github.com/y3owk1n/neru/issues/1437)) ([922986b](https://github.com/y3owk1n/neru/commit/922986ba9d82a2a41e6939c75fb2f7ef792444d7))
+* **linux:** stop reporting a hint search input the overlay never draws ([#1354](https://github.com/y3owk1n/neru/issues/1354)) ([10efe0f](https://github.com/y3owk1n/neru/commit/10efe0f2a9450cdc2a6b1c675a9e2118a77deb25))
+* **linux:** stop reporting a window with no pid as a failed X11 query ([#1513](https://github.com/y3owk1n/neru/issues/1513)) ([c34e3cd](https://github.com/y3owk1n/neru/commit/c34e3cd252a3e597109aa3c52e21c0842e32e2c2))
+* **linux:** stop the grid cells reappearing behind an open subgrid ([#1509](https://github.com/y3owk1n/neru/issues/1509)) ([c225a0d](https://github.com/y3owk1n/neru/commit/c225a0d024379b4058b1a6028c640cb00bbe17c2))
+* **linux:** stop X11 hotkeys and the KDE geometry helper from sharing what they should not ([#1527](https://github.com/y3owk1n/neru/issues/1527)) ([c20a10b](https://github.com/y3owk1n/neru/commit/c20a10b6c2024ed4c7e94e64dfc23dde6000fe99))
+* **linux:** tell a failed compositor query apart from an unfocused desktop ([#1512](https://github.com/y3owk1n/neru/issues/1512)) ([2f2f435](https://github.com/y3owk1n/neru/commit/2f2f435c0a1b6c71cc5e4f79342cc007a8ca3d88))
+* **linux:** tell an unfocused X11 desktop apart from a failed active-window query ([#1499](https://github.com/y3owk1n/neru/issues/1499)) ([6c6f76d](https://github.com/y3owk1n/neru/commit/6c6f76d19d3643330a22ab611876cc76199259c4))
+* **logging:** keep the daemon log per-user and out of its own content ([#1523](https://github.com/y3owk1n/neru/issues/1523)) ([a919ca7](https://github.com/y3owk1n/neru/commit/a919ca7bc6d9f4e3464ee78f24ae6fd9deccd71b))
+* make a held scroll key travel as far as the same number of presses ([#1498](https://github.com/y3owk1n/neru/issues/1498)) ([1242da8](https://github.com/y3owk1n/neru/commit/1242da8a99170d232888ea6e6f3dbe0870443247))
+* **modes:** keep a wedged app from stalling a keystroke inside a mode ([#1251](https://github.com/y3owk1n/neru/issues/1251)) ([e70dc86](https://github.com/y3owk1n/neru/commit/e70dc86c3d4147078a3e5a06d48219fafeba1ead))
+* **modes:** keep the keyboard captured across a mode-to-mode switch ([#1519](https://github.com/y3owk1n/neru/issues/1519)) ([d07174f](https://github.com/y3owk1n/neru/commit/d07174fea79617718e53aaf249f0192098def71e))
+* **modes:** stop the monitor-move lock test failing on a busy machine ([#1247](https://github.com/y3owk1n/neru/issues/1247)) ([b11d008](https://github.com/y3owk1n/neru/commit/b11d00868abd731ccfeea723a13c624bc3f61e67))
+* **nix:** stop the Linux source build failing on a rejected pipewire cflag ([#1517](https://github.com/y3owk1n/neru/issues/1517)) ([0b67937](https://github.com/y3owk1n/neru/commit/0b67937c12d79d1a84095750a0465f38d2d49475))
+* **overlay:** honour generic font aliases in the monitor picker and virtual pointer ([#1336](https://github.com/y3owk1n/neru/issues/1336)) ([4f7d684](https://github.com/y3owk1n/neru/commit/4f7d684949d08a491e84ef39e94da186c19877d2))
+* **overlay:** honour the virtual pointer's char and font size defaults on macOS ([#1358](https://github.com/y3owk1n/neru/issues/1358)) ([297f4e4](https://github.com/y3owk1n/neru/commit/297f4e449f7370ecdb1f805eb41ec72f4584c69a))
+* **overlay:** keep odd-sized badges at their full size ([#1330](https://github.com/y3owk1n/neru/issues/1330)) ([bcc63f7](https://github.com/y3owk1n/neru/commit/bcc63f7df1805596786eebe7b938ae54150809ec))
+* **overlay:** report a hint label placement the macOS overlay cannot draw ([#1360](https://github.com/y3owk1n/neru/issues/1360)) ([d7b5844](https://github.com/y3owk1n/neru/commit/d7b5844b435f810269f9bcbf933a8aa7f01910e6))
+* **overlay:** report a hint search input anchor the overlay cannot place ([#1356](https://github.com/y3owk1n/neru/issues/1356)) ([e1d5558](https://github.com/y3owk1n/neru/commit/e1d55587c1762aeff75eab0217c5866fa66a4b62))
+* **overlay:** resolve each font family name from its own spelling ([#1308](https://github.com/y3owk1n/neru/issues/1308)) ([c053f52](https://github.com/y3owk1n/neru/commit/c053f529cb53b84a3452021440183b1f2d46f971))
+* **overlay:** resolve generic font names the same way on every platform ([#1290](https://github.com/y3owk1n/neru/issues/1290)) ([8accea2](https://github.com/y3owk1n/neru/commit/8accea26ac1e32f559a6c892ac66fecaed4a7804))
+* **overlay:** stop Linux crashing when the overlay is torn down mid-animation ([#1419](https://github.com/y3owk1n/neru/issues/1419)) ([d639a2b](https://github.com/y3owk1n/neru/commit/d639a2b6a7b52b66cc8bcae1065ba9a14e71eaa1))
+* **scroll:** anchor scrolls where the cursor is headed during animated moves ([#1182](https://github.com/y3owk1n/neru/issues/1182)) ([c56be6b](https://github.com/y3owk1n/neru/commit/c56be6bd2414b242231a7774622af3ec32d4f8d9))
+* stop warning about a logger flush that never could succeed ([#1388](https://github.com/y3owk1n/neru/issues/1388)) ([303a2e8](https://github.com/y3owk1n/neru/commit/303a2e88acda423b3e6e7a83e54c549dda8759ba))
+* **windows:** honour hints.ui.placement instead of pinning every label to the element corner ([#1367](https://github.com/y3owk1n/neru/issues/1367)) ([4fd6d76](https://github.com/y3owk1n/neru/commit/4fd6d76e881794e29c00d13848e1c631207c90e5))
+* **windows:** keep the daemon alive across thousands of mode activations ([#1526](https://github.com/y3owk1n/neru/issues/1526)) ([9733a3e](https://github.com/y3owk1n/neru/commit/9733a3e7368df9504c86a7c850738e26bd8f0bbb))
+
+
+### Performance Improvements
+
+* **linux:** paint the grid subgrid and its pointer in one repaint ([#1510](https://github.com/y3owk1n/neru/issues/1510)) ([7696232](https://github.com/y3owk1n/neru/commit/769623212903694d300db85bbf02abfb5882afe7))
+* **windows:** stop re-resolving the font family on every drawn overlay label ([#1361](https://github.com/y3owk1n/neru/issues/1361)) ([c68f80b](https://github.com/y3owk1n/neru/commit/c68f80b85fec1048cf1469eb6d178467782fa761))
+
+## [1.50.0](https://github.com/y3owk1n/neru/compare/v1.49.0...v1.50.0) (2026-08-04)
+
+
+### Features
+
+* **action:** add `--bail-on-error` to stop a sequence at a failure ([#1140](https://github.com/y3owk1n/neru/issues/1140)) ([02c01da](https://github.com/y3owk1n/neru/commit/02c01dae5fe2eddd4da702f6d8df105092555b38))
+* **action:** add `--slot` for named cursor marks ([#1145](https://github.com/y3owk1n/neru/issues/1145)) ([ce5d664](https://github.com/y3owk1n/neru/commit/ce5d664cd92766b04a4555b3ecbea2046f475f7d))
+* **action:** add `move_cell` for same-layer grid navigation ([#1138](https://github.com/y3owk1n/neru/issues/1138)) ([5abc492](https://github.com/y3owk1n/neru/commit/5abc4920fa96a8fcd153bc796040f1f5080c6596))
+* **action:** add `run` for ordered action sequences ([#1139](https://github.com/y3owk1n/neru/issues/1139)) ([224b1ed](https://github.com/y3owk1n/neru/commit/224b1edc0e17c44e596c310e62e532f6e8ec2876))
+* **action:** hold, release, and toggle any mouse button ([#1119](https://github.com/y3owk1n/neru/issues/1119)) ([f92b475](https://github.com/y3owk1n/neru/commit/f92b475b8c2f804e819a970b8dcd2859f0c6ee67))
+* **cli:** add `--json` output to `neru status` ([#1143](https://github.com/y3owk1n/neru/issues/1143)) ([887101b](https://github.com/y3owk1n/neru/commit/887101b5bb3af361e9c5b21260d6ff3b008f4597))
+* **cli:** add `--state` to the toggles and a `macro` command ([#1144](https://github.com/y3owk1n/neru/issues/1144)) ([3931d0f](https://github.com/y3owk1n/neru/commit/3931d0f5e1a8d7c10ac1ae84151d3c7c7fe9c8ca))
+* **config:** add `[macros]` for named, reusable action sequences ([#1141](https://github.com/y3owk1n/neru/issues/1141)) ([97597b4](https://github.com/y3owk1n/neru/commit/97597b466ca325cd9ceb01b38373fca170c1c7ee))
+* **config:** cross-platform role vocabulary for clickable_roles ([#1124](https://github.com/y3owk1n/neru/issues/1124)) ([204cacc](https://github.com/y3owk1n/neru/commit/204cacc9343f5b894e1a55d3b8eeb1605e4945de))
+* **held_repeat:** accelerate step distance while a key is held ([#1120](https://github.com/y3owk1n/neru/issues/1120)) ([ef9e12c](https://github.com/y3owk1n/neru/commit/ef9e12ca46f2a750e6ded380215abee0b367d2d0))
+* **linux,wayland:** resolve focused application ([#1105](https://github.com/y3owk1n/neru/issues/1105)) ([ff0c6fe](https://github.com/y3owk1n/neru/commit/ff0c6fef0aebe38a5fc68cafd72bb9ec36c217f4))
+* **linux,windows:** support function keys F13 through F24 ([#1118](https://github.com/y3owk1n/neru/issues/1118)) ([7303270](https://github.com/y3owk1n/neru/commit/73032709151d814197858041779940ad8bcb5dca))
+* **linux:** event-driven focused-app changes for per-app config ([#1115](https://github.com/y3owk1n/neru/issues/1115)) ([8c9500c](https://github.com/y3owk1n/neru/commit/8c9500c3dc4f39f9166649b5bedbdef50c1ca402))
+* **linux:** feed keys through uinput when /dev/uinput is writable ([#1130](https://github.com/y3owk1n/neru/issues/1130)) ([04c885b](https://github.com/y3owk1n/neru/commit/04c885b1bab37c549884ab60b1d1bc944f018b19))
+* **linux:** hint arrows for top/bottom placement ([#1111](https://github.com/y3owk1n/neru/issues/1111)) ([6a4112b](https://github.com/y3owk1n/neru/commit/6a4112bc06a2ba69413989364b292869e5818b79))
+* **linux:** modifier passthrough on Wayland evdev ([#1109](https://github.com/y3owk1n/neru/issues/1109)) ([31c84f8](https://github.com/y3owk1n/neru/commit/31c84f8f78cf022af6d801e6651dfd1af2eec322))
+* **linux:** mouse action indicator on X11 and Wayland ([#1110](https://github.com/y3owk1n/neru/issues/1110)) ([c907c7a](https://github.com/y3owk1n/neru/commit/c907c7ae1c401bdb930ed5b79003eac9bf9d27b3))
+* **linux:** multi-monitor parity for X11 and wlroots/KWin ([#1125](https://github.com/y3owk1n/neru/issues/1125)) ([a066493](https://github.com/y3owk1n/neru/commit/a06649336963a790e7173ff98586d2f5ce076f44))
+* **linux:** smooth cursor animation for X11 and Wayland ([#1108](https://github.com/y3owk1n/neru/issues/1108)) ([13dc1ba](https://github.com/y3owk1n/neru/commit/13dc1ba1394c5d99d3138fb4b1e64635d186679c))
+* **linux:** Wayland hints support, app watcher, and overlay fixes ([#1107](https://github.com/y3owk1n/neru/issues/1107)) ([2988aa4](https://github.com/y3owk1n/neru/commit/2988aa4f3ee700a6e8edc786134b7b565e1b2e77))
+* **modes:** add `--on-exit` flag to modes ([#1131](https://github.com/y3owk1n/neru/issues/1131)) ([f8ba0cf](https://github.com/y3owk1n/neru/commit/f8ba0cf5bd19e7566c47874635ba8721f2d9e910))
+
+
+### Bug Fixes
+
+* **action:** make `feed --mode` a discrete press-and-release ([#1128](https://github.com/y3owk1n/neru/issues/1128)) ([421be62](https://github.com/y3owk1n/neru/commit/421be628960203bd64a0dc9ac34510050487e65b))
+* **config:** accept comma-separated action chains in hotkey bindings ([#1132](https://github.com/y3owk1n/neru/issues/1132)) ([593543b](https://github.com/y3owk1n/neru/commit/593543b5d63b0b2b75f5c4ef08d32f0d7f8bd0e3))
+* **config:** report an invalid reload instead of blocking on the alert ([#1142](https://github.com/y3owk1n/neru/issues/1142)) ([77282a5](https://github.com/y3owk1n/neru/commit/77282a5d804d9549865a5c21592172c96dc2e0d5))
+* **darwin:** enable clang-tidy analysis and fix the findings ([#1155](https://github.com/y3owk1n/neru/issues/1155)) ([e18057f](https://github.com/y3owk1n/neru/commit/e18057f307c7bc601199b4ce4594c2582d5069e7))
+* **darwin:** invalidate CGEventTap Mach port before releasing it ([#1150](https://github.com/y3owk1n/neru/issues/1150)) ([867e717](https://github.com/y3owk1n/neru/commit/867e717ab9cfcbb6c20b60924a3b12553770bb98))
+* **darwin:** keep cursor accurate and visible under Accessibility Zoom ([#1117](https://github.com/y3owk1n/neru/issues/1117)) ([b5e5a8b](https://github.com/y3owk1n/neru/commit/b5e5a8b19dbadfbed547975fab70fabaef3c230d))
+* **darwin:** release AX elements leaked during accessibility priming ([#1152](https://github.com/y3owk1n/neru/issues/1152)) ([e1b9e9b](https://github.com/y3owk1n/neru/commit/e1b9e9b4a85e624106011e63cc044015769a690c))
+* **darwin:** skip WindowServer work for healthy overlays on Space changes ([#1151](https://github.com/y3owk1n/neru/issues/1151)) ([da0373d](https://github.com/y3owk1n/neru/commit/da0373dc37733a5720bec5e1857c10cb53dfb983))
+* **linux:** bound AT-SPI calls and surface real hints failures ([#1121](https://github.com/y3owk1n/neru/issues/1121)) ([09680e8](https://github.com/y3owk1n/neru/commit/09680e8c78d0a234bdc1f0e07efe1936da3b8aeb))
+* **linux:** honor XDG base directory environment variables ([#1171](https://github.com/y3owk1n/neru/issues/1171)) ([d22e474](https://github.com/y3owk1n/neru/commit/d22e47449f5875b3332732e236db850e0d46d4a9))
+* **linux:** render overlays properly on the selected monitor ([#1129](https://github.com/y3owk1n/neru/issues/1129)) ([fd2def9](https://github.com/y3owk1n/neru/commit/fd2def9979fb73a085bb3071841bfc4ffb593ad4))
+* **linux:** stop hints clearing on Wayland refresh ([#1113](https://github.com/y3owk1n/neru/issues/1113)) ([83970f0](https://github.com/y3owk1n/neru/commit/83970f0d4ea55dd5bb6c4332f6ed7e4758da2bae))
+* report Linux capabilities from live probes and cover the whole grid ([#1136](https://github.com/y3owk1n/neru/issues/1136)) ([fc178e0](https://github.com/y3owk1n/neru/commit/fc178e0c7cf9745375dd2193e7afdc264e82c34b))
+* **systray:** unify tray icon assets and honor SetIcon everywhere ([#1172](https://github.com/y3owk1n/neru/issues/1172)) ([2e63f1e](https://github.com/y3owk1n/neru/commit/2e63f1eaff5ab3a02f9c048c4f44ff059bf96f73))
+
+
+### Performance Improvements
+
+* **linux:** resolve focused frame without scanning the whole a11y bus ([#1122](https://github.com/y3owk1n/neru/issues/1122)) ([d2934f1](https://github.com/y3owk1n/neru/commit/d2934f1ae92175c690fe24ffb3f0fbca2d9676fd))
+* **linux:** use AT-SPI Collection.GetMatches for hint element collection ([#1114](https://github.com/y3owk1n/neru/issues/1114)) ([b812044](https://github.com/y3owk1n/neru/commit/b812044ca430ba2a3c9a83ba62fd27eb6a1c1627))
+
+## [1.49.0](https://github.com/y3owk1n/neru/compare/v1.48.0...v1.49.0) (2026-07-27)
+
+
+### Features
+
+* **config:** add `--no-reload` for `set` and add `reset` ([#1083](https://github.com/y3owk1n/neru/issues/1083)) ([2920864](https://github.com/y3owk1n/neru/commit/292086496bcaacea9edcc290eb11a13168f6ce71))
+* **config:** persistent `config set` via `override` files ([#1082](https://github.com/y3owk1n/neru/issues/1082)) ([6398fa5](https://github.com/y3owk1n/neru/commit/6398fa5c96df784bd102e37b5bda8bdb9192287b))
+* **install:** unify the Windows binary, add cross-platform uninstall ([#1103](https://github.com/y3owk1n/neru/issues/1103)) ([fc8e1f0](https://github.com/y3owk1n/neru/commit/fc8e1f09ad4947b10742cd1024238f792a859fdb))
+* **linux:** support animation for recursive grid ([#1089](https://github.com/y3owk1n/neru/issues/1089)) ([b800247](https://github.com/y3owk1n/neru/commit/b8002472206c1f13b11eed9c39f846ba26217fcf))
+* **recursive_grid:** add `--zoom-to-depth` flag ([#1077](https://github.com/y3owk1n/neru/issues/1077)) ([3dfe895](https://github.com/y3owk1n/neru/commit/3dfe895c3c69b5cf573e1075019c58e51d0b9cb0))
+
+
+### Bug Fixes
+
+* **linux,wayland:** make evdev capture persistent with kb hotplug support ([#1086](https://github.com/y3owk1n/neru/issues/1086)) ([e345661](https://github.com/y3owk1n/neru/commit/e34566154ca4d39c2820ef8e82130e292281ae2a))
+* **linux,wayland:** prevent hotpulgLoop busy wait ([#1088](https://github.com/y3owk1n/neru/issues/1088)) ([c519875](https://github.com/y3owk1n/neru/commit/c5198756531e0fdaafa83cfa5391dc6db3cd42ec))
+* **linux,wayland:** prevent stale evdev state from causing stuck keys after grab ([#1087](https://github.com/y3owk1n/neru/issues/1087)) ([cdd466a](https://github.com/y3owk1n/neru/commit/cdd466a547f72923210687dbb4b3848bbcfac7f0))
+* **linux,wayland:** sync cursor before mode activation ([#1091](https://github.com/y3owk1n/neru/issues/1091)) ([f94f72a](https://github.com/y3owk1n/neru/commit/f94f72a3095c2bad6f7754bf0c2409bf3c984f86))
+* **linux,wayland:** use compositor keymap to respect XKB options ([#1097](https://github.com/y3owk1n/neru/issues/1097)) ([fb4fe8e](https://github.com/y3owk1n/neru/commit/fb4fe8e08c5f10c6cfe210adc2ac2b3b32abaaca))
+* **linux:** disable default global hotkeys to avoid collisions ([#1081](https://github.com/y3owk1n/neru/issues/1081)) ([3625f39](https://github.com/y3owk1n/neru/commit/3625f3957969025bae9913d5c8e71bea0e77ad80))
+* **linux:** gate AT-SPI accessibility init and ensure reset on quit ([#1085](https://github.com/y3owk1n/neru/issues/1085)) ([986f064](https://github.com/y3owk1n/neru/commit/986f064526d0884ec52dae437f6c1e66b3ea1427))
+* **linux:** recover evdev global hotkeys post-sleep and fix health check ([#1092](https://github.com/y3owk1n/neru/issues/1092)) ([154ae6c](https://github.com/y3owk1n/neru/commit/154ae6cd60c8cb1a0cab52b14de075502c9e4f43))
+* **linux:** resolve evdev hotkey deadlock post-suspend and preserve RemoteDesktop session ([#1094](https://github.com/y3owk1n/neru/issues/1094)) ([16be957](https://github.com/y3owk1n/neru/commit/16be957ca40db63d278fd766d5e82ecca1095d82))
+* replace startup warning on launch with dynamic capability notice ([#1084](https://github.com/y3owk1n/neru/issues/1084)) ([03b2d5c](https://github.com/y3owk1n/neru/commit/03b2d5cb096e9d5ca818a855da8fe701c4a55007))
+
+
+### Documentation
+
+* update cross platform feature parity with details ([#1095](https://github.com/y3owk1n/neru/issues/1095)) ([6a9842b](https://github.com/y3owk1n/neru/commit/6a9842b5eb4773bc122bf21cff4a1f225b5b2175))
+
+## [1.48.0](https://github.com/y3owk1n/neru/compare/v1.47.0...v1.48.0) (2026-07-20)
+
+
+### Features
+
+* allow `--modifier` in mode `--action` ([#1040](https://github.com/y3owk1n/neru/issues/1040)) ([ba7cb19](https://github.com/y3owk1n/neru/commit/ba7cb198721734b48a49bcda97f555830e02a12c))
+* allow multiple clicks for `--action` and `action` ([#1039](https://github.com/y3owk1n/neru/issues/1039)) ([afea90a](https://github.com/y3owk1n/neru/commit/afea90a6bcbf6a68597055b47f34e49c021bc227))
+* **cli:** add `neru config set` for runtime config changes ([#1071](https://github.com/y3owk1n/neru/issues/1071)) ([a130074](https://github.com/y3owk1n/neru/commit/a130074758f1a1fb42e2c1a76e21772189dd1d94))
+* **darwin,action:** add hide and show system cursor action with virtual pointer ([#1059](https://github.com/y3owk1n/neru/issues/1059)) ([b3d6feb](https://github.com/y3owk1n/neru/commit/b3d6feb6c66e560e1309f5e494d3eb4de72295d2))
+* **darwin,hints:** auto-detect bundle types ([#1035](https://github.com/y3owk1n/neru/issues/1035)) ([db5682f](https://github.com/y3owk1n/neru/commit/db5682f5c6cf1609b227ea94c0ef59d2f0cb2551))
+* **hints,cli:** add `--hide-on-empty-search` flag when search is empty ([#1044](https://github.com/y3owk1n/neru/issues/1044)) ([a850c32](https://github.com/y3owk1n/neru/commit/a850c32419b0a70b5cdd1b6a34fabc0044f5b650))
+* **hints,vision,darwin:** add `--split-word` flag for vision only ([#1041](https://github.com/y3owk1n/neru/issues/1041)) ([dfc76db](https://github.com/y3owk1n/neru/commit/dfc76db0b2be5e2978cf247b953843b8091589b8))
+* make virtual pointer fully customisable ([#1061](https://github.com/y3owk1n/neru/issues/1061)) ([7c18422](https://github.com/y3owk1n/neru/commit/7c18422d150f7c942da8ec3e25932b3a861dff71))
+* **recursive_grid,config:** add `label_autohide_multiplier` to hide cramped labels ([#1054](https://github.com/y3owk1n/neru/issues/1054)) ([d8c4eb3](https://github.com/y3owk1n/neru/commit/d8c4eb3052253cff14bde400b048aab84cd3d68b))
+* **recursive_grid:** add `label_char` and `sub_key_preview_label_char` config options ([#1045](https://github.com/y3owk1n/neru/issues/1045)) ([d95bb36](https://github.com/y3owk1n/neru/commit/d95bb36bc92870f76b4ccfa59bd0e276f6eac6cb))
+
+
+### Bug Fixes
+
+* **cli:** write output to stdout so that they are pipeable ([#1047](https://github.com/y3owk1n/neru/issues/1047)) ([bcddd01](https://github.com/y3owk1n/neru/commit/bcddd01df2816e6ae72b641c1cca904f7f7a5f5d))
+* **config:** ensure `app_configs` merges properly without defaults ([#1042](https://github.com/y3owk1n/neru/issues/1042)) ([204c0fd](https://github.com/y3owk1n/neru/commit/204c0fde54faef63ce3179de17e1ebbbf8a1aa41))
+* **darwin:** auto-rehide cursor when macOS reveal it ([#1065](https://github.com/y3owk1n/neru/issues/1065)) ([a2f6184](https://github.com/y3owk1n/neru/commit/a2f61841914af0a806e26b2bbd3ff75c43957e08))
+* **darwin:** use a lightweight handler for space changes ([#1032](https://github.com/y3owk1n/neru/issues/1032)) ([83351be](https://github.com/y3owk1n/neru/commit/83351be839de0f5955ce48dbf4767a56d64ca8a4))
+* guard against integer overflow in allocation size computations ([#1074](https://github.com/y3owk1n/neru/issues/1074)) ([f7136b9](https://github.com/y3owk1n/neru/commit/f7136b91a834fc4d53c6b1faa3bc7d49e8805f8b))
+* **hints:** separate `cycle_hint` from action execution ([#1043](https://github.com/y3owk1n/neru/issues/1043)) ([b65861f](https://github.com/y3owk1n/neru/commit/b65861f7cec9302674a8496737ec0bbee3b6ef02))
+* **linux,wayland:** sync cursor cache after move relative ([#1056](https://github.com/y3owk1n/neru/issues/1056)) ([b0f6a97](https://github.com/y3owk1n/neru/commit/b0f6a97bb08d22986aaec6eee5e87faba53cc784))
+* **linux,windows:** ensure proper render for configured virtual pointer ([#1063](https://github.com/y3owk1n/neru/issues/1063)) ([2f859e1](https://github.com/y3owk1n/neru/commit/2f859e16726c7b214871f9ddf9883f9a5b7f3a39))
+* **linux:** add nocgo stubs for consistency ([#1037](https://github.com/y3owk1n/neru/issues/1037)) ([2c27777](https://github.com/y3owk1n/neru/commit/2c277774d9a50a3c5abf2ebd5355732a7724ca45))
+* **linux:** ensure subkey preview autohide checks the subcell dimensions ([#1066](https://github.com/y3owk1n/neru/issues/1066)) ([c1a436d](https://github.com/y3owk1n/neru/commit/c1a436d1ed1f610bdc363de36e90228ae8ac0cd1))
+* **linux:** use native relative pointer motion ([#1055](https://github.com/y3owk1n/neru/issues/1055)) ([542866f](https://github.com/y3owk1n/neru/commit/542866f1fb822b02b5655e511cfc9628bfb2b4aa))
+* **recursive_grid,darwin:** pass font family to sub-key preview renderer ([#1048](https://github.com/y3owk1n/neru/issues/1048)) ([75ac644](https://github.com/y3owk1n/neru/commit/75ac6446df9b715dfb1671d9b60d241146f0c020))
+* **recursive_grid,overlay:** evenly distribute cells and round centers to nearest pixel ([#1046](https://github.com/y3owk1n/neru/issues/1046)) ([e0fee73](https://github.com/y3owk1n/neru/commit/e0fee73364a0f8c8a2e88bfce880c22f5eb3155f))
+* **recursive_grid:** distribute remainder pixels contiguiously ([#1062](https://github.com/y3owk1n/neru/issues/1062)) ([b9d2367](https://github.com/y3owk1n/neru/commit/b9d23673dd0784f09a084e88c3852f27e6e3d3da))
+
+
+### Documentation
+
+* **cli:** rewrite with proper grouping ([#1068](https://github.com/y3owk1n/neru/issues/1068)) ([860db8b](https://github.com/y3owk1n/neru/commit/860db8b0960736ca9e88640f243061fce43a5cad))
+* **troubleshooting:** Add notes about element size and element type, clean up Electron/Browser troubleshooting ([#1029](https://github.com/y3owk1n/neru/issues/1029)) ([e6d0211](https://github.com/y3owk1n/neru/commit/e6d0211d96b0b994c7f5e64ecf148e42160caa7b))
+* **troubleshooting:** explain missing hints on multi-monitor setups ([#1031](https://github.com/y3owk1n/neru/issues/1031)) ([14ec9ed](https://github.com/y3owk1n/neru/commit/14ec9ed68bd792ca2d3cf62a78f8a55d5f979ba4))
+
+## [1.47.0](https://github.com/y3owk1n/neru/compare/v1.46.1...v1.47.0) (2026-07-13)
+
+
+### Features
+
+* add `app_configs` for global hotkey overrides ([#1008](https://github.com/y3owk1n/neru/issues/1008)) ([b1a4c67](https://github.com/y3owk1n/neru/commit/b1a4c67ac18164ba2ae3ac0978d3bc21f8802108))
+* **cli,action:** add `--mode` flag to `action feed` to feed keys into neru ([#999](https://github.com/y3owk1n/neru/issues/999)) ([fe23531](https://github.com/y3owk1n/neru/commit/fe235314b7ce4d65fb398a1f74d111f3a3a26853))
+* **hotkeys:** let per-mode hotkeys override a global hotkey on the same key ([#993](https://github.com/y3owk1n/neru/issues/993)) ([c95ccf5](https://github.com/y3owk1n/neru/commit/c95ccf5225a32551eb7ec6f8667f439a6524e447))
+* **linux,wayland,kde:** add `action feed` support ([#1013](https://github.com/y3owk1n/neru/issues/1013)) ([c28300b](https://github.com/y3owk1n/neru/commit/c28300bc24773815f1c37d22ee4d70023247650e))
+
+
+### Bug Fixes
+
+* **darwin,stick_modifier:** prevent random sticky modifier toggles ([#1011](https://github.com/y3owk1n/neru/issues/1011)) ([22bc23c](https://github.com/y3owk1n/neru/commit/22bc23c3439c1dd8e8a5e756381c8d5e87ac0a7d))
+* **hints:** keep labels on screen during refresh instead of blanking ([#1012](https://github.com/y3owk1n/neru/issues/1012)) ([4638626](https://github.com/y3owk1n/neru/commit/4638626da0e63a7938e7eaa921b65728c5acbaa5))
+* **hints:** lower down `minElementSize` to 10 for smaller sized hints ([#1020](https://github.com/y3owk1n/neru/issues/1020)) ([eefb876](https://github.com/y3owk1n/neru/commit/eefb8762949158d74c5ac01f3a3c48af00ecbbe4))
+* **linux,kde:** work around KDE EIS keyboard drop bug ([#1021](https://github.com/y3owk1n/neru/issues/1021)) ([8ff4a32](https://github.com/y3owk1n/neru/commit/8ff4a322d767b346d0b7217799f405179ea066ef))
+* **linux,recursive_grid:** render subkey preview properly when enabled ([#995](https://github.com/y3owk1n/neru/issues/995)) ([1da2cd2](https://github.com/y3owk1n/neru/commit/1da2cd2db59d92db9c022d8d10a71ede209b94b7))
+* **linux:** recover from stale evdev/libei connections after sleep and config reload ([#1023](https://github.com/y3owk1n/neru/issues/1023)) ([a43eb4e](https://github.com/y3owk1n/neru/commit/a43eb4e14b4a519a37295eea9c42d04736fabdee))
+* lower down minimum font size to `1` and add missing validations ([#1024](https://github.com/y3owk1n/neru/issues/1024)) ([c196b93](https://github.com/y3owk1n/neru/commit/c196b93026dd763e6f519c45a39784a0360e9165))
+
+
+### Documentation
+
+* add bernatGene config showcase ([#1010](https://github.com/y3owk1n/neru/issues/1010)) ([32958a6](https://github.com/y3owk1n/neru/commit/32958a6b2e0582d651a7d0d73ef6dcb52f4680f8))
+* **tips:** add commands to open a new window and edit config tips ([#997](https://github.com/y3owk1n/neru/issues/997)) ([d2816d3](https://github.com/y3owk1n/neru/commit/d2816d3b933410026fa9c599b642c6da88510888))
+* **tips:** add mode-cycling and element-targeted shortcut recipes ([#1004](https://github.com/y3owk1n/neru/issues/1004)) ([fcbcd5b](https://github.com/y3owk1n/neru/commit/fcbcd5b33969c9801f0542f74af29359972b99cc))
+
+## [1.46.1](https://github.com/y3owk1n/neru/compare/v1.46.0...v1.46.1) (2026-07-07)
+
+
+### Bug Fixes
+
+* **darwin,ci:** pin arm64 CI runner & enforfe macos 14 minimum ([#990](https://github.com/y3owk1n/neru/issues/990)) ([e80285b](https://github.com/y3owk1n/neru/commit/e80285b93a44bc863035f04b6c653a8a46278a0b))
+
 ## [1.46.0](https://github.com/y3owk1n/neru/compare/v1.45.0...v1.46.0) (2026-07-06)
 
 

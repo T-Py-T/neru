@@ -6,14 +6,16 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/y3owk1n/neru/internal/config"
-	"github.com/y3owk1n/neru/internal/core/domain/action"
-	"github.com/y3owk1n/neru/internal/core/domain/element"
-	derrors "github.com/y3owk1n/neru/internal/core/errors"
-	"github.com/y3owk1n/neru/internal/core/ports"
+	"github.com/y3owk1n/neru/internal/derrors"
+	"github.com/y3owk1n/neru/internal/domain/action"
+	"github.com/y3owk1n/neru/internal/domain/element"
+	"github.com/y3owk1n/neru/internal/ports"
 )
 
 // ActionService handles executing actions on UI elements.
@@ -64,15 +66,8 @@ func (s *ActionService) ExecuteAction(
 
 	performActionErr := s.accessibility.PerformAction(ctx, element, actionType)
 	if performActionErr != nil {
-		s.logger.Error("Failed to perform action",
-			zap.Error(performActionErr),
-			zap.String("action", actionType.String()))
-
 		return derrors.WrapActionFailed(performActionErr, actionType.String())
 	}
-
-	s.logger.Debug("Action executed successfully",
-		zap.String("action", actionType.String()))
 
 	return nil
 }
@@ -99,10 +94,6 @@ func (s *ActionService) PerformActionAtPoint(
 
 	performActionErr := s.accessibility.PerformActionAtPoint(ctx, actionType, point, modifiers)
 	if performActionErr != nil {
-		s.logger.Error("Failed to perform action at point",
-			zap.Error(performActionErr),
-			zap.String("action", actionType.String()))
-
 		return derrors.WrapActionFailed(performActionErr, actionType.String()+" at point")
 	}
 
@@ -111,10 +102,15 @@ func (s *ActionService) PerformActionAtPoint(
 	return nil
 }
 
+// mouseActionIndicatorIncludes reports whether the configured action list names
+// actionType. Entries are compared as parsed action types so that deprecated
+// spellings in existing configs (mouse_down, mouse_up) keep matching.
 func mouseActionIndicatorIncludes(actions []string, actionType action.Type) bool {
-	actionName := actionType.String()
+	return slices.ContainsFunc(actions, func(configured string) bool {
+		configuredType, parseErr := action.ParseType(configured)
 
-	return slices.Contains(actions, actionName)
+		return parseErr == nil && configuredType == actionType
+	})
 }
 
 // IsFocusedAppExcluded checks if the currently focused application is in the exclusion list.
@@ -195,8 +191,6 @@ func (s *ActionService) MoveMouseTo(
 ) error {
 	screenBounds, err := s.system.ScreenBounds(ctx)
 	if err != nil {
-		s.logger.Error("Failed to get screen bounds", zap.Error(err))
-
 		return derrors.WrapAccessibilityFailed(err, "get screen bounds")
 	}
 
@@ -210,23 +204,95 @@ func (s *ActionService) MoveMouseTo(
 	)
 }
 
+// ReleaseHeldButtons releases any mouse button Neru still holds down.
+//
+// Mode-exit paths call this so an interrupted drag does not leave the desktop
+// behaving as if a button were still pressed. The release lands wherever the
+// cursor is, so any in-flight cursor animation is settled first: a grid whose
+// final warp is still animating when the mode exits would otherwise release
+// the drag part-way to the cell the user chose.
+func (s *ActionService) ReleaseHeldButtons(ctx context.Context) error {
+	if s.accessibility == nil {
+		return nil
+	}
+
+	if settler, ok := s.system.(ports.CursorSettler); ok {
+		err := settler.SettleCursor(ctx)
+		if err != nil {
+			s.logger.Warn("Failed to settle cursor animation", zap.Error(err))
+		}
+	}
+
+	return s.accessibility.ReleaseHeldButtons(ctx)
+}
+
 // MoveMouseRelative moves the mouse cursor by the specified delta from the current position.
-// If bypassSmooth is true, smooth cursor animation is skipped (used for keyboard-driven movements).
+// A ports.RelativeCursorMover implementation is consulted first and may apply
+// the delta itself (natively on Wayland, animated on macOS when
+// smooth_cursor.move_mouse_enabled is set). bypassSmooth applies only to the
+// read-then-warp fallback below it: when true, the fallback skips the jump
+// animator (used for keyboard-driven movements).
 func (s *ActionService) MoveMouseRelative(
 	ctx context.Context,
 	deltaX, deltaY int,
 	bypassSmooth ...bool,
 ) error {
+	shouldBypass := len(bypassSmooth) > 0 && bypassSmooth[0]
+
+	// Platforms that can apply the delta natively (ports.RelativeCursorMover)
+	// avoid the read-then-warp round trip below; everything else falls through.
+	if mover, ok := s.system.(ports.RelativeCursorMover); ok {
+		handled, err := mover.MoveCursorBy(ctx, image.Point{X: deltaX, Y: deltaY})
+		if handled {
+			return err
+		}
+	}
+
 	cursorPos, err := s.system.CursorPosition(ctx)
 	if err != nil {
-		s.logger.Error("Failed to get cursor position", zap.Error(err))
-
 		return derrors.WrapAccessibilityFailed(err, "get cursor position")
 	}
 
-	shouldBypass := len(bypassSmooth) > 0 && bypassSmooth[0]
-
 	return s.MoveMouseTo(ctx, cursorPos.X+deltaX, cursorPos.Y+deltaY, shouldBypass)
+}
+
+// cursorSyncTimeout bounds the cursor-cache refresh before an action, the same
+// budget modes give it on activation (modes.cursorSyncTimeout). A slow
+// compositor query degrades to the cached position rather than stalling the
+// action.
+const cursorSyncTimeout = 150 * time.Millisecond
+
+// CursorPositionForAction returns the cursor position for resolving an
+// action's target point. Unlike CursorPosition it first settles any in-flight
+// cursor animation (ports.CursorSettler), so an action fired mid-animation
+// acts at the point the user aimed for instead of a mid-animation position,
+// and then refreshes the platform's cursor cache (ports.CursorSynchronizer):
+// on Wayland a hand-moved mouse invalidates that cache, and an action fired
+// from idle, where no mode activation has resynced it, would otherwise land on
+// the stale point. Plain observers that must not cut animations short use
+// CursorPosition.
+func (s *ActionService) CursorPositionForAction(ctx context.Context) (image.Point, error) {
+	if settler, ok := s.system.(ports.CursorSettler); ok {
+		err := settler.SettleCursor(ctx)
+		if err != nil {
+			s.logger.Warn("Failed to settle cursor animation", zap.Error(err))
+		}
+	}
+
+	if syncer, ok := s.system.(ports.CursorSynchronizer); ok {
+		syncCtx, cancel := context.WithTimeout(ctx, cursorSyncTimeout)
+		defer cancel()
+
+		err := syncer.SyncCursorPosition(syncCtx)
+		if err != nil {
+			s.logger.Warn(
+				"Failed to sync cursor position; action target may be stale",
+				zap.Error(err),
+			)
+		}
+	}
+
+	return s.system.CursorPosition(ctx)
 }
 
 // CursorPosition returns the current cursor position.
@@ -245,8 +311,6 @@ func (s *ActionService) ScreenBounds(ctx context.Context) (image.Rectangle, erro
 func (s *ActionService) MoveMouseToCenter(ctx context.Context, offsetX, offsetY int) error {
 	screenBounds, err := s.system.ScreenBounds(ctx)
 	if err != nil {
-		s.logger.Error("Failed to get screen bounds", zap.Error(err))
-
 		return derrors.WrapAccessibilityFailed(err, "get screen bounds")
 	}
 
@@ -260,8 +324,8 @@ func (s *ActionService) MoveMouseToCenter(ctx context.Context, offsetX, offsetY 
 		screenBounds,
 		false,
 
-		zap.Int("offsetX", offsetX),
-		zap.Int("offsetY", offsetY),
+		zap.Int("offset_x", offsetX),
+		zap.Int("offset_y", offsetY),
 	)
 }
 
@@ -274,25 +338,20 @@ func (s *ActionService) MoveMouseToCenterOfMonitor(
 	monitorName string,
 	offsetX, offsetY int,
 ) error {
-	bounds, found, err := s.system.ScreenBoundsByName(ctx, monitorName)
+	screens, err := s.system.Screens(ctx)
 	if err != nil {
-		s.logger.Error("Failed to get screen bounds by name", zap.Error(err))
-
-		return derrors.WrapAccessibilityFailed(err, "get screen bounds by name")
+		return derrors.WrapAccessibilityFailed(err, "enumerate screens")
 	}
 
+	screen, found := ports.ScreenByName(screens, monitorName)
 	if !found {
-		// Fetch available names to include in the error message for discoverability
+		// The error lists the names the user can pick from.
 		available := ""
 
-		names, namesErr := s.system.ScreenNames(ctx)
-		if namesErr == nil && len(names) > 0 {
+		names := ports.ScreenNames(screens)
+		if len(names) > 0 {
 			available = "; available monitors: " + strings.Join(names, ", ")
 		}
-
-		s.logger.Error("Monitor not found",
-			zap.String("monitor", monitorName),
-			zap.Strings("available", names))
 
 		return derrors.Newf(
 			derrors.CodeInvalidInput,
@@ -302,6 +361,7 @@ func (s *ActionService) MoveMouseToCenterOfMonitor(
 		)
 	}
 
+	bounds := screen.Bounds
 	centerX := bounds.Min.X + bounds.Dx()/2 //nolint:mnd
 	centerY := bounds.Min.Y + bounds.Dy()/2 //nolint:mnd
 	target := image.Point{X: centerX + offsetX, Y: centerY + offsetY}
@@ -312,8 +372,8 @@ func (s *ActionService) MoveMouseToCenterOfMonitor(
 		bounds,
 		false,
 		zap.String("monitor", monitorName),
-		zap.Int("offsetX", offsetX),
-		zap.Int("offsetY", offsetY),
+		zap.Int("offset_x", offsetX),
+		zap.Int("offset_y", offsetY),
 	)
 }
 
@@ -325,7 +385,12 @@ func (s *ActionService) MoveMouseToCenterOfWindow(
 ) error {
 	bounds, found, err := s.system.FocusedWindowBounds(ctx)
 	if err != nil {
-		s.logger.Error("Failed to get focused window bounds", zap.Error(err))
+		// A platform that has no way to answer already says so, and names what
+		// is missing. Wrapping that as an accessibility failure would send the
+		// user to check a permission instead of reading the sentence.
+		if derrors.IsNotSupported(err) {
+			return err
+		}
 
 		return derrors.WrapAccessibilityFailed(err, "get focused window bounds")
 	}
@@ -346,8 +411,8 @@ func (s *ActionService) MoveMouseToCenterOfWindow(
 		target,
 		bounds,
 		false,
-		zap.Int("offsetX", offsetX),
-		zap.Int("offsetY", offsetY),
+		zap.Int("offset_x", offsetX),
+		zap.Int("offset_y", offsetY),
 	)
 }
 
@@ -400,16 +465,17 @@ func (s *ActionService) moveMouseWithBounds(
 	fields ...zap.Field,
 ) error {
 	clamped := clampToScreenBounds(target, screenBounds)
-	baseCount := 4
-	logFields := make([]zap.Field, 0, baseCount+len(fields))
-	logFields = append(logFields,
-		zap.Int("x", clamped.X),
-		zap.Int("y", clamped.Y),
-		zap.Bool("clamped", clamped != target),
-		zap.Bool("bypassSmooth", bypassSmooth),
-	)
-	logFields = append(logFields, fields...)
-	s.logger.Debug("Moving mouse cursor", logFields...)
+
+	// Reached per keypress through MoveMouseRelative, so the field slice is
+	// only built when debug is on.
+	if ce := s.logger.Check(zapcore.DebugLevel, "Moving mouse cursor"); ce != nil {
+		ce.Write(append([]zap.Field{
+			zap.Int("x", clamped.X),
+			zap.Int("y", clamped.Y),
+			zap.Bool("clamped", clamped != target),
+			zap.Bool("bypass_smooth", bypassSmooth),
+		}, fields...)...)
+	}
 
 	err := s.system.MoveCursorToPoint(ctx, clamped, bypassSmooth)
 	if err != nil {

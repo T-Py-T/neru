@@ -1,0 +1,104 @@
+package ipcctrl
+
+import (
+	"context"
+	"strings"
+
+	"go.uber.org/zap"
+
+	"github.com/y3owk1n/neru/internal/adapter/ipc"
+	"github.com/y3owk1n/neru/internal/app/modes"
+	"github.com/y3owk1n/neru/internal/domain"
+	"github.com/y3owk1n/neru/internal/domain/state"
+)
+
+func parseCSV(input string) []string {
+	if input == "" {
+		return nil
+	}
+
+	return strings.Split(input, ",")
+}
+
+// LifecycleHandler handles lifecycle-related IPC commands.
+type LifecycleHandler struct {
+	appState   *state.AppState
+	modes      *modes.Handler
+	setEnabled func(enabled bool)
+	logger     *zap.Logger
+}
+
+// NewLifecycleHandler creates a new lifecycle command handler.
+func NewLifecycleHandler(
+	appState *state.AppState,
+	modes *modes.Handler,
+	setEnabled func(enabled bool),
+	logger *zap.Logger,
+) *LifecycleHandler {
+	if appState == nil {
+		panic("appState cannot be nil")
+	}
+
+	if setEnabled == nil {
+		panic("setEnabled cannot be nil")
+	}
+
+	if logger == nil {
+		panic("logger cannot be nil")
+	}
+
+	return &LifecycleHandler{
+		appState:   appState,
+		modes:      modes,
+		setEnabled: setEnabled,
+		logger:     logger,
+	}
+}
+
+// RegisterHandlers registers lifecycle command handlers.
+func (h *LifecycleHandler) RegisterHandlers(
+	handlers map[string]func(context.Context, ipc.Command) ipc.Response,
+) {
+	handlers[domain.CommandPing] = h.handlePing
+	handlers[domain.CommandStart] = h.handleStart
+	handlers[domain.CommandStop] = h.handleStop
+}
+
+func (h *LifecycleHandler) handlePing(_ context.Context, _ ipc.Command) ipc.Response {
+	return ipc.Response{Success: true, Message: "pong", Code: ipc.CodeOK}
+}
+
+func (h *LifecycleHandler) handleStart(_ context.Context, _ ipc.Command) ipc.Response {
+	if h.appState.IsEnabled() {
+		h.logger.Debug("Attempted to start neru when already running")
+
+		return ipc.Response{
+			Success: false,
+			Message: "neru is already running",
+			Code:    ipc.CodeAlreadyRunning,
+		}
+	}
+
+	h.setEnabled(true)
+	h.logger.Info("Neru started")
+
+	return ipc.Response{Success: true, Message: "neru started", Code: ipc.CodeOK}
+}
+
+func (h *LifecycleHandler) handleStop(_ context.Context, _ ipc.Command) ipc.Response {
+	if !h.appState.IsEnabled() {
+		h.logger.Debug("Attempted to stop neru when already stopped")
+
+		return ipc.Response{
+			Success: false,
+			Message: "neru is already stopped",
+			Code:    ipc.CodeNotRunning,
+		}
+	}
+
+	h.setEnabled(false)
+
+	h.logger.Info("Neru stopped")
+
+	return ipc.Response{Success: true, Message: "neru stopped", Code: ipc.CodeOK}
+}

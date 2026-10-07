@@ -3,8 +3,7 @@ package app
 import (
 	"go.uber.org/zap"
 
-	"github.com/y3owk1n/neru/internal/core/domain"
-	"github.com/y3owk1n/neru/internal/core/ports"
+	"github.com/y3owk1n/neru/internal/ports"
 )
 
 // bridgeThemeProvider implements config.ThemeProvider using a SystemPort.
@@ -26,53 +25,26 @@ func newThemeProvider(systemPort ports.SystemPort) *bridgeThemeProvider {
 	return &bridgeThemeProvider{systemPort: systemPort}
 }
 
-// handleThemeChange is called when the system appearance changes.
-// It refreshes overlay styles that depend on the theme for all active modes.
-func (a *App) handleThemeChange(isDark bool) {
-	a.configMu.RLock()
-	cfg := a.config
-	a.configMu.RUnlock()
-	a.logger.Info("System theme changed",
+// HandleThemeChange is the app's entry point for a system appearance change:
+// the platform theme observers call it, and the simulation harness drives it
+// the same way.
+//
+// It is one notification, not a fan-out: the overlay re-resolves every Style
+// from the configuration it already holds and invalidates the render
+// components' native caches, so the only thing left to do here is redraw
+// whichever mode is currently on screen. Which mode that is, and what redrawing
+// it means, belongs to the package that owns modes: this notifies, it does not
+// choose. A mode with nothing themed on screen answers by not carrying the axis
+// at all.
+func (a *App) HandleThemeChange(isDark bool) {
+	a.logger.Debug("System theme changed",
 		zap.Bool("is_dark", isDark))
-	// Invalidate the overlay's native C string caches so the subsequent draw
-	// rebuilds them with the new theme-resolved colors.
-	if a.hintsComponent != nil && a.hintsComponent.Overlay != nil {
-		a.hintsComponent.UpdateConfig(cfg, a.logger)
+
+	if a.overlayPort != nil {
+		a.overlayPort.RefreshStyles()
 	}
 
-	if a.gridComponent != nil && a.gridComponent.Overlay != nil {
-		a.gridComponent.UpdateConfig(cfg, a.logger)
-	}
-
-	if a.recursiveGridComponent != nil {
-		a.recursiveGridComponent.UpdateConfig(cfg, a.logger)
-	}
-
-	if a.modeIndicatorComponent != nil {
-		a.modeIndicatorComponent.UpdateConfig(cfg, a.logger)
-	}
-
-	if a.stickyIndicatorComponent != nil {
-		a.stickyIndicatorComponent.UpdateConfig(cfg, a.logger)
-	}
-
-	// Re-build renderer style with the new theme state, then redraw active mode.
 	if a.modes != nil {
-		a.modes.UpdateConfig(cfg)
-
-		currentMode := a.appState.CurrentMode()
-		switch currentMode {
-		case domain.ModeHints:
-			a.modes.RefreshHintsForThemeChange()
-		case domain.ModeGrid:
-			a.modes.RefreshGridForThemeChange()
-		case domain.ModeRecursiveGrid:
-			a.modes.RefreshRecursiveGridForThemeChange()
-		case domain.ModeMonitorSelect:
-			a.modes.RefreshMonitorSelectForThemeChange()
-		case domain.ModeIdle, domain.ModeScroll:
-			// No-op for idle and scroll modes as they don't have theme-dependent persistent overlays
-			// that need immediate refresh here. Scroll mode indicator is handled via its own component refresh above.
-		}
+		a.modes.RefreshActiveModeForThemeChange()
 	}
 }

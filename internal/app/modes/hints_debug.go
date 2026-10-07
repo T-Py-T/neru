@@ -1,8 +1,3 @@
-// internal/app/modes/hints_debug.go
-// Read-only diagnostic that runs the hint-generation pipeline once and reports
-// what would be hinted for the focused window, backing `neru hints --debug`.
-// It does not draw any overlay, activate a mode, or mutate Handler state.
-
 package modes
 
 import (
@@ -13,6 +8,10 @@ import (
 	"go.uber.org/zap"
 )
 
+// Read-only diagnostic that runs the hint-generation pipeline once and reports
+// what would be hinted for the focused window, backing `neru hints --debug`.
+// It does not draw any overlay, activate a mode, or mutate Handler state.
+//
 // maxDebugProbeSamples caps how many elements are listed in the probe summary.
 const maxDebugProbeSamples = 10
 
@@ -29,10 +28,13 @@ func (h *Handler) DebugProbeHints(
 	filterRoles []string,
 	filterTextContains []string,
 	strategy string,
+	captureScope string,
+	splitWord bool,
 ) (string, error) {
 	bundleID, bundleErr := h.actionService.FocusedAppBundleID(ctx)
 	if bundleErr != nil {
-		h.logger.Debug("hints debug probe: failed to get focused app id", zap.Error(bundleErr))
+		h.logger.Debug("Failed to get the focused app for the hints debug probe",
+			zap.Error(bundleErr))
 	}
 
 	screenBounds, boundsErr := h.actionService.ScreenBounds(ctx)
@@ -46,7 +48,9 @@ func (h *Handler) DebugProbeHints(
 		filterTextContains,
 		bundleID,
 		strategy,
+		captureScope,
 		"", // labelDirectionOverride: probe uses the configured default
+		splitWord,
 	)
 	if genErr != nil {
 		return "", genErr

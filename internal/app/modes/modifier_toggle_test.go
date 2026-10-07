@@ -1,4 +1,3 @@
-//nolint:testpackage // Tests internal function parseModifierEvent
 package modes
 
 import (
@@ -8,8 +7,8 @@ import (
 	"go.uber.org/zap"
 
 	configpkg "github.com/y3owk1n/neru/internal/config"
-	"github.com/y3owk1n/neru/internal/core/domain/action"
-	"github.com/y3owk1n/neru/internal/core/domain/state"
+	"github.com/y3owk1n/neru/internal/domain/action"
+	"github.com/y3owk1n/neru/internal/domain/state"
 )
 
 func TestParseModifierEvent(t *testing.T) {
@@ -32,12 +31,11 @@ func TestParseModifierEvent(t *testing.T) {
 		{"__modifier_alt_up", action.ModAlt, false, true},
 		{"__modifier_ctrl_up", action.ModCtrl, false, true},
 		{"__modifier_CMD_up", action.ModCmd, false, true},
-		// Invalid — when ok=false, mod and isDown are undefined;
-		// we test the actual return values for completeness.
+		// Invalid — ok=false always comes with zero values.
 		{"__modifier_shift", 0, false, false},
 		{"__modifier_cmd", 0, false, false},
-		{"__modifier_foo_down", 0, true, false}, // has _down suffix but unknown modifier
-		{"__modifier_foo_up", 0, false, false},  // has _up suffix but unknown modifier
+		{"__modifier_foo_down", 0, false, false}, // has _down suffix but unknown modifier
+		{"__modifier_foo_up", 0, false, false},   // has _up suffix but unknown modifier
 		{"__modifier", 0, false, false},
 		{"shift", 0, false, false},
 		{"cmd", 0, false, false},
@@ -82,7 +80,7 @@ func TestParseModifierEvent(t *testing.T) {
 // newTestHandler creates a minimal Handler suitable for testing sticky modifier behavior.
 // The debounceNotify channel is buffered so the timer callback never blocks.
 func newTestHandler() *Handler {
-	return &Handler{
+	return newHandlerWithState(handlerState{
 		logger:         zap.NewNop(),
 		modifierState:  state.NewModifierState(),
 		debounceNotify: make(chan struct{}, 16),
@@ -92,7 +90,7 @@ func newTestHandler() *Handler {
 				TapMaxDuration: 300,
 			},
 		},
-	}
+	})
 }
 
 // awaitDebounce blocks until the debounce timer callback signals completion.

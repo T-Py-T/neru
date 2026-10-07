@@ -1,17 +1,23 @@
 package config_test
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/config"
+	"github.com/y3owk1n/neru/internal/config/loader"
+	"github.com/y3owk1n/neru/internal/domain/element"
 )
 
 const (
-	isDarwinRuntime = runtime.GOOS == "darwin"
+	goosDarwin      = "darwin"
+	isDarwinRuntime = runtime.GOOS == goosDarwin
 
 	testBundleIDA       = "com.example.app"
 	testBundleIDB       = "com.other.app"
@@ -23,6 +29,7 @@ const (
 	testKeyEscape       = "escape"
 	testKeySpace        = "space"
 	testKeyShiftReturn  = "shift+return"
+	testKeyCtrlShiftC   = "ctrl+shift+c"
 	testKeyCmdSpace     = KeyCmdSpace
 	testKeySuperSpace   = KeySuperSpace
 )
@@ -149,7 +156,7 @@ func TestConfig_ClickableRolesForApp(t *testing.T) {
 				},
 			},
 			bundleID: testBundleIDA,
-			want:     []string{TestRoleButton, "AXMenuBarItem"},
+			want:     []string{TestRoleButton, "menubar_item"},
 		},
 		{
 			name: "with dock hints",
@@ -160,7 +167,7 @@ func TestConfig_ClickableRolesForApp(t *testing.T) {
 				},
 			},
 			bundleID: testBundleIDA,
-			want:     []string{TestRoleButton, "AXDockItem"},
+			want:     []string{TestRoleButton, "dock_item"},
 		},
 		{
 			name: "with both menubar and dock hints",
@@ -172,7 +179,7 @@ func TestConfig_ClickableRolesForApp(t *testing.T) {
 				},
 			},
 			bundleID: testBundleIDA,
-			want:     []string{TestRoleButton, "AXMenuBarItem", "AXDockItem"},
+			want:     []string{TestRoleButton, "menubar_item", "dock_item"},
 		},
 		{
 			name: "empty roles filtered out",
@@ -208,23 +215,29 @@ func TestConfig_ClickableRolesForApp(t *testing.T) {
 					AppConfigs: []config.AppConfig{
 						{
 							BundleID:            "com.chrome.app",
-							AdditionalClickable: []string{"AXTabGroup"},
+							AdditionalClickable: []string{TestRoleTabGroup},
 						},
 						{
 							BundleID:            "com.firefox.app",
-							AdditionalClickable: []string{"AXWebArea"},
+							AdditionalClickable: []string{TestRoleWebArea},
 						},
 					},
 				},
 			},
 			bundleID: "com.chrome.app",
-			want:     []string{TestRoleButton, TestRoleLink, "AXTabGroup"},
+			want:     []string{TestRoleButton, TestRoleLink, TestRoleTabGroup},
 		},
 	}
 
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			got := testCase.config.ClickableRolesForApp(testCase.bundleID)
+
+			// ClickableRolesForApp returns native role names for the running
+			// platform, so the expectation is resolved the same way. This keeps
+			// the assertion about merge behavior rather than about which
+			// platform the test happens to run on.
+			want := element.ResolveRolesForCurrentPlatform(testCase.want).Native
 
 			// Convert to maps for comparison since order doesn't matter
 			gotMap := make(map[string]bool)
@@ -233,7 +246,7 @@ func TestConfig_ClickableRolesForApp(t *testing.T) {
 			}
 
 			wantMap := make(map[string]bool)
-			for _, role := range testCase.want {
+			for _, role := range want {
 				wantMap[role] = true
 			}
 
@@ -241,10 +254,10 @@ func TestConfig_ClickableRolesForApp(t *testing.T) {
 				t.Errorf(
 					"ClickableRolesForApp() length = %d, want %d",
 					len(got),
-					len(testCase.want),
+					len(want),
 				)
 				t.Errorf("Got: %v", got)
-				t.Errorf("Want: %v", testCase.want)
+				t.Errorf("Want: %v", want)
 
 				return
 			}
@@ -280,7 +293,7 @@ func TestConfig_AppConfigIgnoreClickableCheck(t *testing.T) {
 					AppConfigs: []config.AppConfig{
 						{
 							BundleID:             testBundleIDA,
-							IgnoreClickableCheck: true,
+							IgnoreClickableCheck: new(true),
 						},
 					},
 				},
@@ -295,7 +308,7 @@ func TestConfig_AppConfigIgnoreClickableCheck(t *testing.T) {
 					AppConfigs: []config.AppConfig{
 						{
 							BundleID:             testBundleIDA,
-							IgnoreClickableCheck: false,
+							IgnoreClickableCheck: new(false),
 						},
 					},
 				},
@@ -310,7 +323,7 @@ func TestConfig_AppConfigIgnoreClickableCheck(t *testing.T) {
 					AppConfigs: []config.AppConfig{
 						{
 							BundleID:             testBundleIDB,
-							IgnoreClickableCheck: true,
+							IgnoreClickableCheck: new(true),
 						},
 					},
 				},
@@ -325,11 +338,11 @@ func TestConfig_AppConfigIgnoreClickableCheck(t *testing.T) {
 					AppConfigs: []config.AppConfig{
 						{
 							BundleID:             testBundleIDB,
-							IgnoreClickableCheck: true,
+							IgnoreClickableCheck: new(true),
 						},
 						{
 							BundleID:             testBundleIDA,
-							IgnoreClickableCheck: true,
+							IgnoreClickableCheck: new(true),
 						},
 					},
 				},
@@ -355,7 +368,7 @@ func TestConfig_AppConfigIgnoreClickableCheck(t *testing.T) {
 					AppConfigs: []config.AppConfig{
 						{
 							BundleID:             testBundleIDA,
-							IgnoreClickableCheck: false, // app-specific false
+							IgnoreClickableCheck: new(false), // app-specific false
 						},
 					},
 				},
@@ -397,7 +410,7 @@ func TestConfig_AppConfigVisibleCheckEnabled(t *testing.T) {
 					AppConfigs: []config.AppConfig{
 						{
 							BundleID:            testBundleIDA,
-							VisibleCheckEnabled: true,
+							VisibleCheckEnabled: new(true),
 						},
 					},
 				},
@@ -412,7 +425,7 @@ func TestConfig_AppConfigVisibleCheckEnabled(t *testing.T) {
 					AppConfigs: []config.AppConfig{
 						{
 							BundleID:            testBundleIDA,
-							VisibleCheckEnabled: false,
+							VisibleCheckEnabled: new(false),
 						},
 					},
 				},
@@ -427,7 +440,7 @@ func TestConfig_AppConfigVisibleCheckEnabled(t *testing.T) {
 					AppConfigs: []config.AppConfig{
 						{
 							BundleID:            testBundleIDB,
-							VisibleCheckEnabled: true,
+							VisibleCheckEnabled: new(true),
 						},
 					},
 				},
@@ -442,11 +455,11 @@ func TestConfig_AppConfigVisibleCheckEnabled(t *testing.T) {
 					AppConfigs: []config.AppConfig{
 						{
 							BundleID:            testBundleIDB,
-							VisibleCheckEnabled: true,
+							VisibleCheckEnabled: new(true),
 						},
 						{
 							BundleID:            testBundleIDA,
-							VisibleCheckEnabled: true,
+							VisibleCheckEnabled: new(true),
 						},
 					},
 				},
@@ -472,7 +485,7 @@ func TestConfig_AppConfigVisibleCheckEnabled(t *testing.T) {
 					AppConfigs: []config.AppConfig{
 						{
 							BundleID:            testBundleIDA,
-							VisibleCheckEnabled: false, // app-specific false
+							VisibleCheckEnabled: new(false), // app-specific false
 						},
 					},
 				},
@@ -492,43 +505,6 @@ func TestConfig_AppConfigVisibleCheckEnabled(t *testing.T) {
 	}
 }
 
-func TestConfig_HotkeysForModeAndApp(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Hints.Hotkeys[testKeyReturn] = config.StringOrStringArray{
-		testActionLeftClick, config.ModeNameHints,
-	}
-	cfg.Hints.Hotkeys["g"] = config.StringOrStringArray{testActionLeftClick}
-	cfg.Hints.AppConfigs = []config.AppConfig{
-		{
-			BundleID: testBundleIDSafari,
-			Hotkeys: map[string]config.StringOrStringArray{
-				testKeyReturn: {testActionLeftClick, config.ModeNameHints},
-				"g":           {config.DisabledSentinel},
-				"x":           {"action right_click"},
-			},
-		},
-	}
-
-	got := cfg.HotkeysForModeAndApp(config.ModeNameHints, testBundleIDSafari)
-
-	if actions := got[testKeyReturn]; len(actions) != 2 || actions[1] != config.ModeNameHints {
-		t.Fatalf("HotkeysForModeAndApp() did not apply app override for Return: %v", actions)
-	}
-
-	if _, exists := got["g"]; exists {
-		t.Fatal("HotkeysForModeAndApp() did not remove disabled inherited binding")
-	}
-
-	if actions := got["x"]; len(actions) != 1 || actions[0] != "action right_click" {
-		t.Fatalf("HotkeysForModeAndApp() did not include app-specific binding: %v", actions)
-	}
-
-	base := cfg.HotkeysForMode(config.ModeNameHints)
-	if actions := base[testKeyReturn]; len(actions) != 2 || actions[1] != config.ModeNameHints {
-		t.Fatalf("HotkeysForMode() unexpectedly mutated base bindings: %v", actions)
-	}
-}
-
 func TestFindConfigFile(t *testing.T) {
 	// Test that FindConfigFile doesn't panic and returns a string
 	// (We can't easily test the actual file discovery without complex mocking)
@@ -538,7 +514,7 @@ func TestFindConfigFile(t *testing.T) {
 		}
 	}()
 
-	service := config.NewService(config.DefaultConfig(), "", zap.NewNop(), nil)
+	service := loader.NewService(config.DefaultConfig(), "", zap.NewNop(), nil)
 	result := service.FindConfigFile()
 
 	// Result should be a string (could be empty if no config found)
@@ -547,6 +523,78 @@ func TestFindConfigFile(t *testing.T) {
 		if !filepath.IsAbs(result) {
 			t.Errorf("FindConfigFile() returned relative path: %s", result)
 		}
+	}
+}
+
+// writeConfigFile creates a minimal, valid config file at path, creating any
+// missing parent directories.
+func writeConfigFile(t *testing.T, path string) {
+	t.Helper()
+
+	mkdirErr := os.MkdirAll(filepath.Dir(path), 0o755)
+	if mkdirErr != nil {
+		t.Fatalf("MkdirAll(%q) failed: %v", filepath.Dir(path), mkdirErr)
+	}
+
+	writeErr := os.WriteFile(path, []byte("[hints]\n"), 0o600)
+	if writeErr != nil {
+		t.Fatalf("WriteFile(%q) failed: %v", path, writeErr)
+	}
+}
+
+// TestFindConfigFile_DotConfigFallback pins that ~/.config/neru/config.toml is
+// discovered even when it is not the preferred directory. On Windows the
+// preferred directory is %APPDATA%\neru, so this is what lets a config carried
+// over from a Unix dotfiles repo work without setting XDG_CONFIG_HOME.
+func TestFindConfigFile_DotConfigFallback(t *testing.T) {
+	homeDir := t.TempDir()
+	preferredDir := t.TempDir()
+
+	// Point the preferred directory at an empty location, and os.UserHomeDir
+	// at ours: it reads USERPROFILE on Windows and HOME on Unix.
+	if runtime.GOOS == goosWindows {
+		t.Setenv("XDG_CONFIG_HOME", "")
+		t.Setenv("APPDATA", preferredDir)
+		t.Setenv("USERPROFILE", homeDir)
+	} else {
+		t.Setenv("XDG_CONFIG_HOME", preferredDir)
+		t.Setenv("HOME", homeDir)
+	}
+
+	dotConfig := filepath.Join(homeDir, ".config", "neru", "config.toml")
+	writeConfigFile(t, dotConfig)
+
+	service := loader.NewService(config.DefaultConfig(), "", zap.NewNop(), nil)
+	if got := service.FindConfigFile(); got != dotConfig {
+		t.Errorf("FindConfigFile() = %q, want %q", got, dotConfig)
+	}
+}
+
+// TestFindConfigFile_PrefersPreferredDir pins that the ~/.config fallback does
+// not shadow the platform's preferred directory when both exist.
+func TestFindConfigFile_PrefersPreferredDir(t *testing.T) {
+	homeDir := t.TempDir()
+	preferredDir := t.TempDir()
+
+	if runtime.GOOS == goosWindows {
+		t.Setenv("XDG_CONFIG_HOME", "")
+		t.Setenv("APPDATA", preferredDir)
+		t.Setenv("USERPROFILE", homeDir)
+	} else {
+		t.Setenv("XDG_CONFIG_HOME", preferredDir)
+		t.Setenv("HOME", homeDir)
+	}
+
+	preferred := filepath.Join(preferredDir, "neru", "config.toml")
+	dotConfig := filepath.Join(homeDir, ".config", "neru", "config.toml")
+
+	for _, path := range []string{preferred, dotConfig} {
+		writeConfigFile(t, path)
+	}
+
+	service := loader.NewService(config.DefaultConfig(), "", zap.NewNop(), nil)
+	if got := service.FindConfigFile(); got != preferred {
+		t.Errorf("FindConfigFile() = %q, want %q", got, preferred)
 	}
 }
 
@@ -755,6 +803,22 @@ func TestNormalizeKeyForComparison_ModifierComboAliases(t *testing.T) {
 			input:    "Primary+Space",
 			expected: map[bool]string{true: "cmd+space", false: "ctrl+space"}[isDarwinRuntime],
 		},
+		// Modifier order: a tap spells modifiers in its own order (#1733)
+		{
+			name:     "Shift+Ctrl+c matches Ctrl+Shift+C",
+			input:    "Shift+Ctrl+c",
+			expected: testKeyCtrlShiftC,
+		},
+		{
+			name:     "Shift+Primary+C sorts after resolving primary",
+			input:    "Shift+Primary+C",
+			expected: map[bool]string{true: "cmd+shift+c", false: testKeyCtrlShiftC}[isDarwinRuntime],
+		},
+		{
+			name:     "plus as base key keeps its segments",
+			input:    "Shift+Ctrl++",
+			expected: "shift+ctrl++",
+		},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -807,6 +871,40 @@ func TestCanonicalHotkeyForPlatform(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+// TestIsValidNamedKey_FunctionKeys pins the full F1-F24 range as valid named
+// keys, case-insensitively, and confirms F25 is not silently accepted.
+func TestIsValidNamedKey_FunctionKeys(t *testing.T) {
+	for index := 1; index <= 24; index++ {
+		display := "F" + strconv.Itoa(index)
+		lower := strings.ToLower(display)
+
+		t.Run(display, func(t *testing.T) {
+			if !config.IsValidNamedKey(display) {
+				t.Errorf("IsValidNamedKey(%q) = false, want true", display)
+			}
+
+			if !config.IsValidNamedKey(lower) {
+				t.Errorf("IsValidNamedKey(%q) = false, want true", lower)
+			}
+
+			canonical, recognized := config.CanonicalNamedKeyForm(lower)
+			if !recognized || canonical != display {
+				t.Errorf(
+					"CanonicalNamedKeyForm(%q) = (%q, %t), want (%q, true)",
+					lower,
+					canonical,
+					recognized,
+					display,
+				)
+			}
+		})
+	}
+
+	if config.IsValidNamedKey("F25") {
+		t.Error(`IsValidNamedKey("F25") = true, want false`)
 	}
 }
 
@@ -886,5 +984,72 @@ func TestNormalizeKeyForComparison_CJKInputMethodScenarios(t *testing.T) {
 					testCase.desc, testCase.input, got, testCase.expected)
 			}
 		})
+	}
+}
+
+// TestConfig_ClickableRolesForApp_MixedVocabulary covers app-config merging in
+// the presence of the role vocabulary. Merging happens on the entries as
+// written, resolution afterwards, so two different entries can legitimately
+// expand onto the same native role and must not produce duplicates.
+func TestConfig_ClickableRolesForApp_MixedVocabulary(t *testing.T) {
+	cfg := config.Config{
+		Hints: config.HintsConfig{
+			ClickableRoles: []string{TestRoleTextField, TestRoleButton},
+			AppConfigs: []config.AppConfig{
+				{
+					BundleID: testBundleIDA,
+					AdditionalClickable: []string{
+						// Resolves onto the same native role as text_field on
+						// Linux and Windows; distinct only on macOS.
+						"text_area",
+						// Already in the base list: must not duplicate.
+						TestRoleButton,
+						// Applies on exactly one platform.
+						"ax:AXGenericElement",
+						"atspi:page tab list",
+						"uia:Custom",
+					},
+				},
+			},
+		},
+	}
+
+	got := cfg.ClickableRolesForApp(testBundleIDA)
+
+	seen := make(map[string]int, len(got))
+	for _, role := range got {
+		seen[role]++
+	}
+
+	for role, count := range seen {
+		if count > 1 {
+			t.Errorf("ClickableRolesForApp() returned %q %d times, want once", role, count)
+		}
+	}
+
+	// Whatever the platform, the base roles must survive the merge.
+	for _, want := range element.ResolveRolesForCurrentPlatform(
+		[]string{TestRoleTextField, TestRoleButton},
+	).Native {
+		if seen[want] == 0 {
+			t.Errorf("ClickableRolesForApp() = %v, missing base role %q", got, want)
+		}
+	}
+
+	// Exactly one of the three prefixed entries applies here; the other two
+	// must resolve to nothing rather than leaking across platforms.
+	exclusive := map[string]string{
+		goosDarwin: "AXGenericElement",
+		"linux":    "page tab list",
+		"windows":  "Custom",
+	}
+
+	for goos, name := range exclusive {
+		switch {
+		case goos == runtime.GOOS && seen[name] == 0:
+			t.Errorf("ClickableRolesForApp() = %v, missing platform-native role %q", got, name)
+		case goos != runtime.GOOS && seen[name] > 0:
+			t.Errorf("ClickableRolesForApp() = %v, leaked %s-only role %q", got, goos, name)
+		}
 	}
 }

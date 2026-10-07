@@ -2,25 +2,25 @@ package modes
 
 import (
 	"image"
+	"math"
 
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/app/components"
 	componentrecursivegrid "github.com/y3owk1n/neru/internal/app/components/recursivegrid"
-	"github.com/y3owk1n/neru/internal/core/domain"
-	"github.com/y3owk1n/neru/internal/core/domain/action"
-	"github.com/y3owk1n/neru/internal/core/domain/recursivegrid"
-	derrors "github.com/y3owk1n/neru/internal/core/errors"
-	"github.com/y3owk1n/neru/internal/ui/coordinates"
-	"github.com/y3owk1n/neru/internal/ui/overlay"
+	"github.com/y3owk1n/neru/internal/derrors"
+	"github.com/y3owk1n/neru/internal/domain"
+	"github.com/y3owk1n/neru/internal/domain/action"
+	"github.com/y3owk1n/neru/internal/domain/geometry"
+	"github.com/y3owk1n/neru/internal/domain/modecmd"
+	"github.com/y3owk1n/neru/internal/domain/recursivegrid"
+	"github.com/y3owk1n/neru/internal/ports"
 )
 
-// activateRecursiveGridModeWithAction activates recursive-grid mode with optional action parameter.
-func (h *Handler) activateRecursiveGridModeWithAction(
-	actionStr *string,
-	repeat *bool,
-	cursorFollowSelection *bool,
-) {
+// activateRecursiveGridModeWithAction activates recursive-grid mode with optional action parameter
+// and optional zoom-to-depth. When zoomToDepth is set, the mode will automatically drill down to
+// the specified depth at the current cursor position before awaiting user input.
+func (h *handlerState) activateRecursiveGridModeWithAction(activation modecmd.Activation) {
 	// Detect refresh before validation so we can do partial cleanup on re-activation.
 	isRefresh := h.appState.CurrentMode() == domain.ModeRecursiveGrid
 
@@ -32,7 +32,7 @@ func (h *Handler) activateRecursiveGridModeWithAction(
 	)
 	if !activated {
 		if isRefresh {
-			h.exitModeLocked()
+			h.exitMode()
 		}
 
 		return
@@ -48,12 +48,10 @@ func (h *Handler) activateRecursiveGridModeWithAction(
 		// The overlay is cleared unconditionally below.
 		h.stopIndicatorPolling()
 	} else {
-		h.exitModeLocked()
+		// Coming from another mode, the keyboard is handed over rather than
+		// given back: exit now, release at return if nothing is entered.
+		defer h.exitModeForTransition()()
 	}
-
-	h.overlayManager.Clear()
-
-	h.appState.SetRecursiveGridOverlayNeedsRefresh(false)
 
 	// Get screen bounds
 	var screenBounds image.Rectangle
@@ -67,89 +65,107 @@ func (h *Handler) activateRecursiveGridModeWithAction(
 		}
 	}
 
-	h.screenBounds = screenBounds
-	normalizedBounds := coordinates.NormalizeToLocalCoordinates(screenBounds)
+	h.setScreenBounds(screenBounds)
 
-	// Initialize recursive-grid manager
-	h.initializeRecursiveGridManager(normalizedBounds)
+	scope := h.resolveCaptureScope(
+		domain.ModeNameRecursiveGrid,
+		activation,
+		&h.config.RecursiveGrid,
+	)
+
+	// The region is global like the screen; the overlay draws in the
+	// screen's own space.
+	region := h.captureStart(domain.ModeNameRecursiveGrid, screenBounds, scope).
+		Sub(screenBounds.Min)
+
+	h.initializeRecursiveGridManager(region)
 
 	var cursorShouldFollow bool
-	if isRefresh && cursorFollowSelection == nil && h.recursiveGrid.Context != nil {
+	if isRefresh && activation.CursorFollowSelection == nil && h.recursiveGrid.Context != nil {
 		cursorShouldFollow = h.recursiveGrid.Context.CursorFollowSelection()
 	} else {
-		cursorShouldFollow = resolveCursorFollowSelection(
-			domain.ModeRecursiveGrid,
-			cursorFollowSelection,
-		)
+		cursorShouldFollow = resolveCursorFollowSelection(activation.CursorFollowSelection)
 	}
 
-	// Move cursor to center of initial grid
-	if h.recursiveGrid.Manager != nil {
-		center := h.recursiveGrid.Manager.CurrentGrid().CurrentCenter()
-
-		absoluteCenter := coordinates.ConvertToAbsoluteCoordinates(center, h.screenBounds)
-		if h.recursiveGrid.Context != nil {
-			h.recursiveGrid.Context.SetSelectionPoint(absoluteCenter)
-		}
-
-		if cursorShouldFollow {
-			err := h.actionService.MoveCursorToPoint(h.ctx, absoluteCenter)
-			if err != nil {
-				h.logger.Warn("Failed to move cursor to initial center", zap.Error(err))
-			}
-		}
-	}
-
-	// Draw initial recursive-grid
-	// Store pending action and repeat flag if provided
-	if h.recursiveGrid.Context != nil {
-		if isRefresh {
-			if actionStr != nil {
-				h.recursiveGrid.Context.SetPendingAction(actionStr)
-			}
-
-			if repeat != nil {
-				h.recursiveGrid.Context.SetRepeat(*repeat)
-			}
-
-			if cursorFollowSelection != nil {
-				h.recursiveGrid.Context.SetCursorFollowSelection(*cursorFollowSelection)
-			}
+	// Auto-zoom to depth if requested.
+	// This reads the cursor position *before* we potentially move it to
+	// the grid center below, so zoom uses the user's actual cursor location.
+	// A refresh is excluded: --zoom-to-depth drills down from where the cursor
+	// was when the mode was entered, and re-applying it on a repeat
+	// re-activation or a screen change would drag the user back down a level
+	// they had already climbed out of.
+	if activation.ZoomToDepth != nil && *activation.ZoomToDepth > 0 &&
+		h.recursiveGrid.Manager != nil &&
+		!isRefresh {
+		cursorPos, posErr := h.actionService.CursorPosition(h.ctx)
+		if posErr == nil {
+			localCursorPos := geometry.ConvertToLocalCoordinates(cursorPos, h.screenBounds)
+			h.recursiveGrid.Manager.ZoomToPoint(localCursorPos, *activation.ZoomToDepth)
 		} else {
-			h.recursiveGrid.Context.SetPendingAction(actionStr)
-			h.recursiveGrid.Context.SetRepeat(repeat != nil && *repeat)
-			h.recursiveGrid.Context.SetCursorFollowSelection(cursorShouldFollow)
+			h.logger.Warn("Failed to get cursor position for zoom", zap.Error(posErr))
 		}
 	}
 
-	// Draw initial recursive-grid
-	h.updateRecursiveGridOverlay()
-
-	h.overlayManager.ResizeToActiveScreen()
-	h.overlayManager.Show()
-
-	if actionStr != nil {
-		h.logger.Debug(
-			"Recursive-grid mode activated with pending action",
-			zap.String("action", *actionStr),
-			zap.Bool("repeat", repeat != nil && *repeat),
-		)
+	// Move cursor to center of initial grid.
+	// When zoom-to-depth is active, skip this — the zoom completion handler
+	// (or partial-zoom handler below) positions the cursor from the user's
+	// actual cursor position rather than the grid center.
+	isZoomRequested := activation.ZoomToDepth != nil && *activation.ZoomToDepth > 0 && !isRefresh
+	if !isZoomRequested {
+		h.selectRecursiveGridCenter(cursorShouldFollow, "Failed to move cursor to initial center")
 	}
+
+	// Draw initial recursive-grid
+	if h.recursiveGrid.Context != nil {
+		applyRecursiveGridFlags(
+			h.recursiveGrid.Context,
+			activation,
+			isRefresh,
+			cursorShouldFollow,
+		)
+		h.recursiveGrid.Context.SetCaptureScope(scope)
+	}
+
+	// When zoom-to-depth completed (or clamped), update the selection point
+	// to the zoomed position and let the user refine in interactive mode.
+	// The pending action fires on the next manual cell selection rather than
+	// executing immediately, which is consistent with normal grid behavior.
+	if isZoomRequested {
+		h.selectRecursiveGridCenter(cursorShouldFollow, "Failed to move cursor after zoom")
+	}
+
+	// Hand the first recursive-grid over as a Frame: the overlay comes up,
+	// switches to recursive-grid mode and draws the region in one step.
+	//
+	// A backend with no surface for it logs and the mode carries on, which is
+	// what this mode has always done: unlike grid it never abandoned an
+	// activation over a draw, and a refactor is not the place to start.
+	h.showFrame(h.recursiveGridFrame(), "show recursive-grid overlay")
 
 	// Only set mode and enable event tap on initial activation;
-	// during refresh these are already in the correct state.
+	// during refresh these are already in the correct state. The overlay was
+	// switched to recursive-grid mode when the Frame was realized.
 	if !isRefresh {
-		h.setModeLocked(domain.ModeRecursiveGrid, overlay.ModeRecursiveGrid)
+		h.enterMode(domain.ModeRecursiveGrid)
 	}
 
-	h.logger.Info("Recursive-grid mode activated", zap.String("action", actionString))
+	h.logger.Info("Recursive-grid mode activated",
+		activationLogFields(actionString, scope, activation)...)
 
 	h.startIndicatorPolling(domain.ModeRecursiveGrid)
 }
 
+// recursiveGridMinSize is the configured minimum cell size in the pixels the
+// active screen is measured in. The configured values are apparent sizes.
+func (h *handlerState) recursiveGridMinSize() (int, int) {
+	scale := h.screenScale(h.screenBounds)
+
+	return int(math.Round(float64(h.config.RecursiveGrid.MinSizeWidth) * scale)),
+		int(math.Round(float64(h.config.RecursiveGrid.MinSizeHeight) * scale))
+}
+
 // initializeRecursiveGridManager initializes the recursive-grid manager.
-func (h *Handler) initializeRecursiveGridManager(screenBounds image.Rectangle) {
-	// Ensure recursiveGrid component is initialized
+func (h *handlerState) initializeRecursiveGridManager(screenBounds image.Rectangle) {
 	if h.recursiveGrid == nil {
 		h.recursiveGrid = &components.RecursiveGridComponent{
 			Context: &componentrecursivegrid.Context{},
@@ -168,41 +184,45 @@ func (h *Handler) initializeRecursiveGridManager(screenBounds image.Rectangle) {
 		depthKeys[layer.Depth] = layer.Keys
 	}
 
+	minWidth, minHeight := h.recursiveGridMinSize()
+
 	h.recursiveGrid.Manager = recursivegrid.NewManagerWithLayers(
 		screenBounds,
 		h.config.RecursiveGrid.Keys,
-		h.config.RecursiveGrid.MinSizeWidth,
-		h.config.RecursiveGrid.MinSizeHeight,
+		minWidth,
+		minHeight,
 		h.config.RecursiveGrid.MaxDepth,
-		h.config.RecursiveGrid.GridCols,
-		h.config.RecursiveGrid.GridRows,
+		domain.GridDimensions{
+			Rows: h.config.RecursiveGrid.GridRows,
+			Cols: h.config.RecursiveGrid.GridCols,
+		},
 		depthLayouts,
 		depthKeys,
-		// Update callback
-		func(center image.Point) {
-			absoluteCenter := coordinates.ConvertToAbsoluteCoordinates(center, h.screenBounds)
-			if h.recursiveGrid != nil && h.recursiveGrid.Context != nil {
-				h.recursiveGrid.Context.SetSelectionPoint(absoluteCenter)
-			}
+		recursivegrid.SelectionCallbacks{
+			OnUpdate: func(center image.Point) {
+				absoluteCenter := geometry.ConvertToAbsoluteCoordinates(center, h.screenBounds)
+				if h.recursiveGrid != nil && h.recursiveGrid.Context != nil {
+					h.recursiveGrid.Context.SetSelectionPoint(absoluteCenter)
+				}
 
-			h.updateRecursiveGridOverlay()
-		},
-		// Complete callback
-		func(point image.Point) {
-			h.logger.Debug("Recursive-grid selection complete",
-				zap.Int("x", point.X),
-				zap.Int("y", point.Y))
+				h.updateRecursiveGridOverlay()
+			},
+			OnComplete: func(point image.Point) {
+				h.logger.Debug("Recursive-grid selection complete",
+					zap.Int("x", point.X),
+					zap.Int("y", point.Y))
+			},
 		},
 		h.logger,
 	)
 }
 
 // handleRecursiveGridKey handles key processing for recursive-grid mode.
-func (h *Handler) handleRecursiveGridKey(key string) {
+func (h *handlerState) handleRecursiveGridKey(key string) {
 	ctx := h.ctx
 
 	if h.recursiveGrid == nil || h.recursiveGrid.Manager == nil {
-		h.logger.Warn("Recursive-grid manager is nil - ignoring key press")
+		h.logger.Debug("Recursive-grid manager is nil, ignoring key press")
 
 		return
 	}
@@ -213,15 +233,17 @@ func (h *Handler) handleRecursiveGridKey(key string) {
 	if completed {
 		// Selection is complete - always remember the final target, but only
 		// move immediately when tracking is enabled or an action needs to commit.
-		absoluteCenter := coordinates.ConvertToAbsoluteCoordinates(center, h.screenBounds)
+		absoluteCenter := geometry.ConvertToAbsoluteCoordinates(center, h.screenBounds)
 		h.recursiveGrid.Context.SetSelectionPoint(absoluteCenter)
 
 		repeat := h.recursiveGrid.Context.Repeat()
 		pendingAction := h.recursiveGrid.Context.PendingAction()
+		pendingModifier := h.recursiveGrid.Context.PendingModifier()
 		cursorFollowSelection := h.recursiveGrid.Context.CursorFollowSelection()
+		captureScope := h.recursiveGrid.Context.CaptureScope()
 
 		if pendingAction == nil && !repeat && !cursorFollowSelection {
-			h.refreshRecursiveGridVirtualPointerLocked()
+			h.refreshRecursiveGridVirtualPointer()
 
 			return
 		}
@@ -229,18 +251,24 @@ func (h *Handler) handleRecursiveGridKey(key string) {
 		h.moveCursorAndHandleAction(
 			absoluteCenter,
 			pendingAction,
+			pendingModifier,
 			repeat, // Re-activate recursive-grid mode when --repeat is set
 			func() {
-				h.activateRecursiveGridModeWithAction(
-					pendingAction,
-					&repeat,
-					&cursorFollowSelection,
-				)
+				h.activateRecursiveGridModeWithAction(modecmd.Activation{
+					Mode:                  domain.ModeRecursiveGrid,
+					Action:                pendingAction,
+					Modifier:              pendingModifier,
+					Repeat:                &repeat,
+					CursorFollowSelection: &cursorFollowSelection,
+					CaptureScope:          &captureScope,
+					// Zoom is not re-applied on repeat; OnExit stays nil to
+					// preserve the stored steps.
+				})
 			},
 		)
 	} else if !center.Eq(image.Point{}) {
 		// Move cursor to the center point for preview
-		absoluteCenter := coordinates.ConvertToAbsoluteCoordinates(center, h.screenBounds)
+		absoluteCenter := geometry.ConvertToAbsoluteCoordinates(center, h.screenBounds)
 		h.recursiveGrid.Context.SetSelectionPoint(absoluteCenter)
 
 		if !h.recursiveGrid.Context.CursorFollowSelection() {
@@ -254,10 +282,38 @@ func (h *Handler) handleRecursiveGridKey(key string) {
 	}
 }
 
-// updateRecursiveGridOverlay refreshes the visual overlay.
-func (h *Handler) updateRecursiveGridOverlay() {
+// updateRecursiveGridOverlay redraws the recursive grid on the overlay it is
+// already on. Every keystroke in the mode lands here: the surface is repainted
+// whole, so the frame it hands over is what a keystroke costs.
+func (h *handlerState) updateRecursiveGridOverlay() {
 	if h.recursiveGrid == nil || h.recursiveGrid.Manager == nil {
 		return
+	}
+
+	h.redrawFrame(h.recursiveGridFrame(), "update recursive-grid overlay")
+}
+
+// recursiveGridFrame describes what should be on screen for the recursive grid
+// as it stands: the region zoomed into, the keys dividing it, a preview of the
+// next depth, and the pointer riding the same surface.
+//
+// Building it in one place is what took ten positional parameters out of the
+// app layer; nothing here names a style or a render model.
+//
+// It is also where the manager's separate row and column counts become the one
+// domain.GridDimensions the draw path carries (#1313). It is the last
+// conversion before the overlay: from here through the port, the adapter, the
+// backends and the cgo helpers the shape travels whole, so writing either pair
+// under each other's names here would transpose every cell on every backend and
+// nothing further down could tell.
+// TestRecursiveGridFrame_NonSquareGridKeepsRowsAndColumnsApart stands over it.
+//
+// Upstream of here the pair still exists, in recursivegrid.DepthLayout — which
+// #1313 left alone deliberately, because a transposition there is caught by the
+// non-square Divide tests rather than only on screen.
+func (h *handlerState) recursiveGridFrame() ports.RecursiveGridFrame {
+	if h.recursiveGrid == nil || h.recursiveGrid.Manager == nil {
+		return ports.RecursiveGridFrame{}
 	}
 
 	manager := h.recursiveGrid.Manager
@@ -267,37 +323,31 @@ func (h *Handler) updateRecursiveGridOverlay() {
 	// will be so each cell shows a preview of what pressing that key will produce.
 	// If the grid can no longer be divided (max depth or min size reached),
 	// skip the preview entirely — those keys are unreachable.
-	var (
-		nextKeys           string
-		nextCols, nextRows int
-	)
+	var next ports.RecursiveGridLayout
 
 	if manager.CanDivide() {
 		nextDepth := currentDepth + 1
-		nextKeys = manager.KeysForDepth(nextDepth)
-		nextLayout := manager.CurrentGrid().LayoutForDepth(nextDepth)
-		nextCols = nextLayout.GridCols
-		nextRows = nextLayout.GridRows
+		layout := manager.CurrentGrid().LayoutForDepth(nextDepth)
+		next = ports.RecursiveGridLayout{
+			Keys:       manager.KeysForDepth(nextDepth),
+			Dimensions: domain.GridDimensions{Rows: layout.GridRows, Cols: layout.GridCols},
+		}
 	}
 
-	err := h.renderer.DrawRecursiveGrid(
-		manager.CurrentBounds(),
-		currentDepth,
-		manager.Keys(),
-		manager.GridCols(),
-		manager.GridRows(),
-		nextKeys,
-		nextCols,
-		nextRows,
-		h.currentRecursiveGridVirtualPointerState(),
-	)
-	if err != nil {
-		h.logger.Debug("Failed to draw recursive-grid overlay", zap.Error(err))
+	return ports.RecursiveGridFrame{
+		Bounds: manager.CurrentBounds(),
+		Depth:  currentDepth,
+		Layout: ports.RecursiveGridLayout{
+			Keys:       manager.Keys(),
+			Dimensions: domain.GridDimensions{Rows: manager.GridRows(), Cols: manager.GridCols()},
+		},
+		NextLayout: next,
+		Pointer:    h.recursiveGridPointer(),
 	}
 }
 
 // cleanupRecursiveGridMode handles cleanup for recursive-grid mode.
-func (h *Handler) cleanupRecursiveGridMode() {
+func (h *handlerState) cleanupRecursiveGridMode() {
 	if h.recursiveGrid != nil {
 		h.recursiveGrid.Context.Reset()
 
@@ -309,10 +359,72 @@ func (h *Handler) cleanupRecursiveGridMode() {
 		// NeruClearOverlay also resets cursorIndicatorVisible, but we do this
 		// explicitly so the pointer cleanup does not silently depend on the
 		// overlay clear implementation.
-		if h.recursiveGrid.Overlay != nil {
-			h.recursiveGrid.Overlay.HideVirtualPointer()
-		}
+		h.updateGridPointer(domain.ModeRecursiveGrid, ports.GridPointer{})
 	}
 
-	h.clearAndHideOverlay()
+	// Stop the indicator poller before common cleanup takes the frame off the
+	// screen: a tick landing after the clear would put an indicator back on it.
+	h.stopIndicatorPolling()
+}
+
+// applyRecursiveGridFlags writes the flags an activation carries into the context.
+// A refresh writes only what it was given; a fresh activation writes every
+// field so nothing leaks over from the previous run.
+func applyRecursiveGridFlags(
+	ctx *componentrecursivegrid.Context,
+	activation modecmd.Activation,
+	isRefresh bool,
+	cursorShouldFollow bool,
+) {
+	if isRefresh {
+		if activation.Action != nil {
+			ctx.SetPendingAction(activation.Action)
+		}
+
+		if activation.OnExit != nil {
+			ctx.SetOnExit(activation.OnExit)
+		}
+
+		if activation.Modifier != nil {
+			ctx.SetPendingModifier(activation.Modifier)
+		}
+
+		if activation.Repeat != nil {
+			ctx.SetRepeat(*activation.Repeat)
+		}
+
+		if activation.CursorFollowSelection != nil {
+			ctx.SetCursorFollowSelection(*activation.CursorFollowSelection)
+		}
+
+		return
+	}
+
+	ctx.SetPendingAction(activation.Action)
+	ctx.SetOnExit(activation.OnExit)
+	ctx.SetPendingModifier(activation.Modifier)
+	ctx.SetRepeat(activation.Repeat != nil && *activation.Repeat)
+	ctx.SetCursorFollowSelection(cursorShouldFollow)
+}
+
+// selectRecursiveGridCenter marks the current grid's center as the selection
+// and moves the cursor there when it follows the selection.
+func (h *handlerState) selectRecursiveGridCenter(cursorShouldFollow bool, moveFailMsg string) {
+	if h.recursiveGrid.Manager == nil {
+		return
+	}
+
+	center := h.recursiveGrid.Manager.CurrentGrid().CurrentCenter()
+
+	absoluteCenter := geometry.ConvertToAbsoluteCoordinates(center, h.screenBounds)
+	if h.recursiveGrid.Context != nil {
+		h.recursiveGrid.Context.SetSelectionPoint(absoluteCenter)
+	}
+
+	if cursorShouldFollow {
+		err := h.actionService.MoveCursorToPoint(h.ctx, absoluteCenter)
+		if err != nil {
+			h.logger.Warn(moveFailMsg, zap.Error(err))
+		}
+	}
 }

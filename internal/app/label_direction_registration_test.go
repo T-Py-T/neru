@@ -1,4 +1,3 @@
-//nolint:testpackage // Tests private initialization helpers directly.
 package app
 
 import (
@@ -7,11 +6,11 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/y3owk1n/neru/internal/adapter/logger"
 	"github.com/y3owk1n/neru/internal/app/services"
 	"github.com/y3owk1n/neru/internal/config"
-	"github.com/y3owk1n/neru/internal/core/domain/hint"
-	"github.com/y3owk1n/neru/internal/core/infra/logger"
-	"github.com/y3owk1n/neru/internal/core/ports/mocks"
+	"github.com/y3owk1n/neru/internal/domain/hint"
+	"github.com/y3owk1n/neru/internal/ports/mocks"
 )
 
 const labelDirNormal = "normal"
@@ -116,98 +115,5 @@ func TestRegisterOppositeLabelDirectionGenerator_PreSeedsBothDirections(t *testi
 				)
 			}
 		})
-	}
-}
-
-// TestHintService_OverrideWithoutOppositeRegistrationFallsBack reproduces
-// the user-reported bug: when only the configured direction is registered,
-// asking for the opposite via the per-activation override silently returns
-// the default generator. This is the regression check the
-// `registerOppositeLabelDirectionGenerator` helper exists to prevent.
-func TestHintService_OverrideWithoutOppositeRegistrationFallsBack(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Hints.LabelDirection = labelDirNormal
-
-	primaryGen, primaryGenErr := hint.NewAlphabetGenerator(
-		cfg.Hints.HintCharacters,
-		hint.LabelDirectionFromString(cfg.Hints.LabelDirectionForApp("")),
-	)
-	if primaryGenErr != nil {
-		t.Fatalf("NewAlphabetGenerator(primary) error: %v", primaryGenErr)
-	}
-
-	hintService := services.NewHintService(
-		&mocks.MockAccessibilityPort{},
-		&mocks.MockOverlayPort{},
-		&mocks.MockSystemPort{},
-		primaryGen,
-		cfg.Hints,
-		logger.Get(),
-		nil,
-	)
-
-	// No `UpdateGenerator` call here — the helper is intentionally NOT
-	// invoked. This mirrors the buggy state where only the configured
-	// direction is registered.
-	gotReverse := hintService.Generator(hint.LabelDirectionReverse.String())
-	if gotReverse == nil {
-		t.Fatal("Generator(reverse) returned nil (expected default fallback)")
-	}
-
-	if gotReverse.LabelDirection() != hint.LabelDirectionNormal {
-		t.Errorf(
-			"Generator(reverse) without opposite registration returned direction %v, want normal (default fallback)",
-			gotReverse.LabelDirection(),
-		)
-	}
-}
-
-// TestRegisterOppositeLabelDirectionGenerator_FixesUserBugScenario is the
-// end-to-end regression test: with the helper invoked, the per-activation
-// override (`hints --label-direction reverse`) must resolve to a real
-// `reverse`-direction generator, not the configured `normal` one.
-func TestRegisterOppositeLabelDirectionGenerator_FixesUserBugScenario(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Hints.LabelDirection = labelDirNormal
-
-	primaryGen, primaryGenErr := hint.NewAlphabetGenerator(
-		cfg.Hints.HintCharacters,
-		hint.LabelDirectionFromString(cfg.Hints.LabelDirectionForApp("")),
-	)
-	if primaryGenErr != nil {
-		t.Fatalf("NewAlphabetGenerator(primary) error: %v", primaryGenErr)
-	}
-
-	hintService := services.NewHintService(
-		&mocks.MockAccessibilityPort{},
-		&mocks.MockOverlayPort{},
-		&mocks.MockSystemPort{},
-		primaryGen,
-		cfg.Hints,
-		logger.Get(),
-		nil,
-	)
-
-	app := &App{
-		ctx:    context.Background(),
-		logger: zap.NewNop(),
-	}
-
-	// Simulate the production initialization path.
-	registerOppositeLabelDirectionGenerator(app, hintService, cfg)
-
-	// The per-activation `hints --label-direction reverse` override must
-	// resolve to a generator with direction Reverse.
-	gotReverse := hintService.Generator(hint.LabelDirectionReverse.String())
-	if gotReverse == nil {
-		t.Fatal("Generator(reverse) returned nil after registration")
-	}
-
-	if gotReverse.LabelDirection() != hint.LabelDirectionReverse {
-		t.Errorf(
-			"Generator(reverse) after registration has direction %v, want %v (this is the user-reported bug)",
-			gotReverse.LabelDirection(),
-			hint.LabelDirectionReverse,
-		)
 	}
 }

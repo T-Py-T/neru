@@ -1,4 +1,3 @@
-//nolint:testpackage // Tests private grid handler behavior.
 package modes
 
 import (
@@ -10,14 +9,12 @@ import (
 
 	"github.com/y3owk1n/neru/internal/app/components"
 	gridcomponent "github.com/y3owk1n/neru/internal/app/components/grid"
-	hintscomponent "github.com/y3owk1n/neru/internal/app/components/hints"
-	recursivegridcomponent "github.com/y3owk1n/neru/internal/app/components/recursivegrid"
 	"github.com/y3owk1n/neru/internal/app/services"
 	"github.com/y3owk1n/neru/internal/config"
-	domainGrid "github.com/y3owk1n/neru/internal/core/domain/grid"
-	portmocks "github.com/y3owk1n/neru/internal/core/ports/mocks"
-	"github.com/y3owk1n/neru/internal/ui"
-	overlaypkg "github.com/y3owk1n/neru/internal/ui/overlay"
+	"github.com/y3owk1n/neru/internal/domain"
+	domainGrid "github.com/y3owk1n/neru/internal/domain/grid"
+	"github.com/y3owk1n/neru/internal/domain/modecmd"
+	portmocks "github.com/y3owk1n/neru/internal/ports/mocks"
 )
 
 func TestHandleGridModeKey_CompleteSelectionDoesNotMoveWhenCursorFollowSelectionDisabled(
@@ -35,15 +32,14 @@ func TestHandleGridModeKey_CompleteSelectionDoesNotMoveWhenCursorFollowSelection
 
 	manager := domainGrid.NewManager(
 		gridInstance,
-		3,
-		3,
+		domain.GridDimensions{Rows: 3, Cols: 3},
 		"asdfghjkl",
 		nil,
 		nil,
 		zap.NewNop(),
 	)
 
-	handler := &Handler{
+	handler := newHandlerWithState(handlerState{
 		config: &config.Config{
 			Grid: config.GridConfig{
 				Enabled:    true,
@@ -70,7 +66,7 @@ func TestHandleGridModeKey_CompleteSelectionDoesNotMoveWhenCursorFollowSelection
 			Context: &gridcomponent.Context{},
 		},
 		screenBounds: image.Rect(0, 0, 100, 100),
-	}
+	})
 
 	handler.grid.Context.SetCursorFollowSelection(false)
 
@@ -100,7 +96,7 @@ func TestHandleGridModeKey_EnteringSubgridDoesNotMoveWhenCursorFollowSelectionDi
 		zap.NewNop(),
 	)
 
-	handler := &Handler{
+	handler := newHandlerWithState(handlerState{
 		config: &config.Config{
 			Grid: config.GridConfig{
 				Enabled:    true,
@@ -124,14 +120,9 @@ func TestHandleGridModeKey_EnteringSubgridDoesNotMoveWhenCursorFollowSelectionDi
 		grid: &components.GridComponent{
 			Context: &gridcomponent.Context{},
 		},
-		renderer: ui.NewOverlayRenderer(
-			&overlaypkg.NoOpManager{},
-			hintscomponent.StyleMode{},
-			gridcomponent.Style{},
-			recursivegridcomponent.Style{},
-		),
+		overlayPort:  &portmocks.MockOverlayPort{},
 		screenBounds: image.Rect(0, 0, 100, 100),
-	}
+	})
 
 	handler.initializeGridManager(gridInstance)
 	handler.grid.Router = domainGrid.NewRouter(handler.grid.Manager, zap.NewNop())
@@ -149,5 +140,43 @@ func TestHandleGridModeKey_EnteringSubgridDoesNotMoveWhenCursorFollowSelectionDi
 
 	if _, ok := handler.grid.Context.SelectionPoint(); !ok {
 		t.Fatal("expected subgrid entry selection point to be stored")
+	}
+}
+
+// TestApplyGridFlags_TellsAbsentOnExitFromEmptyOne pins the --on-exit contract
+// for grid, where nil and empty are different values rather than two spellings
+// of nothing. A repeat re-activation carries no --on-exit and must keep the
+// steps the mode was activated with; a command that gave --on-exit no steps is
+// asking for none to run.
+func TestApplyGridFlags_TellsAbsentOnExitFromEmptyOne(t *testing.T) {
+	stored := []string{"exec done"}
+
+	tests := []struct {
+		name      string
+		onExit    []string
+		isRefresh bool
+		want      int
+	}{
+		{name: "absent on a refresh keeps the stored steps", isRefresh: true, want: 1},
+		{
+			name:      "given but empty on a refresh clears them",
+			onExit:    []string{},
+			isRefresh: true,
+			want:      0,
+		},
+		{name: "absent on a fresh activation clears them", want: 0},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx := &gridcomponent.Context{}
+			ctx.SetOnExit(stored)
+
+			applyGridFlags(ctx, modecmd.Activation{OnExit: testCase.onExit}, testCase.isRefresh)
+
+			if len(ctx.OnExit()) != testCase.want {
+				t.Errorf("OnExit = %v, want %d step(s)", ctx.OnExit(), testCase.want)
+			}
+		})
 	}
 }

@@ -3,24 +3,17 @@ package modes
 import (
 	"go.uber.org/zap"
 
-	"github.com/y3owk1n/neru/internal/core/domain"
-	"github.com/y3owk1n/neru/internal/core/domain/action"
-	"github.com/y3owk1n/neru/internal/ui/overlay"
+	"github.com/y3owk1n/neru/internal/domain"
+	"github.com/y3owk1n/neru/internal/domain/action"
+	"github.com/y3owk1n/neru/internal/domain/modecmd"
 )
 
 // CurrModeString returns the current mode as a string.
-func (h *Handler) CurrModeString() string {
+func (h *handlerState) CurrModeString() string {
 	return domain.ModeString(h.appState.CurrentMode())
 }
 
-// overlaySwitch switches the overlay mode.
-func (h *Handler) overlaySwitch(m overlay.Mode) {
-	if h.overlayManager != nil {
-		h.overlayManager.SwitchTo(m)
-	}
-}
-
-func (h *Handler) setAppModeLocked(mode domain.Mode) {
+func (h *handlerState) setAppMode(mode domain.Mode) {
 	h.modeSession++
 	h.appState.SetMode(mode)
 
@@ -33,20 +26,24 @@ func (h *Handler) setAppModeLocked(mode domain.Mode) {
 	// Cancel any pending modifier tap state from the previous mode session.
 	h.cancelPendingModifierToggle()
 
+	// Settle the keymap for the mode being entered before anything reads it.
+	// Entering a mode is a one-shot the user is waiting on, which is where
+	// learning the focused app from the platform is allowed to happen; doing it
+	// here is what leaves the keystrokes after it with nothing to ask (ADR 0005).
+	h.settledKeymap()
+
 	h.syncModifierPassthrough(mode)
 	h.syncStickyModifierToggle(mode)
 }
 
-func (h *Handler) syncStickyModifierToggle(mode domain.Mode) {
-	if h.setStickyModifierToggle == nil {
+func (h *handlerState) syncStickyModifierToggle(mode domain.Mode) {
+	if !h.hasEventTap() {
 		return
 	}
 
-	isNavMode := mode == domain.ModeHints ||
-		mode == domain.ModeGrid ||
-		mode == domain.ModeRecursiveGrid ||
-		mode == domain.ModeScroll ||
-		mode == domain.ModeMonitorSelect
+	// Every mode but idle captures the keyboard, and sticky modifiers are a
+	// captured keyboard's to toggle.
+	isNavMode := mode != domain.ModeIdle
 
 	enabled := isNavMode && h.config != nil && h.config.StickyModifiers.Enabled
 
@@ -55,47 +52,49 @@ func (h *Handler) syncStickyModifierToggle(mode domain.Mode) {
 
 // SetModeIdle switches the application to idle mode, disabling active navigation modes.
 // This function resets the application state to idle, disables event tapping,
-// and switches the overlay display to the idle state.
+// and takes whatever was on screen off it.
 //
 // NOTE: Every code path that calls appState.SetMode() must also call
 // syncModifierPassthrough() with the same mode to keep the event tap
-// passthrough state consistent. See also: performCommonCleanup, setMode.
+// passthrough state consistent. See also: performCommonCleanup, enterMode.
 func (h *Handler) SetModeIdle() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	h.setAppModeLocked(domain.ModeIdle)
+	h.setAppMode(domain.ModeIdle)
 
-	if h.disableEventTap != nil {
+	if h.hasEventTap() {
 		h.disableEventTap()
 	}
 
-	h.overlaySwitch(overlay.ModeIdle)
+	h.clearOverlayFrame()
 }
 
-// setModeLocked sets the application mode, enables event tap, and switches overlay.
+// enterMode sets the application mode and enables the event tap, without
+// touching the overlay. A mode that hands over a Frame gets its overlay shown
+// and switched when the Frame is realized, and doing it here as well would put
+// a second owner on a sequence that has exactly one.
 // Caller must hold h.mu.
-func (h *Handler) setModeLocked(appMode domain.Mode, overlayMode overlay.Mode) {
-	h.setAppModeLocked(appMode)
+func (h *handlerState) enterMode(appMode domain.Mode) {
+	h.setAppMode(appMode)
 
-	if h.enableEventTap != nil {
+	if h.hasEventTap() {
 		h.enableEventTap()
 	}
-
-	h.overlaySwitch(overlayMode)
 }
 
 // activateModeBase performs common activation steps for all modes.
-func (h *Handler) activateModeBase(
+//
+//nolint:unparam // every mode enters with the move-mouse action and no app scope today; the parameters are the seam a mode that differs would use
+func (h *handlerState) activateModeBase(
 	modeName string,
 	enabled bool,
 	actionEnum action.Type,
 	bundleID string,
 ) (action.Type, bool) {
-	// Validate mode activation
 	err := h.validateModeActivation(bundleID, modeName, enabled)
 	if err != nil {
-		h.logger.Warn(modeName+" mode activation failed", zap.Error(err))
+		h.logger.Debug("Mode activation refused", zap.String("mode", modeName), zap.Error(err))
 
 		return action.TypeMoveMouse, false
 	}
@@ -103,53 +102,71 @@ func (h *Handler) activateModeBase(
 	// Prepare for mode activation (reset transient mode state)
 	h.prepareForModeActivation()
 
-	actionString := domain.ActionString(actionEnum)
-	h.logger.Debug("Activating "+modeName+" mode", zap.String("action", actionString))
-
-	// Always resize overlay to the active screen
-	if h.overlayManager != nil {
-		h.overlayManager.ResizeToActiveScreen()
-	}
+	// The overlay is not sized here. Every mode that reaches this hands over a
+	// Frame, and sizing to the active screen is the first step of realizing
+	// one; doing it here as well is a second trip to the main thread for a
+	// screen the frame is about to ask for anyway.
 
 	return actionEnum, true
 }
 
-// SetModeHints switches the application to hints mode for accessibility-based navigation.
-// This function sets the application state to hints mode, enables event tapping
-// for capturing keyboard input, and switches the overlay display to hints mode.
+// SetModeHints switches the application to hints mode for accessibility-based
+// navigation. This function sets the application state to hints mode and
+// enables event tapping for capturing keyboard input. The overlay comes up
+// when the mode hands over its Frame, not here.
 func (h *Handler) SetModeHints() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	h.setModeLocked(domain.ModeHints, overlay.ModeHints)
+	h.enterMode(domain.ModeHints)
 }
 
-// SetModeGrid switches the application to grid mode for coordinate-based navigation.
-// This function sets the application state to grid mode, enables event tapping
-// for capturing keyboard input, and switches the overlay display to grid mode.
+// SetModeGrid switches the application to grid mode for coordinate-based
+// navigation. This function sets the application state to grid mode and
+// enables event tapping for capturing keyboard input. The overlay comes up
+// when the mode hands over its Frame, not here.
 func (h *Handler) SetModeGrid() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	h.setModeLocked(domain.ModeGrid, overlay.ModeGrid)
+	h.enterMode(domain.ModeGrid)
 }
 
-// SetModeRecursiveGrid switches the application to recursive-grid mode for recursive cell navigation.
-// This function sets the application state to recursive-grid mode, enables event tapping
-// for capturing keyboard input, and switches the overlay display to recursive-grid mode.
+// SetModeRecursiveGrid switches the application to recursive-grid mode for
+// recursive cell navigation. This function sets the application state to
+// recursive-grid mode and enables event tapping for capturing keyboard input.
+// The overlay comes up when the mode hands over its Frame, not here.
 func (h *Handler) SetModeRecursiveGrid() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	h.setModeLocked(domain.ModeRecursiveGrid, overlay.ModeRecursiveGrid)
+	h.enterMode(domain.ModeRecursiveGrid)
 }
 
-// SetModeScroll switches the application to scroll mode for scroll-based navigation.
-// This function sets the application state to scroll mode, enables event tapping
-// for capturing keyboard input, and switches the overlay display to scroll mode.
+// SetModeScroll switches the application to scroll mode for scroll-based
+// navigation. This function sets the application state to scroll mode and
+// enables event tapping for capturing keyboard input. The overlay comes up
+// when the mode hands over its Frame, not here.
 func (h *Handler) SetModeScroll() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	h.setModeLocked(domain.ModeScroll, overlay.ModeScroll)
+	h.enterMode(domain.ModeScroll)
+}
+
+// activationLogFields returns the fields of a grid mode's activation line. They
+// are the mode's action and scope, plus --action and --repeat when given.
+func activationLogFields(actionString, scope string, activation modecmd.Activation) []zap.Field {
+	fields := []zap.Field{
+		zap.String("action", actionString),
+		zap.String("scope", scope),
+	}
+
+	if activation.Action != nil {
+		fields = append(fields,
+			zap.String("pending_action", *activation.Action),
+			zap.Bool("repeat", activation.Repeat != nil && *activation.Repeat))
+	}
+
+	return fields
 }

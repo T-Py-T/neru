@@ -1,0 +1,373 @@
+//
+//  accessibility.h
+//  Neru
+//
+//  Copyright © 2025 Neru. All rights reserved.
+//
+
+#ifndef ACCESSIBILITY_H
+#define ACCESSIBILITY_H
+
+#import <ApplicationServices/ApplicationServices.h>
+#import <Foundation/Foundation.h>
+
+// OWNERSHIP RULE — read before adding or calling element functions.
+//
+// Every AXUIElementRef handed to Go through this header (returned as void *,
+// written into an out-array, or produced by a traversal) is +1 retained and
+// the Go caller owns it: the caller must eventually balance it with
+// NeruReleaseElement (Element.Release()/ReleaseAll on the Go side), exactly
+// once. Functions that only *borrow* a ref the caller passed in must not
+// change its refcount. Per-function @note comments below call out the cases
+// that also return malloc'd memory the caller must free().
+//
+// ARC does not manage AX*/CF* refs, so a traversal that enqueues elements and
+// abandons them leaks kernel-backed objects — account for every ref you were
+// handed (see docs/contributing/objective-c.md, "Memory Management").
+
+#pragma mark - Element Information
+
+/// Structure containing information about an accessibility element
+typedef struct {
+	CGPoint position;          ///< Element position
+	CGSize size;               ///< Element size
+	char *title;               ///< Element title
+	char *description;         ///< Element description
+	char *value;               ///< Element value
+	char *identifier;          ///< Element identifier (for widget detection)
+	char *role;                ///< Element role
+	char *subrole;             ///< Element subrole
+	char *roleDescription;     ///< Element role description
+	bool isEnabled;            ///< Whether element is enabled
+	bool hasEnabledAttribute;  ///< Whether element supports AXEnabled attribute
+	bool isFocused;            ///< Whether element is focused
+	int pid;                   ///< Process identifier
+	bool isHidden;             ///< Whether element is AX-hidden (CSS visibility:hidden etc.)
+	bool isVisible;            ///< Whether element is AX-visible (default true when unsupported)
+	bool hasPressAction;       ///< Whether element has AXPress action (pre-fetched)
+	bool hasShowMenuAction;    ///< Whether element has AXShowMenu action (pre-fetched)
+	bool preActionsFetched;    ///< Whether actions were successfully pre-fetched
+} ElementInfo;
+
+#pragma mark - Permission Functions
+
+/// Check if accessibility permissions are granted
+/// @return 1 if permissions are granted, 0 otherwise
+int NeruCheckAccessibilityPermissions(void);
+
+/// Request accessibility permissions from macOS
+/// @return 1 if permissions are granted after the request, 0 otherwise
+int NeruRequestAccessibilityPermissions(void);
+
+#pragma mark - Application Functions
+
+/// Detect browser engine type by inspecting the app bundle's frameworks
+/// @param bundle_id Bundle identifier
+/// @return "electron", "chromium", "firefox", "webkit", or NULL if unknown
+char *NeruDetectBundleType(const char *bundle_id);
+
+/// Get system-wide accessibility element
+/// @return System-wide element reference
+void *NeruGetSystemWideElement(void);
+
+/// Get currently focused application
+/// @return Focused application reference
+void *NeruGetFocusedApplication(void);
+
+/// Get application by process identifier
+/// @param pid Process identifier
+/// @return Application reference
+void *NeruGetApplicationByPID(int pid);
+
+/// Get application by bundle identifier
+/// @param bundle_id Bundle identifier
+/// @return Application reference
+void *NeruGetApplicationByBundleId(const char *bundle_id);
+
+/// Get menu bar of an application
+/// @param app Application reference
+/// @return Menu bar reference
+void *NeruGetMenuBar(void *app);
+
+#pragma mark - Element Functions
+
+/// Get information about an element
+/// @param element Element reference
+/// @return Element information structure
+ElementInfo *NeruGetElementInfo(void *element);
+
+/// Free element information structure
+/// @param info Element information structure
+void NeruFreeElementInfo(ElementInfo *info);
+
+/// Get element at screen position
+/// @param position Screen position
+/// @return Element reference
+void *NeruGetElementAtPosition(CGPoint position);
+
+/// Get child elements
+/// @param element Element reference
+/// @param count Output parameter for number of children
+/// @return Array of child element references
+void **NeruGetChildren(void *element, int *count);
+
+/// Get visible rows of an element
+/// @param element Element reference
+/// @param count Output parameter for number of rows
+/// @return Array of row element references
+void **NeruGetVisibleRows(void *element, int *count);
+
+/// Get center point of an element
+/// @param element Element reference
+/// @param outPoint Output parameter for center point
+/// @return 1 on success, 0 on failure
+int NeruGetElementCenter(void *element, CGPoint *outPoint);
+
+#pragma mark - Mouse Functions
+
+/// Move mouse cursor to position
+/// @param position Target position
+/// @param eventType CGEvent type (kCGEventMouseMoved or kCGEventLeftMouseDragged)
+void NeruMoveMouseWithType(CGPoint position, CGEventType eventType);
+
+/// Move mouse cursor to position, attributing drags to a specific button
+/// @param position Target position
+/// @param eventType CGEvent type (kCGEventMouseMoved or a *MouseDragged type)
+/// @param button Button the drag belongs to; ignored for kCGEventMouseMoved
+void NeruMoveMouseWithTypeAndButton(CGPoint position, CGEventType eventType, CGMouseButton button);
+
+/// Post a single mouse move event (for async animation)
+/// @param position Target position
+/// @param eventType CGEvent type (kCGEventMouseMoved or kCGEventLeftMouseDragged)
+void NeruPostMouseMoveEvent(CGPoint position, CGEventType eventType);
+
+/// Post a single mouse move event, attributing drags to a specific button
+/// @param position Target position
+/// @param eventType CGEvent type (kCGEventMouseMoved or a *MouseDragged type)
+/// @param button Button the drag belongs to; ignored for kCGEventMouseMoved
+void NeruPostMouseMoveEventWithButton(CGPoint position, CGEventType eventType, CGMouseButton button);
+
+/// Check if element has click action
+/// @param element Element reference
+/// @param skipVisCheck If true, skip the expensive hit-test visibility check
+/// @param preHidden Pre-fetched AXHidden value (from ElementInfo)
+/// @param preVisible Pre-fetched AXVisible value (from ElementInfo)
+/// @param preEnabled Pre-fetched AXEnabled value (from ElementInfo)
+/// @param hasEnabledAttr Whether AXEnabled attribute exists on this element
+/// @param preRole Pre-fetched AXRole value (from ElementInfo, caller retains)
+/// @param preIsWidget Pre-computed widget flag (from ElementInfo identifier)
+/// @param centerX Pre-computed center X (from ElementInfo position + size)
+/// @param centerY Pre-computed center Y (from ElementInfo position + size)
+/// @param preHasPressAction Pre-fetched AXPress action flag (from ElementInfo)
+/// @param preHasShowMenuAction Pre-fetched AXShowMenu action flag (from ElementInfo)
+/// @param preActionsFetched Whether action names were successfully pre-fetched
+/// @return 1 if element is clickable, 0 otherwise
+int NeruHasClickAction(
+    void *element, bool skipVisCheck, bool preHidden, bool preVisible, bool preEnabled, bool hasEnabledAttr,
+    const char *preRole, bool preIsWidget, double centerX, double centerY, bool preHasPressAction,
+    bool preHasShowMenuAction, bool preActionsFetched);
+
+/// Fast visibility check using a pre-computed center point (avoids redundant AX position fetch)
+/// @param element Element reference
+/// @param center Pre-computed center point (from ElementInfo — already fetched during tree building)
+/// @return 1 if element or one of its descendants is hit-test visible at the given point, 0 otherwise
+int NeruIsElementVisibleAtPoint(void *element, CGPoint center);
+
+/// Set focus to element
+/// @param element Element reference
+/// @return 1 on success, 0 on failure
+int NeruSetFocus(void *element);
+
+/// Get element attribute value
+/// @param element Element reference
+/// @param attribute Attribute name
+/// @return Attribute value string
+char *NeruGetElementAttribute(void *element, const char *attribute);
+
+/// Free string allocated by NeruGetElementAttribute
+/// @param str String to free
+void NeruFreeString(char *str);
+
+/// Release element reference
+/// @param element Element reference
+void NeruReleaseElement(void *element);
+
+/// Retain element reference
+/// @param element Element reference
+void NeruRetainElement(void *element);
+
+/// Get element hash
+/// @param element Element reference
+/// @return Element hash value
+unsigned long NeruGetElementHash(void *element);
+
+/// Check if two elements are equal
+/// @param element1 First element reference
+/// @param element2 Second element reference
+/// @return 1 if equal, 0 otherwise
+int NeruAreElementsEqual(void *element1, void *element2);
+
+#pragma mark - Window Functions
+
+/// Get all windows of focused application
+/// @param count Output parameter for number of windows
+/// @return Array of window references
+void **NeruGetAllWindows(int *count);
+
+/// Get the focused window plus AXPopover windows of the focused application
+/// @param count Output parameter for number of returned windows
+/// @return Array of retained window references. Caller frees the array and releases refs.
+void **NeruGetFrontmostAndPopoverWindows(int *count);
+
+/// Get frontmost window
+/// @return Frontmost window reference
+void *NeruGetFrontmostWindow(void);
+
+/// Get the frame (position + size) of the focused window
+/// @return Window frame rectangle, or CGRectZero if no window is found
+CGRect NeruGetFocusedWindowFrame(void);
+
+/// Get application name
+/// @param app Application reference
+/// @return Application name string
+char *NeruGetApplicationName(void *app);
+
+/// Get bundle identifier
+/// @param app Application reference
+/// @return Bundle identifier string
+char *NeruGetBundleIdentifier(void *app);
+
+/// Get bundle identifier from PID directly (avoids creating an AX element ref)
+/// @param pid Process identifier
+/// @return Bundle identifier string, or NULL if not found
+char *NeruGetBundleIDForPID(int pid);
+
+/// Set application attribute
+/// @param pid Process identifier
+/// @param attribute Attribute name
+/// @param value Attribute value
+/// @return 1 on success, 0 on failure
+int NeruSetApplicationAttribute(int pid, const char *attribute, int value);
+
+#pragma mark - Scroll Functions
+
+/// Get scroll bounds of element
+/// @param element Element reference
+/// @return Scroll bounds rectangle
+CGRect NeruGetScrollBounds(void *element);
+
+/// Scroll at a specific point
+/// @param pos The point at which to post the scroll event
+/// @param deltaX Horizontal scroll amount
+/// @param deltaY Vertical scroll amount
+/// @param flags CGEventFlags for modifier keys (0 for none)
+/// @return 1 on success, 0 on failure
+int NeruScrollAtPoint(CGPoint pos, int deltaX, int deltaY, CGEventFlags flags);
+
+#pragma mark - Mouse Action Functions
+
+/// Perform left click at position
+/// @param position Target position
+/// @param restoreCursor Whether to restore cursor position after click
+/// @param flags CGEventFlags for modifier keys (0 for none)
+/// @return 1 on success, 0 on failure
+int NeruPerformLeftClickAtPosition(CGPoint position, bool restoreCursor, CGEventFlags flags);
+
+/// Perform right click at position
+/// @param position Target position
+/// @param restoreCursor Whether to restore cursor position after click
+/// @param flags CGEventFlags for modifier keys (0 for none)
+/// @return 1 on success, 0 on failure
+int NeruPerformRightClickAtPosition(CGPoint position, bool restoreCursor, CGEventFlags flags);
+
+/// Perform middle click at position
+/// @param position Target position
+/// @param restoreCursor Whether to restore cursor position after click
+/// @param flags CGEventFlags for modifier keys (0 for none)
+/// @return 1 on success, 0 on failure
+int NeruPerformMiddleClickAtPosition(CGPoint position, bool restoreCursor, CGEventFlags flags);
+
+/// Perform a mouse down at position
+/// @param position Target position
+/// @param downEvent Mouse down event type matching button
+/// @param button Mouse button to press
+/// @param flags CGEventFlags for modifier keys (0 for none)
+/// @return 1 on success, 0 on failure
+int NeruPerformMouseDownAtPosition(CGPoint position, CGEventType downEvent, CGMouseButton button, CGEventFlags flags);
+
+/// Perform a mouse up at position
+/// @param position Target position
+/// @param upEvent Mouse up event type matching button
+/// @param button Mouse button to release
+/// @param flags CGEventFlags for modifier keys (0 for none)
+/// @return 1 on success, 0 on failure
+int NeruPerformMouseUpAtPosition(CGPoint position, CGEventType upEvent, CGMouseButton button, CGEventFlags flags);
+
+/// Perform a mouse up at the cursor position
+/// @param upEvent Mouse up event type matching button
+/// @param button Mouse button to release
+/// @return 1 on success, 0 on failure
+int NeruPerformMouseUpAtCursor(CGEventType upEvent, CGMouseButton button);
+
+#pragma mark - Screen Functions
+
+/// Check if Mission Control is active
+/// @return true if Mission Control is active, false otherwise
+bool NeruIsMissionControlActive(void);
+
+/// Update the cached Mission Control state and trigger transition callbacks
+void NeruUpdateMissionControlState(void);
+
+/// Enable or disable Mission Control detection.
+/// When disabled, no timer, window scans, or callbacks are active.
+void NeruSetDetectMissionControlEnabled(bool enabled);
+
+/// Get main screen bounds
+/// @return Main screen bounds rectangle
+CGRect NeruGetMainScreenBounds(void);
+
+/// Get active screen bounds (screen containing cursor)
+/// @return Active screen bounds rectangle
+CGRect NeruGetActiveScreenBounds(void);
+
+/// One connected screen: its localized display name and its bounds in CG
+/// coordinates (top-left origin, Y down).
+typedef struct {
+	char *name;
+	CGRect bounds;
+} NeruScreenInfo;
+
+/// Get every connected screen, name and bounds together, in NSScreen order.
+/// @param outCount Output parameter for the number of screens returned
+/// @return Array of outCount screens, or NULL when there are none
+/// @note Caller must release the array with NeruFreeScreens()
+/// @note Names are not unique. Two identical monitors share one, so there is
+///       no lookup by name and callers keep the entry they picked.
+NeruScreenInfo *NeruGetScreens(int *outCount);
+
+/// Release an array returned by NeruGetScreens
+void NeruFreeScreens(NeruScreenInfo *screens, int count);
+
+/// Get current cursor position
+/// @return Current cursor position
+CGPoint NeruGetCurrentCursorPosition(void);
+
+/// Report whether the macOS Accessibility Zoom feature is currently zoomed in
+/// @return true when the screen is magnified by Accessibility Zoom
+bool NeruIsScreenZoomed(void);
+
+/// Get the on-screen region of the Accessibility Zoom viewport covering a point
+/// @param point Point in global CG coordinates, used to pick the display
+/// @param outViewport Receives the visible rectangle in global CG coordinates
+/// @return 1 when that display is magnified and outViewport was written, 0 otherwise
+int NeruGetZoomViewportForPoint(CGPoint point, CGRect *outViewport);
+
+/// Pan the Accessibility Zoom viewport by the smallest amount that brings the
+/// given point on screen, mirroring what dragging a real mouse into the edge of
+/// the viewport does. No-op when not zoomed in.
+/// @param target Point that must end up visible, in global CG coordinates
+/// @note Panning moves the cursor with the viewport, so call this *before*
+///       positioning the cursor, never after.
+void NeruEnsureZoomViewportContainsPoint(CGPoint target);
+
+#endif  // ACCESSIBILITY_H

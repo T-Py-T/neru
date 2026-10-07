@@ -3,22 +3,24 @@ package services_test
 import (
 	"context"
 	"image"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
 
 	"github.com/y3owk1n/neru/internal/app/services"
 	"github.com/y3owk1n/neru/internal/config"
-	"github.com/y3owk1n/neru/internal/core/domain/action"
-	"github.com/y3owk1n/neru/internal/core/ports"
-	portmocks "github.com/y3owk1n/neru/internal/core/ports/mocks"
+	"github.com/y3owk1n/neru/internal/derrors"
+	"github.com/y3owk1n/neru/internal/domain/action"
+	"github.com/y3owk1n/neru/internal/ports"
+	portmocks "github.com/y3owk1n/neru/internal/ports/mocks"
 )
 
 const leftClickAction = "left_click"
 
 func newTestActionService(
 	acc *portmocks.MockAccessibilityPort,
-	sys *portmocks.MockSystemPort,
+	sys ports.SystemPort,
 ) *services.ActionService {
 	return services.NewActionService(acc, &portmocks.MockOverlayPort{}, sys, zap.NewNop())
 }
@@ -278,6 +280,46 @@ func TestMoveMouseRelative_UsesCurrentCursorPosition(t *testing.T) {
 	}
 }
 
+type relativeCursorSystem struct {
+	*portmocks.MockSystemPort
+
+	handled bool
+	moved   image.Point
+}
+
+func (s *relativeCursorSystem) MoveCursorBy(
+	_ context.Context,
+	delta image.Point,
+) (bool, error) {
+	s.moved = delta
+
+	return s.handled, nil
+}
+
+func TestMoveMouseRelative_UsesNativeRelativeMovement(t *testing.T) {
+	ctx := context.Background()
+	sys := &relativeCursorSystem{
+		MockSystemPort: &portmocks.MockSystemPort{
+			CursorPositionFunc: func(context.Context) (image.Point, error) {
+				t.Fatal("CursorPosition() should not be called for native relative movement")
+
+				return image.Point{}, nil
+			},
+		},
+		handled: true,
+	}
+	service := newTestActionService(&portmocks.MockAccessibilityPort{}, sys)
+
+	err := service.MoveMouseRelative(ctx, 10, -5)
+	if err != nil {
+		t.Fatalf("MoveMouseRelative() error = %v", err)
+	}
+
+	if sys.moved != (image.Point{X: 10, Y: -5}) {
+		t.Fatalf("MoveMouseRelative() delta = %v, want (10,-5)", sys.moved)
+	}
+}
+
 func TestMoveCursorToPointAndWait_WaitsForCursorIdle(t *testing.T) {
 	ctx := context.Background()
 
@@ -318,5 +360,239 @@ func TestMoveCursorToPointAndWait_WaitsForCursorIdle(t *testing.T) {
 
 	if !waitCalled {
 		t.Fatal("MoveCursorToPointAndWait() expected WaitForCursorIdle to be called")
+	}
+}
+
+// TestPerformActionAtPoint_MouseActionIndicatorMatchesDeprecatedName pins that a
+// config written before the buttons were spelled out ("mouse_down") still
+// matches the left press action, which now reports itself as left_mouse_down.
+func TestPerformActionAtPoint_MouseActionIndicatorMatchesDeprecatedName(t *testing.T) {
+	ctx := context.Background()
+
+	acc := &portmocks.MockAccessibilityPort{
+		PerformActionAtPointFunc: func(
+			context.Context,
+			action.Type,
+			image.Point,
+			action.Modifiers,
+		) error {
+			return nil
+		},
+	}
+
+	drawn := false
+	overlay := &portmocks.MockOverlayPort{
+		DrawMouseActionIndicatorFunc: func(image.Point, ports.MouseActionIndicatorStyle) {
+			drawn = true
+		},
+	}
+
+	service := services.NewActionService(acc, overlay, &portmocks.MockSystemPort{}, zap.NewNop())
+	cfg := config.DefaultConfig().MouseAction
+	cfg.Enabled = true
+	cfg.Actions = []string{"mouse_down"}
+	service.UpdateConfig(cfg)
+
+	err := service.PerformActionAtPoint(ctx, "left_mouse_down", image.Point{X: 5, Y: 6}, 0)
+	if err != nil {
+		t.Fatalf("PerformActionAtPoint() error = %v", err)
+	}
+
+	if !drawn {
+		t.Fatal("expected mouse action indicator to be drawn for the deprecated config name")
+	}
+}
+
+// TestPerformActionAtPoint_MouseActionIndicatorIgnoresUnparseableEntry pins that
+// a typo in the config list does not match anything (and does not panic).
+func TestPerformActionAtPoint_MouseActionIndicatorIgnoresUnparseableEntry(t *testing.T) {
+	ctx := context.Background()
+
+	acc := &portmocks.MockAccessibilityPort{
+		PerformActionAtPointFunc: func(
+			context.Context,
+			action.Type,
+			image.Point,
+			action.Modifiers,
+		) error {
+			return nil
+		},
+	}
+
+	drawn := false
+	overlay := &portmocks.MockOverlayPort{
+		DrawMouseActionIndicatorFunc: func(image.Point, ports.MouseActionIndicatorStyle) {
+			drawn = true
+		},
+	}
+
+	service := services.NewActionService(acc, overlay, &portmocks.MockSystemPort{}, zap.NewNop())
+	cfg := config.DefaultConfig().MouseAction
+	cfg.Enabled = true
+	cfg.Actions = []string{"not_an_action"}
+	service.UpdateConfig(cfg)
+
+	err := service.PerformActionAtPoint(ctx, "right_mouse_toggle", image.Point{X: 5, Y: 6}, 0)
+	if err != nil {
+		t.Fatalf("PerformActionAtPoint() error = %v", err)
+	}
+
+	if drawn {
+		t.Fatal("expected no indicator for an unrecognized config entry")
+	}
+}
+
+// TestMoveMouseToCenterOfWindow_KeepsANotSupportedRefusalIntact pins what a
+// person sees when their compositor cannot report focused-window geometry at
+// all. The platform refuses with CodeNotSupported and names what is missing;
+// re-coding that as an accessibility failure would send them to check a
+// permission they have already granted.
+func TestMoveMouseToCenterOfWindow_KeepsANotSupportedRefusalIntact(t *testing.T) {
+	refusal := derrors.New(
+		derrors.CodeNotSupported,
+		"no focused-window geometry source on linux backend wayland-wlroots",
+	)
+
+	sys := &portmocks.MockSystemPort{
+		FocusedWindowBoundsFunc: func(context.Context) (image.Rectangle, bool, error) {
+			return image.Rectangle{}, false, refusal
+		},
+	}
+	service := newTestActionService(&portmocks.MockAccessibilityPort{}, sys)
+
+	err := service.MoveMouseToCenterOfWindow(context.Background(), 0, 0)
+	if !derrors.IsNotSupported(err) {
+		t.Fatalf("MoveMouseToCenterOfWindow() error = %v (code %q), want CodeNotSupported",
+			err, derrors.GetCode(err))
+	}
+
+	if !strings.Contains(derrors.Message(err), "wayland-wlroots") {
+		t.Errorf("error message %q drops what the platform said was missing",
+			derrors.Message(err))
+	}
+}
+
+// TestMoveMouseToCenterOfWindow_ReportsARealFailureAsAccessibilityFailure keeps
+// the other half: an error that is not a platform refusal still reads as one
+// thing going wrong rather than as a feature this platform never had.
+func TestMoveMouseToCenterOfWindow_ReportsARealFailureAsAccessibilityFailure(t *testing.T) {
+	sys := &portmocks.MockSystemPort{
+		FocusedWindowBoundsFunc: func(context.Context) (image.Rectangle, bool, error) {
+			return image.Rectangle{}, false, derrors.New(
+				derrors.CodeBridgeFailed,
+				"X connection lost",
+			)
+		},
+	}
+	service := newTestActionService(&portmocks.MockAccessibilityPort{}, sys)
+
+	err := service.MoveMouseToCenterOfWindow(context.Background(), 0, 0)
+	if derrors.GetCode(err) != derrors.CodeAccessibilityFailed {
+		t.Fatalf("MoveMouseToCenterOfWindow() code = %q, want %q",
+			derrors.GetCode(err), derrors.CodeAccessibilityFailed)
+	}
+}
+
+// syncingSystemPort is a MockSystemPort that also implements
+// ports.CursorSynchronizer, standing in for the Wayland adapter whose cursor
+// cache a hand-moved mouse invalidates.
+type syncingSystemPort struct {
+	portmocks.MockSystemPort
+
+	synced  bool
+	syncErr error
+	// position is what CursorPosition reports; SyncCursorPosition moves it
+	// to physical, the way the adapter re-learns the real pointer.
+	position image.Point
+	physical image.Point
+}
+
+func (s *syncingSystemPort) SyncCursorPosition(ctx context.Context) error {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		return derrors.New(derrors.CodeInternal, "sync ran without a deadline")
+	}
+
+	s.synced = true
+
+	if s.syncErr != nil {
+		return s.syncErr
+	}
+
+	s.position = s.physical
+
+	return nil
+}
+
+// TestActionService_CursorPositionForAction_SyncsStaleCursorCache pins the
+// idle-hotkey click on Wayland: with no mode active nothing has refreshed the
+// adapter's cursor cache since the user moved the mouse by hand, so the action
+// must resync before it resolves its target point.
+func TestActionService_CursorPositionForAction_SyncsStaleCursorCache(t *testing.T) {
+	tests := []struct {
+		name    string
+		syncErr error
+		want    image.Point
+	}{
+		{name: "sync succeeds, physical position wins", want: image.Point{X: 300, Y: 400}},
+		{
+			name:    "sync fails, cached position still returned",
+			syncErr: derrors.New(derrors.CodeTimeout, "hyprctl"),
+			want:    image.Point{X: 10, Y: 20},
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			sys := &syncingSystemPort{
+				syncErr:  testCase.syncErr,
+				position: image.Point{X: 10, Y: 20},
+				physical: image.Point{X: 300, Y: 400},
+			}
+			sys.CursorPositionFunc = func(context.Context) (image.Point, error) {
+				return sys.position, nil
+			}
+
+			svc := newTestActionService(&portmocks.MockAccessibilityPort{}, sys)
+
+			got, err := svc.CursorPositionForAction(context.Background())
+			if err != nil {
+				t.Fatalf("CursorPositionForAction() error = %v", err)
+			}
+
+			if !sys.synced {
+				t.Fatal("CursorPositionForAction() did not sync the cursor cache")
+			}
+
+			if got != testCase.want {
+				t.Errorf("CursorPositionForAction() = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestActionService_ReleaseHeldButtons_SettlesCursorBeforeRelease pins the
+// order a mode exit needs: a drag released while the final warp is still
+// animating would end part-way to the point the user chose.
+func TestActionService_ReleaseHeldButtons_SettlesCursorBeforeRelease(t *testing.T) {
+	system := &settlingSystemPort{}
+
+	settledAtReleaseTime := -1
+	mockAcc := &portmocks.MockAccessibilityPort{
+		ReleaseHeldButtonsFunc: func(context.Context) error {
+			settledAtReleaseTime = system.settleCalls
+
+			return nil
+		},
+	}
+
+	svc := newTestActionService(mockAcc, system)
+
+	err := svc.ReleaseHeldButtons(context.Background())
+	if err != nil {
+		t.Fatalf("ReleaseHeldButtons() error = %v", err)
+	}
+
+	if settledAtReleaseTime != 1 {
+		t.Fatalf("settle calls at release time = %d, want 1", settledAtReleaseTime)
 	}
 }

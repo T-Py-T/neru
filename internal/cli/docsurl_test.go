@@ -4,12 +4,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/y3owk1n/neru/internal/cli"
+	"github.com/y3owk1n/neru/internal/buildinfo"
 )
 
 const (
-	docsCLIPath       = "docs/CLI.md"
-	mainDocsCLISuffix = "/main/docs/CLI.md"
+	docsCLIPath       = "docs/reference/cli.md"
+	mainDocsCLISuffix = "/main/docs/reference/cli.md"
 )
 
 func TestDocsURLUsesVersionTagOrMain(t *testing.T) {
@@ -35,19 +35,25 @@ func TestDocsURLUsesVersionTagOrMain(t *testing.T) {
 			name:       "valid release tag",
 			version:    "v1.19.0",
 			path:       docsCLIPath,
-			wantSuffix: "/v1.19.0/docs/CLI.md",
+			wantSuffix: "/v1.19.0/docs/reference/cli.md",
 		},
 		{
-			name:       "git describe with commits",
+			name:       "git describe with commits falls back to main",
 			version:    "v1.19.0-3-gabcdef0",
-			path:       "docs/CONFIGURATION.md",
-			wantSuffix: "/v1.19.0/docs/CONFIGURATION.md",
+			path:       "docs/reference/configuration.md",
+			wantSuffix: "/main/docs/reference/configuration.md",
+		},
+		{
+			name:       "git describe with commits and dirty falls back to main",
+			version:    "v1.19.0-3-gabcdef0-dirty",
+			path:       docsCLIPath,
+			wantSuffix: mainDocsCLISuffix,
 		},
 		{
 			name:       "git describe dirty state",
 			version:    "v1.19.0-dirty",
 			path:       docsCLIPath,
-			wantSuffix: "/v1.19.0/docs/CLI.md",
+			wantSuffix: "/v1.19.0/docs/reference/cli.md",
 		},
 		{
 			name:       "invalid semver segments",
@@ -64,7 +70,7 @@ func TestDocsURLUsesVersionTagOrMain(t *testing.T) {
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			url := cli.DocsURL(testCase.path, testCase.version)
+			url := buildinfo.DocsURL(testCase.path, testCase.version)
 			if !strings.HasSuffix(url, testCase.wantSuffix) {
 				t.Errorf("docs URL = %q, want suffix %q", url, testCase.wantSuffix)
 			}
