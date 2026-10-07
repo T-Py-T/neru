@@ -55,3 +55,13 @@ Documentation is progressively disclosed. Start here, then navigate to detailed 
 - [Go](https://golang.org/doc/) | [Just](https://github.com/casey/just) | [Cobra](https://github.com/spf13/cobra)
 
 > **Tip**: Docs may become outdated. When in doubt, read the code directly.
+
+## Cursor Cloud specific instructions
+
+Linux Cloud Agents can build and test Neru. The environment install provides Go 1.26.4, `just` 1.54.0, `golangci-lint` 2.12.2, and the CGO libraries in [Linux Setup](docs/LINUX_SETUP.md), including `libxext-dev` and `libxrender-dev` (`pkg-config` modules `xext` and `xrender`).
+
+- Build and checks: `just build`, `just vet`, `just lint`, `just test`. Fast core slice: `just test-foundation`.
+- Headless product check: `./bin/neru config init --config <path>` then `./bin/neru config validate --config <path>`.
+- `./bin/neru launch` stays in the foreground and serves `/tmp/neru.sock`. On an X11 `DISPLAY` it reports `linux/x11`. Overlay modes need that session. Stop a running daemon before `just test`; integration tests use the same socket.
+- `neru doctor` exits non-zero when the daemon is down. On a minimal X11 session, AT-SPI app watching, notifications, and dark-mode detection can stay stubbed while IPC, grid, scroll, hotkeys, and overlay still report healthy.
+- The startup message that Linux features are stubs is behind the X11 and Wayland backends. Use `neru status` and [Linux Setup](docs/LINUX_SETUP.md).
